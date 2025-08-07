@@ -41,3 +41,15 @@ The `action` field may contain `buy`, `sell` or `close`. Any error responses are
 * Fractional trading is achieved by specifying the `notional` parameter when submitting orders.
 * All requests are logged with timestamps in `trades.log` for troubleshooting.
 * Designed to run on a Raspberry Pi (or any Linux environment with Python 3).
+Usefull commands:
+source venv/bin/activate
+python3 dashboard.py
+python3 bot.py
+sudo systemctl status fallback_dashboard.service
+sudo lsof -i :5050
+sudo systemctl start  fallback.service fallback_dashboard.service
+sudo systemctl enable fallback.service fallback_dashboard.service
+sudo systemctl daemon-reload
+sudo systemctl restart fallback.service 
+systemctl --type=service --state=running
+sudo nano /etc/apache2/sites-available/trading_bot.conf

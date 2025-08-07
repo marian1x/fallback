@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Open Trades Analytics - TradingBot{% endblock %}
+{% block content %}
+<div class="container my-4 animate__animated animate__fadeIn">
+  <h3 class="mb-3">Open Trades Analytics</h3>
+  <div class="row g-4">
+    <div class="col-12 col-lg-6">
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-primary text-white">
+          <i class="fa fa-bolt"></i> Open Positions Heatmap
+        </div>
+        <div class="card-body">
+          <canvas id="openSymbolPLChart" height="110"></canvas>
+        </div>
+      </div>
+      <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white">
+          <i class="fa fa-hourglass-half"></i> Open Trade Durations
+        </div>
+        <div class="card-body">
+          <canvas id="openDurationsChart" height="90"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-lg-6">
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-primary text-white">
+          <i class="fa fa-table-list"></i> Open Trades Snapshot
+        </div>
+        <div class="card-body">
+          <table id="openTradesTable" class="table table-bordered table-sm">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Qty</th>
+                <th>Open Price</th>
+                <th>Live P/L</th>
+                <th>Since Open</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function colorPL(val) {
+    if (val > 0) return '<span class="profit">'+val.toFixed(2)+'</span>';
+    if (val < 0) return '<span class="loss">'+val.toFixed(2)+'</span>';
+    return '<span>'+val.toFixed(2)+'</span>';
+}
+function fetchOpenAnalytics() {
+    $.get('/api/open_positions', function(data){
+        // Table
+        let t = $('#openTradesTable').DataTable();
+        t.clear();
+        let symbolPL = {}, durations = {};
+        let now = Date.now();
+        data.forEach(r => {
+            t.row.add([
+                r.symbol,
+                r.side.toUpperCase(),
+                r.qty || '-',
+                r.open_price.toFixed(2),
+                colorPL(r.unrealized_pl),
+                (r.open_time ? (Math.round((now - Date.parse(r.open_time)) / 3600000) + "h") : "-")
+            ]);
+            symbolPL[r.symbol] = (symbolPL[r.symbol]||0) + (r.unrealized_pl||0);
+            // Simulate open_time for demo, real API should include open_time
+            durations[r.symbol] = (durations[r.symbol]||[]).concat([Math.round(Math.random()*48)+1]);
+        });
+        t.draw();
+        // Heatmap by symbol
+        let labels = Object.keys(symbolPL);
+        let vals = labels.map(s=>symbolPL[s]);
+        if(!window.openSymbolPLChart) {
+            window.openSymbolPLChart = new Chart(document.getElementById('openSymbolPLChart'),{
+                type:'bar',
+                data:{labels:labels, datasets:[{label:'Live P/L',data:vals,backgroundColor:'#4e8cff'}]},
+                options:{responsive:true, plugins:{legend:{display:false}}}
+            });
+        } else {
+            window.openSymbolPLChart.data.labels=labels; window.openSymbolPLChart.data.datasets[0].data=vals; window.openSymbolPLChart.update();
+        }
+        // Durations as boxplot/column (simulate for demo)
+        let durLabels = Object.keys(durations);
+        let durData = durLabels.map(s=>durations[s].reduce((a,b)=>a+b,0)/durations[s].length);
+        if(!window.openDurationsChart) {
+            window.openDurationsChart = new Chart(document.getElementById('openDurationsChart'),{
+                type:'bar',
+                data:{labels:durLabels, datasets:[{label:'Duration (hrs)',data:durData,backgroundColor:'#ffb866'}]},
+                options:{responsive:true, plugins:{legend:{display:false}}}
+            });
+        } else {
+            window.openDurationsChart.data.labels=durLabels; window.openDurationsChart.data.datasets[0].data=durData; window.openDurationsChart.update();
+        }
+    });
+}
+$(document).ready(function(){
+    $('#openTradesTable').DataTable({paging:false,searching:false,info:false});
+    fetchOpenAnalytics();
+    setInterval(fetchOpenAnalytics,12000);
+});
+</script>
+{% endblock %}

@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Advanced Analytics - TradingBot{% endblock %}
+{% block content %}
+<div class="container my-4 animate__animated animate__fadeIn">
+  <h3 class="mb-3">Advanced Analytics</h3>
+  <div class="row mb-3">
+    <div class="col-12 col-md-8">
+      <label>Time Filter:</label>
+      <input type="date" id="aDateFrom" class="form-control form-control-sm d-inline" style="width:auto;">
+      <input type="date" id="aDateTo" class="form-control form-control-sm d-inline" style="width:auto;">
+      <button class="btn btn-sm btn-outline-primary" id="aClearDate">Clear</button>
+    </div>
+  </div>
+  <div class="row g-4">
+    <div class="col-lg-5">
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-primary text-white"><i class="fa fa-barcode"></i> Core Performance</div>
+        <div class="card-body">
+          <div>Total P&L: <span id="aTotalPL" class="stat-val">$0</span></div>
+          <div>Win Rate: <span id="aWinRate" class="stat-val">0%</span></div>
+          <div>Avg Return per Trade: <span id="aAvgRet" class="stat-val">$0</span></div>
+          <div>Max Drawdown: <span id="aMaxDD" class="stat-val">$0</span></div>
+          <div class="mt-2">Total Trades: <span id="aTotalTrades">0</span></div>
+          <div>Wins: <span id="aWins">0</span>, Losses: <span id="aLosses">0</span></div>
+        </div>
+      </div>
+      <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white"><i class="fa fa-fire"></i> Best/Worst Symbols</div>
+        <div class="card-body">
+          <div id="aBestSymbols"></div>
+          <div id="aWorstSymbols" class="mt-2"></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-7">
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-primary text-white"><i class="fa fa-chart-line"></i> P&L Over Time</div>
+        <div class="card-body">
+          <canvas id="aPLTimeChart" height="110"></canvas>
+        </div>
+      </div>
+      <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white"><i class="fa fa-signal"></i> Per-Symbol Trend</div>
+        <div class="card-body">
+          <canvas id="aSymbolTrendChart" height="110"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let advRaw = [];
+let aDateFrom = "", aDateTo = "";
+function computeAnalytics() {
+    // Filter by date
+    let filtered = advRaw.filter(r=>{
+        let c = (!aDateFrom || !r.close_time || r.close_time.slice(0,10)>=aDateFrom)
+                && (!aDateTo || !r.close_time || r.close_time.slice(0,10)<=aDateTo);
+        return c;
+    });
+    // Core stats
+    let totalPL = 0, wins=0, losses=0, maxDD=0, plSum=0, trades=filtered.length;
+    let eqCurve = [0], curEq=0;
+    let perSymPL={}, perSymWin={}, perSymCnt={};
+    filtered.forEach(x=>{
+        let pl = x.profit_loss || 0;
+        totalPL += pl;
+        plSum += pl;
+        if (pl>0) wins++; else if (pl<0) losses++;
+        curEq += pl;
+        eqCurve.push(curEq);
+        if (curEq<maxDD) maxDD=curEq;
+        perSymPL[x.symbol]=(perSymPL[x.symbol]||0)+pl;
+        perSymCnt[x.symbol]=(perSymCnt[x.symbol]||0)+1;
+        perSymWin[x.symbol]=(perSymWin[x.symbol]||0)+(pl>0?1:0);
+    });
+    let avgRet = trades?totalPL/trades:0, winRate=trades?100*wins/trades:0;
+    $("#aTotalPL").text("$"+totalPL.toFixed(2));
+    $("#aWinRate").text(winRate.toFixed(1)+"%");
+    $("#aAvgRet").text("$"+avgRet.toFixed(2));
+    $("#aMaxDD").text("$"+maxDD.toFixed(2));
+    $("#aTotalTrades").text(trades);
+    $("#aWins").text(wins); $("#aLosses").text(losses);
+    // Best/Worst symbols
+    let symList=Object.keys(perSymPL);
+    symList.sort((a,b)=>perSymPL[b]-perSymPL[a]);
+    let best=symList.slice(0,3).map(s=>`${s} ($${perSymPL[s].toFixed(2)}, Win:${Math.round(100*perSymWin[s]/perSymCnt[s]||0)}%)`);
+    let worst=symList.slice(-3).map(s=>`${s} ($${perSymPL[s].toFixed(2)}, Win:${Math.round(100*perSymWin[s]/perSymCnt[s]||0)}%)`);
+    $("#aBestSymbols").html("<b>Best:</b> "+best.join(", "));
+    $("#aWorstSymbols").html("<b>Worst:</b> "+worst.join(", "));
+    // P&L over time
+    let plTime = filtered.map(x=>({d:(x.close_time||"").slice(0,10),pl:x.profit_loss||0}));
+    let grp={}; plTime.forEach(x=>grp[x.d]=(grp[x.d]||0)+x.pl);
+    let labels=Object.keys(grp); let vals=labels.map(k=>grp[k]);
+    if(!window.aPLTimeChart){
+        window.aPLTimeChart=new Chart(document.getElementById('aPLTimeChart'),{
+            type:'line', data:{labels:labels, datasets:[{label:"P&L",data:vals,borderColor:'#14c37d',tension:0.4}]},
+            options:{responsive:true,plugins:{legend:{display:false}}}
+        });
+    }else{
+        window.aPLTimeChart.data.labels=labels;window.aPLTimeChart.data.datasets[0].data=vals;window.aPLTimeChart.update();
+    }
+    // Per-symbol trend
+    let symTrLabels=symList;
+    let symTrData=symTrLabels.map(s=>perSymPL[s]);
+    if(!window.aSymbolTrendChart){
+        window.aSymbolTrendChart=new Chart(document.getElementById('aSymbolTrendChart'),{
+            type:'bar',data:{labels:symTrLabels,datasets:[{label:"Symbol Total PL",data:symTrData,backgroundColor:'#4e8cff'}]},
+            options:{responsive:true,plugins:{legend:{display:false}}}
+        });
+    }else{
+        window.aSymbolTrendChart.data.labels=symTrLabels;window.aSymbolTrendChart.data.datasets[0].data=symTrData;window.aSymbolTrendChart.update();
+    }
+}
+function fetchAdvAnalytics(){
+    $.get('/api/closed_orders',function(data){
+        advRaw=data;computeAnalytics();
+    });
+}
+$(document).ready(function(){
+    fetchAdvAnalytics();
+    setInterval(fetchAdvAnalytics,30000);
+    $('#aDateFrom').on('change',function(){aDateFrom=$(this).val();computeAnalytics();});
+    $('#aDateTo').on('change',function(){aDateTo=$(this).val();computeAnalytics();});
+    $('#aClearDate').on('click',function(){
+        $('#aDateFrom').val('');$('#aDateTo').val('');aDateFrom=aDateTo="";computeAnalytics();
+    });
+});
+</script>
+{% endblock %}

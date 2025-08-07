@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - TradingBot{% endblock %}
+{% block content %}
+<div class="container my-4 animate__animated animate__fadeIn">
+    <div class="row g-4">
+        <!-- Account summary -->
+        <div class="col-12 col-lg-4">
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-primary text-white">
+                    <i class="fa fa-chart-bar me-2"></i>Account Summary
+                </div>
+                <div class="card-body">
+                    <div class="stat-card">
+                        <h5>Live Open P/L</h5>
+                        <div class="stat-val" id="statPL">$0</div>
+                    </div>
+                    <div class="stat-card mt-2">
+                        <h5># Open Trades</h5>
+                        <div class="stat-val" id="statOpenCount">0</div>
+                    </div>
+                    <div class="stat-card mt-2">
+                        <h5>Available Equity</h5>
+                        <div class="stat-val" id="statEquity">$0</div>
+                    </div>
+                    <div class="stat-card mt-2">
+                        <h5>Cash</h5>
+                        <div class="stat-val" id="statCash">$0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Open trades + Open trade form -->
+        <div class="col-12 col-lg-8">
+            <!-- Open new trade form -->
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-primary text-white">
+                    <i class="fa fa-plus"></i> Open New Trade
+                </div>
+                <div class="card-body">
+                    <form id="openTradeForm" class="row g-2 align-items-end">
+                        <div class="col-md-4 col-12">
+                            <input type="text" name="symbol" class="form-control" placeholder="Symbol (e.g. AAPL)" maxlength="8" required>
+                        </div>
+                        <div class="col-md-4 col-8">
+                            <select name="side" class="form-select" required>
+                                <option value="buy">Buy (Long)</option>
+                                <option value="sell">Sell (Short)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2 col-4">
+                            <button type="submit" class="btn btn-success w-100"><i class="fa fa-plus"></i> Open</button>
+                        </div>
+                        <input type="hidden" name="user" value="Test">
+                    </form>
+                </div>
+            </div>
+            <!-- Open trades table -->
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <span><i class="fa fa-arrow-up-right-dots me-2"></i>Open Trades</span>
+                </div>
+                <div class="card-body">
+                    <table id="openTable" class="table table-hover table-borderless table-responsive-lg" style="width:100%;">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Side</th>
+                                <th>Qty</th>
+                                <th>Open Price</th>
+                                <th>Current Price</th>
+                                <th>Unrealized P/L</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+    function colorPL(val) {
+        if (val > 0) return '<span class="profit">'+val.toFixed(2)+'</span>';
+        if (val < 0) return '<span class="loss">'+val.toFixed(2)+'</span>';
+        return '<span>'+val.toFixed(2)+'</span>';
+    }
+
+    // Fetch and show open positions and account summary
+    function fetchOpenPositions() {
+        $.get('/api/open_positions', function(data){
+            let t = $('#openTable').DataTable();
+            t.clear();
+            let totalPL = 0;
+            data.forEach(r => {
+                totalPL += r.unrealized_pl || 0;
+                t.row.add([
+                    r.symbol,
+                    r.side ? r.side.toUpperCase() : '-',
+                    r.qty !== undefined && r.qty !== null ? r.qty : '-',
+                    (r.open_price !== undefined && r.open_price !== null) ? r.open_price.toFixed(8) : '-',
+                    (r.current_price !== undefined && r.current_price !== null) ? r.current_price.toFixed(8) : '-',
+                    colorPL(r.unrealized_pl !== undefined && r.unrealized_pl !== null ? r.unrealized_pl : 0),
+                    `<button class="btn btn-outline-danger btn-sm close-btn" data-symbol="${r.symbol}">
+                        <i class="fa fa-xmark"></i> Close
+                    </button>`
+                ]);
+            });
+            t.draw();
+            $("#statPL").text("$" + totalPL.toFixed(2));
+            $("#statOpenCount").text(data.length);
+        });
+    }
+
+    // Fetch Alpaca account info (equity, cash)
+    function fetchAccountSummary() {
+        $.get('/api/account', function(data){
+            $("#statEquity").text("$" + Number(data.equity || 0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}));
+            $("#statCash").text("$" + Number(data.cash || 0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}));
+        });
+    }
+
+    $(document).ready(function(){
+        $('#openTable').DataTable({
+            paging: false, searching: false, info: false, responsive: true, order: []
+        });
+        fetchOpenPositions();
+        fetchAccountSummary();
+        setInterval(fetchOpenPositions, 8000);
+        setInterval(fetchAccountSummary, 20000);
+
+        $('#openTable tbody').on('click', '.close-btn', function(){
+            let symbol = $(this).data('symbol');
+            Swal.fire({
+                title: `Close ${symbol}?`,
+                icon: 'warning', showCancelButton: true,
+                confirmButtonText: 'Yes, close it!',
+                cancelButtonText: 'Cancel'
+            }).then((result) => {
+                if(result.isConfirmed) {
+                    $.ajax({
+                        url: '/api/proxy_trade',
+                        method: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify({symbol: symbol, action: "close", user: "Test"}),
+                        success: function(){ fetchOpenPositions(); },
+                        error: function(xhr){
+                            let msg = "Unknown error";
+                            try { msg = JSON.parse(xhr.responseText).detail || xhr.responseText; } catch(e) { msg = xhr.responseText; }
+                            Swal.fire("Close failed", msg, "error");
+                        }
+                    });
+                }
+            });
+        });
+
+        $('#openTradeForm').on('submit', function(e){
+            e.preventDefault();
+            const sym = $(this).find('input[name="symbol"]').val().toUpperCase().trim();
+            const side = $(this).find('select[name="side"]').val();
+            const user = $(this).find('input[name="user"]').val();
+            if(!sym || !side) return;
+            $.ajax({
+                url: '/api/proxy_trade',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({symbol: sym, action: side, user: user}),
+                success: function(){ 
+                    fetchOpenPositions(); 
+                    $('#openTradeForm')[0].reset();
+                },
+                error: function(xhr){
+                    let msg = "Unknown error";
+                    try { msg = JSON.parse(xhr.responseText).detail || xhr.responseText; } catch(e) { msg = xhr.responseText; }
+                    Swal.fire("Trade failed", msg, "error");
+                }
+            });
+        });
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <h2 class="text-danger">Reinitialize Database</h2>
+  <p><b>WARNING:</b> This will erase <b>ALL trades and users</b> except for the admin account.</p>
+  <form method="post">
+    <button type="submit" class="btn btn-danger">Yes, Reinitialize</button>
+    <a href="{{ url_for('dashboard') }}" class="btn btn-secondary ms-2">Cancel</a>
+  </form>
+</div>
+{% endblock %}

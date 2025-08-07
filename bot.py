@@ -1,167 +1,252 @@
+#!/usr/bin/env python3
 import os
 import logging
-from logging.handlers import RotatingFileHandler
 from flask import Flask, request, jsonify
-import requests
-import math
+from dotenv import load_dotenv
 import alpaca_trade_api as tradeapi
+import math
 
-# —––––––––––––––––––––––––––––––––––––––––––––––––––––––––
-# Configuration
-# —––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+# Load .env
+load_dotenv()
+API_KEY = os.getenv("ALPACA_KEY")
+API_SECRET = os.getenv("ALPACA_SECRET")
+BASE_URL = os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
+PORT = int(os.getenv("BOT_PORT", 5000))
+TRADE_NOTIONAL = float(os.getenv("TRADE_NOTIONAL", "2000"))
 
-API_KEY      = os.getenv('ALPACA_KEY',    'PK0DBBQMMCVL0AN1ERMC')
-API_SECRET   = os.getenv('ALPACA_SECRET', 'qZkdh3gFJQwNxyxCFL17kwe95rj1GcVI6195stBc')
-BASE_URL     = 'https://paper-api.alpaca.markets'
-TRADE_AMOUNT = 2000  # USD per trade
-
-# Comma-separated list of additional ports to mirror incoming webhooks to:
-# e.g. MIRROR_PORTS="5001,5002"
-MIRROR_PORTS = os.getenv('MIRROR_PORTS', '')
-mirror_ports = [p.strip() for p in MIRROR_PORTS.split(',') if p.strip()]
-
-# Recognized exit-strategy messages from your Pine script (lowercased):
-EXIT_ACTIONS = {
-    'fixed stop loss (long)',
-    'fixed take profit (long)',
-    'forced sl (long)',
-    'forced tp (long)',
-    'trailing exit (long)',
-    'trailing exit long',
-    'fixed stop loss (short)',
-    'fixed take profit (short)',
-    'forced sl (short)',
-    'forced tp (short)',
-    'trailing exit (short)',
-    'trailing exit short'
+# Minimums for crypto (as per Alpaca, adjust as needed)
+CRYPTO_MIN_QTY = {
+    "BTCUSD": 0.0001,
+    "ETHUSD": 0.001,
+    "DOGEUSD": 10,
+    "SOLUSD": 0.01
 }
+DEFAULT_CRYPTO_MIN = 0.001
 
-# —––––––––––––––––––––––––––––––––––––––––––––––––––––––––
-# Flask app & logging
-# —––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+# Logging
+logging.basicConfig(filename="trades.log", level=logging.INFO,
+    format="%(asctime)s %(levelname)s: %(message)s")
+logger = logging.getLogger()
 
 app = Flask(__name__)
-app.logger.setLevel(logging.INFO)
-
-# Rotating file for trade events
-trade_handler = RotatingFileHandler('trades.log', maxBytes=10*1024*1024, backupCount=5)
-trade_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
-app.logger.addHandler(trade_handler)
-
-# Simple file for raw/external logging
-external_handler = logging.FileHandler('external.log')
-external_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
-app.logger.addHandler(external_handler)
-
-# —––––––––––––––––––––––––––––––––––––––––––––––––––––––––
-# Alpaca client
-# —––––––––––––––––––––––––––––––––––––––––––––––––––––––––
-
 api = tradeapi.REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')
 
-# —––––––––––––––––––––––––––––––––––––––––––––––––––––––––
-# Webhook endpoint
-# —––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+# Action keywords that mean "close this position"
+CLOSE_ACTIONS = [
+    "trailing exit long", "trailing exit short",
+    "forced sl long", "forced sl short", "forced tp long", "forced tp short",
+    "fixed take profit (long)", "fixed take profit (short)",
+    "fixed stop loss (long)", "fixed stop loss (short)",
+    "forced tp (long)", "forced tp (short)",
+    "forced sl (long)", "forced sl (short)",
+    "fixed take profit long", "fixed take profit short",
+    "fixed stop loss long", "fixed stop loss short",
+    "close long", "close short",
+    "close"
+]
 
-@app.route('/webhook', methods=['POST'])
+def is_close_action(act):
+    return act and act.strip().lower() in CLOSE_ACTIONS
+
+def is_crypto(symbol):
+    return symbol and symbol.upper().endswith('USD') and symbol.upper() not in ['USD','USDT','USDC']
+
+def get_open_symbols():
+    try:
+        return set(p.symbol for p in api.list_positions())
+    except Exception as e:
+        logger.error(f"Failed to fetch open positions: {e}")
+        return set()
+
+def get_last_price(symbol):
+    try:
+        trade = api.get_latest_trade(symbol)
+        return float(trade.price)
+    except Exception as e:
+        logger.error(f"Failed to get price for {symbol}: {e}")
+        return 0.0
+
+def get_crypto_min_qty(symbol):
+    return CRYPTO_MIN_QTY.get(symbol.upper(), DEFAULT_CRYPTO_MIN)
+
+@app.route("/webhook", methods=["POST"])
 def webhook():
-    data   = request.get_json(force=True)
-    symbol = data.get('symbol')
-    action = (data.get('action') or '').strip().lower()
+    data = request.get_json(force=True)
+    logger.info(f"Webhook: {data}")
 
-    # Log raw incoming webhook
-    app.logger.info("Raw webhook: %r", data)
+    symbol = data.get("symbol")
+    action = data.get("action", "")
+    user   = data.get("user", "Unknown")
+    price  = float(data.get("price") or 0)
 
     if not symbol or not action:
-        msg = f"Missing symbol or action in payload: {data!r}"
-        app.logger.error(msg)
-        return jsonify({'error': 'Missing symbol or action'}), 400
+        logger.error(f"Invalid webhook data: {data}")
+        return jsonify({"error": "Invalid webhook"}), 400
 
-    # 1) If it's an exit strategy message → close the position
-    if action in EXIT_ACTIONS or action == 'close':
+    # =========== CLOSE LOGIC (WORKS FOR ALL EXIT/SL/TP SIGNALS) ===========
+    if is_close_action(action):
         try:
             api.close_position(symbol)
-            app.logger.info("Exit action '%s' received → closed %s", action, symbol)
-            result = {'trade': 'closed', 'exit_reason': action}
+            logger.info(f"[CLOSE] Flattened {symbol} for user {user} (action={action})")
+            return jsonify({
+                "result": "closed",
+                "symbol": symbol,
+                "user": user,
+                "action": action
+            }), 200
         except Exception as e:
-            app.logger.error("Error closing %s on exit action '%s': %s", symbol, action, e)
-            return jsonify({'status': 'error', 'detail': str(e)}), 500
+            logger.error(f"Error closing {symbol}: {e}")
+            return jsonify({"error": str(e)}), 500
 
-        # Mirror exit webhook to other ports
-        mirrors = []
-        for port in mirror_ports:
-            url = f'http://localhost:{port}/webhook'
+    # =========== CRYPTO LOGIC ===========
+    if is_crypto(symbol):
+        open_symbols = get_open_symbols()
+        if action.lower() == "buy":
+            if symbol in open_symbols:
+                logger.warning(f"[CRYPTO] Trade rejected: {symbol} already open.")
+                return jsonify({"error": f"{symbol} position already open."}), 409
             try:
-                resp = requests.post(url, json=data, timeout=5)
-                app.logger.info("Mirrored exit action to %s (status %s)", url, resp.status_code)
-                mirrors.append({'url': url, 'status': resp.status_code})
-            except Exception as me:
-                app.logger.error("Error mirroring to %s: %s", url, me)
-                mirrors.append({'url': url, 'error': str(me)})
-
-        return jsonify({'status': 'ok', **result, 'mirrors': mirrors})
-
-    # 2) Otherwise, handle as buy/sell order
-    try:
-        side = 'buy' if 'buy' in action else 'sell'
-
-        if side == 'sell':
-            # fetch last trade price
-            latest = api.get_latest_trade(symbol)
-            price  = latest.price
-            qty    = int(math.floor(TRADE_AMOUNT / price))
-            if qty < 1:
-                msg = (
-                    f"Not enough notional (${TRADE_AMOUNT}) to sell one share of "
-                    f"{symbol} at ${price}"
+                last_price = get_last_price(symbol)
+                min_qty = get_crypto_min_qty(symbol)
+                qty = float(data.get("qty") or 0)
+                if not qty:
+                    if last_price > 0:
+                        raw_qty = TRADE_NOTIONAL / last_price
+                        qty = math.floor(raw_qty / min_qty) * min_qty
+                        qty = round(qty, 8)
+                    else:
+                        qty = min_qty
+                if qty < min_qty:
+                    qty = min_qty
+                order = api.submit_order(
+                    symbol=symbol,
+                    side="buy",
+                    type="market",
+                    qty=qty,
+                    time_in_force="gtc"
                 )
-                app.logger.error(msg)
-                return jsonify({'status': 'error', 'detail': msg}), 400
+                logger.info(f"[CRYPTO] Opened BUY {symbol} ({qty} units at ~${last_price}) (order id={order.id})")
+                return jsonify({
+                    "result": "opened",
+                    "order_id": order.id,
+                    "symbol": symbol,
+                    "side": "buy",
+                    "price": price,
+                    "user": user,
+                    "action": action,
+                    "qty": qty
+                }), 200
+            except Exception as e:
+                logger.error(f"[CRYPTO] Error handling {symbol} BUY: {e}")
+                return jsonify({"error": str(e)}), 500
+        if action.lower() == "sell":
+            open_symbols = get_open_symbols()
+            if symbol in open_symbols:
+                logger.warning(f"[CRYPTO] Trade rejected: {symbol} already open.")
+                return jsonify({"error": f"{symbol} position already open."}), 409
+            try:
+                last_price = get_last_price(symbol)
+                min_qty = get_crypto_min_qty(symbol)
+                qty = float(data.get("qty") or 0)
+                if not qty:
+                    if last_price > 0:
+                        raw_qty = TRADE_NOTIONAL / last_price
+                        qty = math.floor(raw_qty / min_qty) * min_qty
+                        qty = round(qty, 8)
+                    else:
+                        qty = min_qty
+                if qty < min_qty:
+                    qty = min_qty
+                order = api.submit_order(
+                    symbol=symbol,
+                    side="sell",
+                    type="market",
+                    qty=qty,
+                    time_in_force="gtc"
+                )
+                logger.info(f"[CRYPTO] Opened SHORT {symbol} ({qty} units at ~${last_price}) (order id={order.id})")
+                return jsonify({
+                    "result": "opened_short",
+                    "order_id": order.id,
+                    "symbol": symbol,
+                    "side": "sell",
+                    "price": price,
+                    "user": user,
+                    "action": action,
+                    "qty": qty
+                }), 200
+            except Exception as e:
+                logger.error(f"[CRYPTO] Error handling {symbol} SELL: {e}")
+                return jsonify({"error": str(e)}), 500
 
-            order = api.submit_order(
-                symbol=symbol,
-                side='sell',
-                type='market',
-                time_in_force='day',
-                qty=qty
-            )
-            app.logger.info(
-                "Submitted SELL %s shares of %s (order_id=%s)",
-                qty, symbol, order.id
-            )
-            result = {'trade': 'sell', 'order_id': order.id, 'qty': qty}
+    # =========== STOCK LOGIC ===========
+    open_symbols = get_open_symbols()
 
-        else:  # buy
-            order = api.submit_order(
-                symbol=symbol,
-                side='buy',
-                type='market',
-                time_in_force='day',
-                notional=TRADE_AMOUNT
-            )
-            app.logger.info("Submitted BUY %s (order_id=%s)", symbol, order.id)
-            result = {'trade': 'buy', 'order_id': order.id}
-
-    except Exception as e:
-        app.logger.error("Trade error for %s (%s): %s", symbol, action, e)
-        return jsonify({'status': 'error', 'detail': str(e)}), 500
-
-    # 3) Mirror the order webhook to other ports
-    mirrors = []
-    for port in mirror_ports:
-        url = f'http://localhost:{port}/webhook'
+    if action.lower() == "buy":
+        if symbol in open_symbols:
+            logger.warning(f"Trade rejected: {symbol} already open.")
+            return jsonify({"error": f"{symbol} position already open."}), 409
         try:
-            resp = requests.post(url, json=data, timeout=5)
-            app.logger.info("Mirrored webhook to %s (status %s)", url, resp.status_code)
-            mirrors.append({'url': url, 'status': resp.status_code})
-        except Exception as me:
-            app.logger.error("Error mirroring to %s: %s", url, me)
-            mirrors.append({'url': url, 'error': str(me)})
+            last_price = get_last_price(symbol)
+            qty = int(TRADE_NOTIONAL // last_price) if last_price > 0 else 0
+            if qty < 1:
+                logger.warning(f"Not enough funds to buy 1 share of {symbol} at ${last_price}. Skipping.")
+                return jsonify({"error": f"Not enough funds to buy 1 share of {symbol}."}), 400
+            order = api.submit_order(
+                symbol=symbol,
+                side="buy",
+                type="market",
+                qty=qty,
+                time_in_force="day"
+            )
+            logger.info(f"Opened BUY {symbol} ({qty} shares at ~${last_price}) (order id={order.id})")
+            return jsonify({
+                "result": "opened",
+                "order_id": order.id,
+                "symbol": symbol,
+                "side": "buy",
+                "price": price,
+                "user": user,
+                "action": action,
+                "qty": qty
+            }), 200
+        except Exception as e:
+            logger.error(f"Error handling {symbol} BUY: {e}")
+            return jsonify({"error": str(e)}), 500
 
-    return jsonify({'status': 'ok', **result, 'mirrors': mirrors})
+    if action.lower() == "sell":
+        if symbol in open_symbols:
+            logger.warning(f"Trade rejected: {symbol} already open.")
+            return jsonify({"error": f"{symbol} position already open."}), 409
+        try:
+            last_price = get_last_price(symbol)
+            qty = int(TRADE_NOTIONAL // last_price) if last_price > 0 else 0
+            if qty < 1:
+                logger.warning(f"Not enough notional to short 1 share of {symbol} at ${last_price}. Skipping.")
+                return jsonify({"error": f"Not enough notional to short 1 share of {symbol}."}), 400
+            order = api.submit_order(
+                symbol=symbol,
+                side="sell",
+                type="market",
+                qty=qty,
+                time_in_force="day"
+            )
+            logger.info(f"Opened SHORT {symbol} ({qty} shares at ~${last_price}) (order id={order.id})")
+            return jsonify({
+                "result": "opened_short",
+                "order_id": order.id,
+                "symbol": symbol,
+                "side": "sell",
+                "user": user,
+                "action": action,
+                "qty": qty
+            }), 200
+        except Exception as e:
+            logger.error(f"Error opening short {symbol}: {e}")
+            return jsonify({"error": str(e)}), 500
 
+    logger.error(f"Unknown action: {action}")
+    return jsonify({"error": "Unknown action"}), 400
 
-if __name__ == '__main__':
-    # e.g. export MIRROR_PORTS="5001,5002"
-    # Listen on port 5000 to match your Apache proxy
-    app.run(host='0.0.0.0', port=5000)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=PORT)

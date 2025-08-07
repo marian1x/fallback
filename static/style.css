@@ -1,0 +1,105 @@
+/* Global */
+body {
+  background-color: #fffbea;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  color: #333;
+  padding-bottom: 2rem;
+}
+
+/* Bright Navbar with dropdown animation */
+.nav-bright {
+  background: linear-gradient(90deg, #ff9a9e, #fad0c4);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+.nav-bright .navbar-brand,
+.nav-bright .nav-link {
+  color: #fff !important;
+  font-weight: 600;
+  transition: transform 0.3s, text-shadow 0.3s;
+}
+.nav-bright .nav-link:hover {
+  color: #333 !important;
+  transform: scale(1.1);
+  text-shadow: 0 0 8px rgba(255,255,255,0.8);
+}
+.nav-bright .dropdown-menu {
+  display: block;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(10px);
+  transition: all 0.3s ease;
+}
+.nav-bright .dropdown.show .dropdown-menu {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+.dropdown-item:hover {
+  background-color: #ffe5e0 !important;
+}
+
+/* Breadcrumb */
+.breadcrumb a {
+  text-decoration: none;
+}
+.breadcrumb .breadcrumb-item.active {
+  color: #ff6f61;
+}
+
+/* Stat cards (now full-width of column) */
+.stat-card {
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.05);
+  transition: transform 0.3s, box-shadow 0.3s;
+}
+.stat-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 6px 12px rgba(0,0,0,0.1);
+}
+.card-eq {
+  background: linear-gradient(135deg, #f6d365, #fda085);
+}
+.card-pl {
+  background: linear-gradient(135deg, #a1c4fd, #c2e9fb);
+}
+.stat-card .card-title {
+  font-size: 1rem;
+  color: #fff;
+}
+.stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #fff;
+  margin: 0;
+}
+
+/* Tables & hover */
+.table-hover tbody tr:hover {
+  background-color: rgba(255, 193, 7, 0.1);
+  transition: background-color 0.3s;
+}
+.table-success { background-color: #d4edda !important; }
+.table-danger  { background-color: #f8d7da !important; }
+
+/* Log viewer */
+.log-view {
+  background: #272c34;
+  color: #f8f8f2;
+  padding: 1rem;
+  border-radius: 4px;
+  height: 70vh;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-family: monospace;
+  font-size: 0.9rem;
+}
+.navbar .nav-link { color: #fff !important; }
+.navbar .nav-link.active { color: #ffd700 !important; }
+
+/* Mobile tweaks */
+@media (max-width: 576px) {
+  .stat-value { font-size: 1.2rem; }
+  .navbar-brand { font-size: 1.25rem !important; }
+}

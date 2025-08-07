@@ -1,4 +1,9 @@
-venv/
+.env
+*.pyc
 __pycache__/
-*.db
+instance/
+app.db
 *.log
+venv/
+bot_temp.py
+
