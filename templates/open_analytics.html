@@ -1,40 +1,38 @@
 {% extends "base.html" %}
 {% block title %}Open Trades Analytics - TradingBot{% endblock %}
 {% block content %}
-<div class="container my-4 animate__animated animate__fadeIn">
+<div class="container-fluid my-4 animate__animated animate__fadeIn">
   <h3 class="mb-3">Open Trades Analytics</h3>
   <div class="row g-4">
-    <div class="col-12 col-lg-6">
-      <div class="card shadow-sm mb-3">
-        <div class="card-header bg-primary text-white">
-          <i class="fa fa-bolt"></i> Open Positions Heatmap
+    <div class="col-lg-7">
+      <div class="card shadow-sm mb-4">
+        <div class="card-header">
+          <i class="fa-solid fa-fire-flame-curved me-2"></i> Open Positions Heatmap (by Market Value)
         </div>
         <div class="card-body">
-          <canvas id="openSymbolPLChart" height="110"></canvas>
+          <canvas id="openHeatmapChart" height="120"></canvas>
         </div>
       </div>
-      <div class="card shadow-sm">
-        <div class="card-header bg-primary text-white">
-          <i class="fa fa-hourglass-half"></i> Open Trade Durations
+       <div class="card shadow-sm">
+        <div class="card-header">
+          <i class="fa-solid fa-hourglass-half me-2"></i> Open Trade Durations (Hours)
         </div>
         <div class="card-body">
-          <canvas id="openDurationsChart" height="90"></canvas>
+          <canvas id="openDurationsChart" height="120"></canvas>
         </div>
       </div>
     </div>
-    <div class="col-12 col-lg-6">
-      <div class="card shadow-sm mb-3">
-        <div class="card-header bg-primary text-white">
-          <i class="fa fa-table-list"></i> Open Trades Snapshot
+    <div class="col-lg-5">
+      <div class="card shadow-sm">
+        <div class="card-header">
+          <i class="fa-solid fa-table-list me-2"></i> Open Trades Snapshot
         </div>
-        <div class="card-body">
-          <table id="openTradesTable" class="table table-bordered table-sm">
+        <div class="card-body p-0">
+          <table id="openTradesTable" class="table table-hover mb-0">
             <thead>
               <tr>
                 <th>Symbol</th>
                 <th>Side</th>
-                <th>Qty</th>
-                <th>Open Price</th>
                 <th>Live P/L</th>
                 <th>Since Open</th>
               </tr>
@@ -48,63 +46,93 @@
 </div>
 {% endblock %}
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
 <script>
-function colorPL(val) {
-    if (val > 0) return '<span class="profit">'+val.toFixed(2)+'</span>';
-    if (val < 0) return '<span class="loss">'+val.toFixed(2)+'</span>';
-    return '<span>'+val.toFixed(2)+'</span>';
+let openAnalyticsCharts = {};
+
+function destroyChart(chartId) {
+    if (openAnalyticsCharts[chartId]) {
+        openAnalyticsCharts[chartId].destroy();
+    }
 }
+
 function fetchOpenAnalytics() {
     $.get('/api/open_positions', function(data){
-        // Table
-        let t = $('#openTradesTable').DataTable();
-        t.clear();
-        let symbolPL = {}, durations = {};
-        let now = Date.now();
+        // --- Table ---
+        let table = $('#openTradesTable').DataTable();
+        table.clear();
+        data.sort((a,b) => b.market_value - a.market_value); // Sort by largest position
+
         data.forEach(r => {
-            t.row.add([
-                r.symbol,
+            let durationStr = "-";
+            if (r.open_time_iso) {
+                const openTime = luxon.DateTime.fromISO(r.open_time_iso);
+                const duration = luxon.DateTime.now().diff(openTime, ['days', 'hours', 'minutes']);
+                if (duration.days > 0) {
+                    durationStr = `${duration.days}d ${Math.round(duration.hours)}h`;
+                } else {
+                    durationStr = `${Math.round(duration.hours)}h ${Math.round(duration.minutes)}m`;
+                }
+            }
+            table.row.add([
+                r.symbol.replace('USD', '/USD'),
                 r.side.toUpperCase(),
-                r.qty || '-',
-                r.open_price.toFixed(2),
-                colorPL(r.unrealized_pl),
-                (r.open_time ? (Math.round((now - Date.parse(r.open_time)) / 3600000) + "h") : "-")
+                `<span class="${r.unrealized_pl > 0 ? 'profit' : 'loss'}">${r.unrealized_pl.toFixed(2)}</span>`,
+                durationStr
             ]);
-            symbolPL[r.symbol] = (symbolPL[r.symbol]||0) + (r.unrealized_pl||0);
-            // Simulate open_time for demo, real API should include open_time
-            durations[r.symbol] = (durations[r.symbol]||[]).concat([Math.round(Math.random()*48)+1]);
         });
-        t.draw();
-        // Heatmap by symbol
-        let labels = Object.keys(symbolPL);
-        let vals = labels.map(s=>symbolPL[s]);
-        if(!window.openSymbolPLChart) {
-            window.openSymbolPLChart = new Chart(document.getElementById('openSymbolPLChart'),{
-                type:'bar',
-                data:{labels:labels, datasets:[{label:'Live P/L',data:vals,backgroundColor:'#4e8cff'}]},
-                options:{responsive:true, plugins:{legend:{display:false}}}
-            });
-        } else {
-            window.openSymbolPLChart.data.labels=labels; window.openSymbolPLChart.data.datasets[0].data=vals; window.openSymbolPLChart.update();
-        }
-        // Durations as boxplot/column (simulate for demo)
-        let durLabels = Object.keys(durations);
-        let durData = durLabels.map(s=>durations[s].reduce((a,b)=>a+b,0)/durations[s].length);
-        if(!window.openDurationsChart) {
-            window.openDurationsChart = new Chart(document.getElementById('openDurationsChart'),{
-                type:'bar',
-                data:{labels:durLabels, datasets:[{label:'Duration (hrs)',data:durData,backgroundColor:'#ffb866'}]},
-                options:{responsive:true, plugins:{legend:{display:false}}}
-            });
-        } else {
-            window.openDurationsChart.data.labels=durLabels; window.openDurationsChart.data.datasets[0].data=durData; window.openDurationsChart.update();
-        }
+        table.draw();
+
+        // --- Charts ---
+        const labels = data.map(p => p.symbol.replace('USD', '/USD'));
+        const marketValues = data.map(p => p.market_value);
+        const pnlValues = data.map(p => p.unrealized_pl);
+        const durations = data.map(p => {
+            if (!p.open_time_iso) return 0;
+            const openTime = luxon.DateTime.fromISO(p.open_time_iso);
+            return luxon.DateTime.now().diff(openTime, 'hours').hours;
+        });
+
+        // Heatmap Chart
+        destroyChart('openHeatmapChart');
+        openAnalyticsCharts['openHeatmapChart'] = new Chart(document.getElementById('openHeatmapChart'), {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Market Value ($)',
+                    data: marketValues,
+                    backgroundColor: pnlValues.map(pl => pl >= 0 ? 'rgba(100, 255, 218, 0.6)' : 'rgba(255, 139, 139, 0.6)'),
+                    borderColor: pnlValues.map(pl => pl >= 0 ? '#64ffda' : '#ff8b8b'),
+                    borderWidth: 1
+                }]
+            },
+            options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } } }
+        });
+
+        // Durations Chart
+        destroyChart('openDurationsChart');
+        openAnalyticsCharts['openDurationsChart'] = new Chart(document.getElementById('openDurationsChart'), {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Duration (hours)',
+                    data: durations,
+                    backgroundColor: 'rgba(88, 166, 255, 0.6)',
+                    borderColor: '#58a6ff',
+                    borderWidth: 1
+                }]
+            },
+            options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } } }
+        });
     });
 }
+
 $(document).ready(function(){
-    $('#openTradesTable').DataTable({paging:false,searching:false,info:false});
+    $('#openTradesTable').DataTable({paging: false, searching: false, info: false, order: []});
     fetchOpenAnalytics();
-    setInterval(fetchOpenAnalytics,12000);
+    setInterval(fetchOpenAnalytics, 15000); // Refresh every 15 seconds
 });
 </script>
 {% endblock %}

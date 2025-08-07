@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import re
 import logging
 import threading
 import time
@@ -34,6 +35,7 @@ if not BOT_WEBHOOK.endswith('/webhook'):
     BOT_WEBHOOK = BOT_WEBHOOK.rstrip('/') + '/webhook'
 ADMIN_USER = os.getenv('ADMIN_USERNAME', 'admin')
 ADMIN_PASS = os.getenv('ADMIN_PASSWORD', 'admin')
+PER_TRADE_AMOUNT = os.getenv('PER_TRADE_AMOUNT', '2000')
 
 # Action keywords that mean "close this position"
 CLOSE_ACTIONS = [
@@ -52,6 +54,11 @@ CLOSE_ACTIONS = [
 def is_close_action(act):
     return act and act.strip().lower() in CLOSE_ACTIONS
 
+# --- Cache for Assets ---
+assets_cache = {
+    'data': [],
+    'timestamp': datetime.min
+}
 
 # --- Flask App Initialization ---
 app = Flask(__name__)
@@ -121,7 +128,7 @@ def logout():
 @app.route('/')
 @login_required
 def dashboard():
-    return render_template('dashboard.html')
+    return render_template('dashboard.html', per_trade_amount=PER_TRADE_AMOUNT)
 
 @app.route('/closed_trades')
 @login_required
@@ -139,6 +146,34 @@ def stats():
     return render_template('stats.html')
 
 # --- API Endpoints ---
+@app.route('/api/assets')
+@login_required
+def get_tradable_assets():
+    now = datetime.now()
+    if not assets_cache['data'] or (now - assets_cache['timestamp']) > timedelta(hours=1):
+        try:
+            logger.info("Fetching tradable assets from Alpaca...")
+            active_assets = api.list_assets(status='active')
+            
+            tradable_symbols = []
+            for asset in active_assets:
+                if asset.tradable:
+                    if asset.asset_class == 'crypto':
+                        if asset.symbol.endswith('USD'):
+                            tradable_symbols.append(asset.symbol[:-3] + '/USD')
+                    else:
+                        tradable_symbols.append(asset.symbol)
+            
+            assets_cache['data'] = sorted(tradable_symbols)
+            assets_cache['timestamp'] = now
+            logger.info(f"Cached {len(assets_cache['data'])} tradable assets.")
+
+        except Exception as e:
+            logger.error(f"Error fetching tradable assets: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    return jsonify(assets_cache['data'])
+
 @app.route('/api/open_positions')
 @login_required
 def api_open_positions():
@@ -153,43 +188,31 @@ def api_open_positions():
     for p in positions:
         open_time_utc = db_trades.get(p.symbol)
         open_time_str = "-"
+        open_time_iso = None
         if open_time_utc:
             local_tz = timezone('Europe/Bucharest')
+            if open_time_utc.tzinfo is None:
+                open_time_utc = utc.localize(open_time_utc)
             open_time_local = open_time_utc.astimezone(local_tz)
             open_time_str = open_time_local.strftime('%Y-%m-%d %H:%M:%S')
+            open_time_iso = open_time_utc.isoformat()
 
         out.append({
             'symbol': p.symbol,
             'side': 'sell' if float(p.qty) < 0 else 'buy',
             'qty': abs(float(p.qty)),
             'open_price': float(p.avg_entry_price),
-            'current_price': float(p.current_price or 0),
+            'market_value': float(p.market_value),
             'unrealized_pl': float(p.unrealized_pl),
-            'open_time': open_time_str
+            'open_time_str': open_time_str,
+            'open_time_iso': open_time_iso
         })
     return jsonify(out)
 
 @app.route('/api/closed_orders')
 @login_required
 def api_closed_orders():
-    # ... (code unchanged)
-    from_date = request.args.get('from')
-    to_date = request.args.get('to')
-    
     q = Trade.query.filter_by(status='closed')
-    
-    if from_date:
-        try:
-            from_dt = datetime.strptime(from_date, "%Y-%m-%d")
-            q = q.filter(Trade.close_time >= from_dt)
-        except Exception: pass
-        
-    if to_date:
-        try:
-            to_dt = datetime.strptime(to_date, "%Y-%m-%d")
-            q = q.filter(Trade.close_time <= to_dt)
-        except Exception: pass
-        
     closed = q.order_by(Trade.close_time.desc()).all()
     
     out = []
@@ -217,10 +240,9 @@ def proxy_trade():
     position_to_close = None
     if is_close_action(payload.get('action')):
         try:
-            # Get position info BEFORE closing to pass to the recorder
-            position_to_close = api.get_position(payload.get('symbol'))
+            position_to_close = api.get_position(payload.get('symbol').replace('/', ''))
         except Exception as e:
-            logger.warning(f"Could not get position for {payload.get('symbol')} before closing. It may not exist. Error: {e}")
+            logger.warning(f"Could not get position for {payload.get('symbol')} before closing: {e}")
 
     try:
         r = requests.post(BOT_WEBHOOK, json=payload, timeout=10)
@@ -236,7 +258,7 @@ def proxy_trade():
 
     try:
         if data.get('result') in ['opened', 'opened_short']:
-            time.sleep(1) # Give Alpaca a moment to update the position
+            time.sleep(1)
             t = record_open_trade(data, payload)
             if t: app.logger.info(f"DB: Logged open trade: {t.symbol}")
         elif data.get('result') == 'closed':
@@ -250,7 +272,6 @@ def proxy_trade():
 @app.route('/api/account')
 @login_required
 def api_account():
-    # ... (code unchanged)
     try:
         acct = api.get_account()
         return jsonify({
@@ -261,10 +282,56 @@ def api_account():
         return jsonify({'equity': 0, 'cash': 0})
 
 # --- Admin and Utility Routes ---
+@app.route('/config', methods=['GET', 'POST'])
+@login_required
+def config():
+    user = User.query.get(session.get('user_id'))
+    if not user or user.username != ADMIN_USER:
+        flash("Admin access required.", "danger")
+        return redirect(url_for('dashboard'))
+
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+    
+    if request.method == 'POST':
+        try:
+            with open(env_path, 'r') as f:
+                lines = f.readlines()
+
+            new_lines = []
+            for line in lines:
+                is_updated = False
+                for key, value in request.form.items():
+                    if line.strip().startswith(key + '='):
+                        new_lines.append(f"{key}={value}\n")
+                        is_updated = True
+                        break
+                if not is_updated:
+                    new_lines.append(line)
+            
+            with open(env_path, 'w') as f:
+                f.writelines(new_lines)
+
+            flash("Configuration saved successfully! The application may need a restart for all changes to take effect.", "success")
+        except Exception as e:
+            flash(f"Error saving configuration: {e}", "danger")
+        return redirect(url_for('config'))
+    
+    config_vars = {}
+    try:
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    config_vars[key] = value
+    except Exception as e:
+        flash(f"Could not read .env file: {e}", "warning")
+
+    return render_template('config.html', config=config_vars)
+
 @app.route('/logs')
 @login_required
 def logs():
-    # ... (code unchanged)
     logfiles = ['dashboard.log', 'trades.log']
     logs_content = {}
     for name in logfiles:
@@ -272,7 +339,7 @@ def logs():
             if os.path.exists(name):
                 with open(name, 'r') as f:
                     lines = f.readlines()
-                    logs_content[name] = "".join(lines[-100:])
+                    logs_content[name] = "".join(lines[-200:]) # Show more lines
             else:
                 logs_content[name] = "(File not found)"
         except Exception as e:
@@ -283,7 +350,6 @@ def logs():
 @app.route('/reinit_db', methods=['GET', 'POST'])
 @login_required
 def reinit_db():
-    # ... (code unchanged)
     user = User.query.get(session.get('user_id'))
     if not user or user.username != ADMIN_USER:
         flash("Admin access required.", "danger")
@@ -305,7 +371,6 @@ def reinit_db():
 
 # --- Background Sync Thread ---
 def sync_open_trades_to_db():
-    # ... (code unchanged)
     with app.app_context():
         try:
             positions = api.list_positions()
@@ -332,7 +397,6 @@ def sync_open_trades_to_db():
             logger.error(f"Auto-sync failed: {e}")
 
 def periodic_sync():
-    # ... (code unchanged)
     while True:
         sync_open_trades_to_db()
         time.sleep(30)

@@ -12,14 +12,16 @@ API_KEY = os.getenv("ALPACA_KEY")
 API_SECRET = os.getenv("ALPACA_SECRET")
 BASE_URL = os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
 PORT = int(os.getenv("BOT_PORT", 5000))
-TRADE_NOTIONAL = float(os.getenv("TRADE_NOTIONAL", "2000"))
+TRADE_NOTIONAL = float(os.getenv("PER_TRADE_AMOUNT", "2000"))
+MIN_CRYPTO_ORDER_SIZE_USD = 10.0 # New variable for minimum crypto order size
 
 # Minimums for crypto (as per Alpaca, adjust as needed)
 CRYPTO_MIN_QTY = {
     "BTCUSD": 0.0001,
     "ETHUSD": 0.001,
     "DOGEUSD": 10,
-    "SOLUSD": 0.01
+    "SOLUSD": 0.01,
+    "PEPEUSD": 1000
 }
 DEFAULT_CRYPTO_MIN = 0.001
 
@@ -33,23 +35,14 @@ api = tradeapi.REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')
 
 # Action keywords that mean "close this position"
 CLOSE_ACTIONS = [
-    "trailing exit long", "trailing exit short",
-    "forced sl long", "forced sl short", "forced tp long", "forced tp short",
-    "fixed take profit (long)", "fixed take profit (short)",
-    "fixed stop loss (long)", "fixed stop loss (short)",
-    "forced tp (long)", "forced tp (short)",
-    "forced sl (long)", "forced sl (short)",
-    "fixed take profit long", "fixed take profit short",
-    "fixed stop loss long", "fixed stop loss short",
-    "close long", "close short",
-    "close"
+    "trailing exit long", "trailing exit short", "close long", "close short", "close"
 ]
 
 def is_close_action(act):
     return act and act.strip().lower() in CLOSE_ACTIONS
 
 def is_crypto(symbol):
-    return symbol and symbol.upper().endswith('USD') and symbol.upper() not in ['USD','USDT','USDC']
+    return symbol and (symbol.upper().endswith('USD') or '/' in symbol)
 
 def get_open_symbols():
     try:
@@ -60,14 +53,20 @@ def get_open_symbols():
 
 def get_last_price(symbol):
     try:
-        trade = api.get_latest_trade(symbol)
-        return float(trade.price)
+        api_symbol = symbol.replace('/', '')
+        if is_crypto(symbol):
+            trade = api.get_latest_crypto_trade(api_symbol, "CBSE")
+            return float(trade.p)
+        else:
+            trade = api.get_latest_trade(api_symbol)
+            return float(trade.price)
     except Exception as e:
         logger.error(f"Failed to get price for {symbol}: {e}")
         return 0.0
 
 def get_crypto_min_qty(symbol):
-    return CRYPTO_MIN_QTY.get(symbol.upper(), DEFAULT_CRYPTO_MIN)
+    api_symbol = symbol.replace('/', '')
+    return CRYPTO_MIN_QTY.get(api_symbol.upper(), DEFAULT_CRYPTO_MIN)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -78,171 +77,80 @@ def webhook():
     action = data.get("action", "")
     user   = data.get("user", "Unknown")
     price  = float(data.get("price") or 0)
+    # Get amount from webhook, fallback to .env TRADE_NOTIONAL
+    amount = float(data.get("amount", TRADE_NOTIONAL))
 
     if not symbol or not action:
         logger.error(f"Invalid webhook data: {data}")
         return jsonify({"error": "Invalid webhook"}), 400
 
-    # =========== CLOSE LOGIC (WORKS FOR ALL EXIT/SL/TP SIGNALS) ===========
+    api_symbol = symbol.replace('/', '')
+
+    # =========== CLOSE LOGIC ===========
     if is_close_action(action):
         try:
-            api.close_position(symbol)
-            logger.info(f"[CLOSE] Flattened {symbol} for user {user} (action={action})")
+            # This returns the order object used to close the position
+            close_order = api.close_position(api_symbol)
+            logger.info(f"[CLOSE] Submitted close order {close_order.id} for {api_symbol}")
             return jsonify({
                 "result": "closed",
                 "symbol": symbol,
-                "user": user,
-                "action": action
+                "close_order_id": close_order.id # Return the specific ID of the close order
             }), 200
         except Exception as e:
-            logger.error(f"Error closing {symbol}: {e}")
+            if "position not found" in str(e):
+                logger.warning(f"Attempted to close {api_symbol}, but no position exists.")
+                return jsonify({"result": "no_position_to_close", "symbol": symbol}), 200
+            logger.error(f"Error closing {api_symbol}: {e}")
             return jsonify({"error": str(e)}), 500
 
-    # =========== CRYPTO LOGIC ===========
-    if is_crypto(symbol):
-        open_symbols = get_open_symbols()
-        if action.lower() == "buy":
-            if symbol in open_symbols:
-                logger.warning(f"[CRYPTO] Trade rejected: {symbol} already open.")
-                return jsonify({"error": f"{symbol} position already open."}), 409
-            try:
-                last_price = get_last_price(symbol)
-                min_qty = get_crypto_min_qty(symbol)
-                qty = float(data.get("qty") or 0)
-                if not qty:
-                    if last_price > 0:
-                        raw_qty = TRADE_NOTIONAL / last_price
-                        qty = math.floor(raw_qty / min_qty) * min_qty
-                        qty = round(qty, 8)
-                    else:
-                        qty = min_qty
-                if qty < min_qty:
-                    qty = min_qty
-                order = api.submit_order(
-                    symbol=symbol,
-                    side="buy",
-                    type="market",
-                    qty=qty,
-                    time_in_force="gtc"
-                )
-                logger.info(f"[CRYPTO] Opened BUY {symbol} ({qty} units at ~${last_price}) (order id={order.id})")
-                return jsonify({
-                    "result": "opened",
-                    "order_id": order.id,
-                    "symbol": symbol,
-                    "side": "buy",
-                    "price": price,
-                    "user": user,
-                    "action": action,
-                    "qty": qty
-                }), 200
-            except Exception as e:
-                logger.error(f"[CRYPTO] Error handling {symbol} BUY: {e}")
-                return jsonify({"error": str(e)}), 500
-        if action.lower() == "sell":
-            open_symbols = get_open_symbols()
-            if symbol in open_symbols:
-                logger.warning(f"[CRYPTO] Trade rejected: {symbol} already open.")
-                return jsonify({"error": f"{symbol} position already open."}), 409
-            try:
-                last_price = get_last_price(symbol)
-                min_qty = get_crypto_min_qty(symbol)
-                qty = float(data.get("qty") or 0)
-                if not qty:
-                    if last_price > 0:
-                        raw_qty = TRADE_NOTIONAL / last_price
-                        qty = math.floor(raw_qty / min_qty) * min_qty
-                        qty = round(qty, 8)
-                    else:
-                        qty = min_qty
-                if qty < min_qty:
-                    qty = min_qty
-                order = api.submit_order(
-                    symbol=symbol,
-                    side="sell",
-                    type="market",
-                    qty=qty,
-                    time_in_force="gtc"
-                )
-                logger.info(f"[CRYPTO] Opened SHORT {symbol} ({qty} units at ~${last_price}) (order id={order.id})")
-                return jsonify({
-                    "result": "opened_short",
-                    "order_id": order.id,
-                    "symbol": symbol,
-                    "side": "sell",
-                    "price": price,
-                    "user": user,
-                    "action": action,
-                    "qty": qty
-                }), 200
-            except Exception as e:
-                logger.error(f"[CRYPTO] Error handling {symbol} SELL: {e}")
-                return jsonify({"error": str(e)}), 500
-
-    # =========== STOCK LOGIC ===========
     open_symbols = get_open_symbols()
-
-    if action.lower() == "buy":
-        if symbol in open_symbols:
-            logger.warning(f"Trade rejected: {symbol} already open.")
-            return jsonify({"error": f"{symbol} position already open."}), 409
+    
+    if action.lower() in ["buy", "sell"]:
+        if api_symbol in open_symbols:
+            logger.warning(f"Trade rejected: {api_symbol} position already open.")
+            return jsonify({"error": f"{api_symbol} position already open."}), 409
+        
         try:
             last_price = get_last_price(symbol)
-            qty = int(TRADE_NOTIONAL // last_price) if last_price > 0 else 0
-            if qty < 1:
-                logger.warning(f"Not enough funds to buy 1 share of {symbol} at ${last_price}. Skipping.")
-                return jsonify({"error": f"Not enough funds to buy 1 share of {symbol}."}), 400
-            order = api.submit_order(
-                symbol=symbol,
-                side="buy",
-                type="market",
-                qty=qty,
-                time_in_force="day"
-            )
-            logger.info(f"Opened BUY {symbol} ({qty} shares at ~${last_price}) (order id={order.id})")
+            if last_price == 0:
+                return jsonify({"error": f"Could not fetch a valid price for {symbol}."}), 400
+
+            # Universal order submission logic
+            if is_crypto(symbol):
+                # Enforce minimum notional value for crypto
+                if amount < MIN_CRYPTO_ORDER_SIZE_USD:
+                    msg = f"Crypto order for {symbol} rejected. Amount ${amount:.2f} is less than the minimum of ${MIN_CRYPTO_ORDER_SIZE_USD:.2f}."
+                    logger.warning(msg)
+                    return jsonify({"error": msg}), 400
+                
+                min_qty = get_crypto_min_qty(symbol)
+                raw_qty = amount / last_price
+                qty = math.floor(raw_qty / min_qty) * min_qty
+                qty = round(qty, 8)
+                if qty < min_qty: qty = min_qty
+                order_params = {'symbol': api_symbol, 'side': action.lower(), 'type': 'market', 'qty': qty, 'time_in_force': 'gtc'}
+            else: # Stocks
+                order_params = {'symbol': api_symbol, 'side': action.lower(), 'type': 'market', 'notional': amount, 'time_in_force': 'day'}
+
+            order = api.submit_order(**order_params)
+            # Use filled_qty if available, otherwise the requested qty
+            final_qty = order.filled_qty if hasattr(order, 'filled_qty') and order.filled_qty else order_params.get('qty', 0)
+            
+            logger.info(f"Opened {action.upper()} {api_symbol} ({final_qty} units) (order id={order.id})")
             return jsonify({
-                "result": "opened",
+                "result": "opened" if action.lower() == "buy" else "opened_short",
                 "order_id": order.id,
                 "symbol": symbol,
-                "side": "buy",
+                "side": action.lower(),
                 "price": price,
                 "user": user,
                 "action": action,
-                "qty": qty
+                "qty": final_qty
             }), 200
-        except Exception as e:
-            logger.error(f"Error handling {symbol} BUY: {e}")
-            return jsonify({"error": str(e)}), 500
 
-    if action.lower() == "sell":
-        if symbol in open_symbols:
-            logger.warning(f"Trade rejected: {symbol} already open.")
-            return jsonify({"error": f"{symbol} position already open."}), 409
-        try:
-            last_price = get_last_price(symbol)
-            qty = int(TRADE_NOTIONAL // last_price) if last_price > 0 else 0
-            if qty < 1:
-                logger.warning(f"Not enough notional to short 1 share of {symbol} at ${last_price}. Skipping.")
-                return jsonify({"error": f"Not enough notional to short 1 share of {symbol}."}), 400
-            order = api.submit_order(
-                symbol=symbol,
-                side="sell",
-                type="market",
-                qty=qty,
-                time_in_force="day"
-            )
-            logger.info(f"Opened SHORT {symbol} ({qty} shares at ~${last_price}) (order id={order.id})")
-            return jsonify({
-                "result": "opened_short",
-                "order_id": order.id,
-                "symbol": symbol,
-                "side": "sell",
-                "user": user,
-                "action": action,
-                "qty": qty
-            }), 200
         except Exception as e:
-            logger.error(f"Error opening short {symbol}: {e}")
+            logger.error(f"Error handling {symbol} {action.upper()}: {e}")
             return jsonify({"error": str(e)}), 500
 
     logger.error(f"Unknown action: {action}")

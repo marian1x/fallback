@@ -35,19 +35,26 @@
                 </div>
                 <div class="card-body">
                     <form id="openTradeForm" class="row g-2 align-items-end">
-                        <div class="col-md-4 col-12">
-                            <input type="text" name="symbol" class="form-control" placeholder="Symbol (e.g. BTC/USD)" required>
+                        <div class="col-sm-4">
+                            <label for="symbolInput" class="form-label small">Symbol</label>
+                            <input type="text" id="symbolInput" name="symbol" class="form-control" placeholder="e.g., AAPL, BTC/USD" required list="symbols-datalist">
                         </div>
-                        <div class="col-md-4 col-8">
-                            <select name="side" class="form-select" required>
+                        <div class="col-sm-3">
+                            <label for="amountInput" class="form-label small">Amount ($)</label>
+                            <input type="number" id="amountInput" name="amount" class="form-control" value="{{ per_trade_amount }}" step="any" required>
+                        </div>
+                        <div class="col-sm-3">
+                            <label for="sideSelect" class="form-label small">Side</label>
+                            <select id="sideSelect" name="side" class="form-select" required>
                                 <option value="buy">Buy (Long)</option>
                                 <option value="sell">Sell (Short)</option>
                             </select>
                         </div>
-                        <div class="col-md-2 col-4">
-                            <button type="submit" class="btn btn-success w-100"><i class="fa fa-paper-plane"></i> Send</button>
+                        <div class="col-sm-2">
+                            <button type="submit" class="btn btn-primary w-100"><i class="fa fa-paper-plane"></i> Send</button>
                         </div>
                     </form>
+                    <datalist id="symbols-datalist"></datalist>
                 </div>
             </div>
             <div class="card shadow-sm">
@@ -63,10 +70,8 @@
                                 <th>Qty</th>
                                 <th>Open Price</th>
                                 <th>Current Price</th>
-                                <th>P/L</th>
-                                <th>Open Time</th>
-                                <th>Action</th>
-                            </tr>
+                                <th data-priority="1">P/L</th> <th>Open Time</th>
+                                <th data-priority="2">Action</th> </tr>
                         </thead>
                         <tbody></tbody>
                     </table>
@@ -103,9 +108,9 @@
             data.forEach(r => {
                 totalPL += r.unrealized_pl || 0;
                 t.row.add([
-                    r.symbol,
+                    r.symbol.replace('USD', '/USD'), // Display with slash
                     r.side ? r.side.toUpperCase() : '-',
-                    r.qty,
+                    r.qty.toFixed(4),
                     (r.open_price || 0).toFixed(4),
                     (r.current_price || 0).toFixed(4),
                     colorPL(r.unrealized_pl || 0),
@@ -127,12 +132,41 @@
             $("#statCash").text("$" + Number(data.cash || 0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}));
         });
     }
+    
+    function populateSymbolsDatalist() {
+        $.get('/api/assets', function(data){
+            const datalist = $('#symbols-datalist');
+            datalist.empty(); // Clear existing options
+            data.forEach(function(symbol) {
+                datalist.append(`<option value="${symbol}">`);
+            });
+        }).fail(function() {
+            console.error("Failed to fetch tradable assets.");
+        });
+    }
 
     $(document).ready(function(){
+        const MIN_CRYPTO_AMOUNT = 10.0;
+
+        // Populate the symbols list on page load
+        populateSymbolsDatalist();
+
         $('#openTable').DataTable({
-            paging: false, searching: false, info: false, 
-            responsive: true,
-            order: [[0, 'asc']] // Default sort by symbol
+            paging: false, 
+            searching: false, 
+            info: false, 
+            responsive: {
+                details: {
+                    type: 'column',
+                    target: 'tr'
+                }
+            },
+            columnDefs: [
+                { responsivePriority: 1, targets: 0 }, // Symbol
+                { responsivePriority: 3, targets: 5 }, // P/L
+                { responsivePriority: 2, targets: 7 }  // Action
+            ],
+            order: [[0, 'asc']]
         });
 
         fetchOpenPositions();
@@ -141,7 +175,7 @@
         setInterval(fetchAccountSummary, 20000);
 
         $('#openTable tbody').on('click', '.close-btn', function(e){
-            e.stopPropagation(); // prevent row click event if any
+            e.stopPropagation();
             let symbol = $(this).data('symbol');
             Swal.fire({
                 title: `Close ${symbol}?`,
@@ -159,8 +193,19 @@
                         method: 'POST',
                         contentType: 'application/json',
                         data: JSON.stringify({symbol: symbol, action: "close", user: "Dashboard"}),
-                        success: function(){ setTimeout(fetchOpenPositions, 1500); },
-                        error: function(xhr){ /* ... error handling ... */ }
+                        success: function(){ 
+                            Swal.fire({
+                                title: 'Success!', text: `Close order for ${symbol} sent.`, icon: 'success',
+                                timer: 1500, showConfirmButton: false,
+                                customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
+                            });
+                            setTimeout(fetchOpenPositions, 1500); 
+                        },
+                        error: function(xhr){ 
+                            let msg = "An unknown error occurred.";
+                            try { msg = JSON.parse(xhr.responseText).detail || xhr.responseText; } catch(e) { msg = xhr.responseText; }
+                             Swal.fire({ title: "Close Failed", text: msg, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
+                        }
                     });
                 }
             });
@@ -168,19 +213,45 @@
 
         $('#openTradeForm').on('submit', function(e){
             e.preventDefault();
-            const sym = $(this).find('input[name="symbol"]').val().toUpperCase().trim();
-            const side = $(this).find('select[name="side"]').val();
-            if(!sym || !side) return;
+            const sym = $('#symbolInput').val().toUpperCase().trim();
+            const side = $('#sideSelect').val();
+            const amount = parseFloat($('#amountInput').val());
+
+            if(!sym || !side || !amount) {
+                 Swal.fire({ title: "Invalid Input", text: "Please fill all fields correctly.", icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
+                return;
+            }
+
+            // Crypto minimum amount check
+            const isCrypto = sym.includes('USD') || sym.includes('/');
+            if (isCrypto && amount < MIN_CRYPTO_AMOUNT) {
+                Swal.fire({
+                    title: 'Amount Too Low',
+                    text: `The minimum order size for crypto is $${MIN_CRYPTO_AMOUNT}. Please increase your trade amount.`,
+                    icon: 'warning',
+                    customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
+                });
+                return;
+            }
+
             $.ajax({
                 url: '/api/proxy_trade',
                 method: 'POST',
                 contentType: 'application/json',
-                data: JSON.stringify({symbol: sym, action: side, user: "Dashboard"}),
-                success: function(){ 
+                data: JSON.stringify({symbol: sym, action: side, user: "Dashboard", amount: amount}),
+                success: function(response){
+                    Swal.fire({
+                        title: 'Success!', text: `Trade order for ${sym} sent.`, icon: 'success',
+                        timer: 1500, showConfirmButton: false,
+                        customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
+                    });
                     setTimeout(fetchOpenPositions, 1500);
-                    $('#openTradeForm')[0].reset();
                 },
-                error: function(xhr){ /* ... error handling ... */ }
+                error: function(xhr){
+                    let msg = "An unknown error occurred.";
+                    try { msg = JSON.parse(xhr.responseText).detail || JSON.parse(xhr.responseText).error || xhr.responseText; } catch(e) { msg = xhr.responseText; }
+                    Swal.fire({ title: "Trade Failed", text: msg, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
+                }
             });
         });
     });

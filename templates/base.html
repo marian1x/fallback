@@ -33,6 +33,7 @@
                 Admin
               </a>
               <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="debugMenu">
+                <li><a class="dropdown-item" href="{{ url_for('config') }}">Configuration</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('logs') }}">View Logs</a></li>
                 <li><hr class="dropdown-divider"></li>
                 <li><a class="dropdown-item text-danger" href="{{ url_for('reinit_db') }}">Re-initialize DB</a></li>
@@ -50,6 +51,20 @@
       </div>
     </nav>
     <main class="container-fluid mt-5 pt-4">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <div class="row justify-content-center">
+                <div class="col-12 col-md-8">
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        {% endwith %}
         {% block content %}{% endblock %}
     </main>
     
@@ -74,7 +89,12 @@
             themeSwitch.checked = theme === 'dark';
             themeIcon.className = theme === 'dark' ? 'fa-solid fa-moon' : 'fa-solid fa-sun';
             // For Chart.js
-            Chart.defaults.color = theme === 'dark' ? '#adb5bd' : '#666';
+            if (window.Chart) {
+                Chart.defaults.color = theme === 'dark' ? '#8892b0' : '#666';
+                 for (let id in Chart.instances) {
+                    Chart.instances[id].update();
+                }
+            }
         }
 
         setTheme(currentTheme);
@@ -83,10 +103,6 @@
             const newTheme = this.checked ? 'dark' : 'light';
             localStorage.setItem('theme', newTheme);
             setTheme(newTheme);
-            // Force charts to re-render with new default colors
-            for (let id in Chart.instances) {
-                Chart.instances[id].update();
-            }
         });
     })();
     </script>
