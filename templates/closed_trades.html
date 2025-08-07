@@ -54,7 +54,6 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<!-- Luxon for robust timezone handling -->
 <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
 <script>
     // Convert ISO string (in UTC) to Europe/Bucharest time
@@ -70,8 +69,8 @@
     let dateFilterFrom = "", dateFilterTo = "";
 
     function colorPL(val) {
-        if (val > 0) return '<span class="profit">'+val.toFixed(4)+'</span>';
-        if (val < 0) return '<span class="loss">'+val.toFixed(4)+'</span>';
+        if (val > 0) return '<span class="text-success fw-bold">'+val.toFixed(4)+'</span>';
+        if (val < 0) return '<span class="text-danger fw-bold">'+val.toFixed(4)+'</span>';
         return '<span>'+val.toFixed(4)+'</span>';
     }
     function fetchClosedOrders() {
@@ -115,7 +114,7 @@
             if (pl > 0) wins++; else if (pl < 0) losses++;
         });
         let winrate = wins + losses > 0 ? (100 * wins / (wins + losses)).toFixed(1) : "0";
-        $("#ctStatPL").text("P/L: $" + totalPL.toFixed(2));
+        $("#ctStatPL").html(colorPL(totalPL));
         $("#ctStatWins").text("Wins: " + wins);
         $("#ctStatLosses").text("Losses: " + losses);
         $("#ctStatWinrate").text("Win Rate: " + winrate + "%");

@@ -1,105 +1,89 @@
-/* Global */
+/* --- Global & Font --- */
+:root {
+    --font-family-sans-serif: 'Exo 2', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
 body {
-  background-color: #fffbea;
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  color: #333;
-  padding-bottom: 2rem;
+    font-family: var(--font-family-sans-serif);
+    font-size: 0.9rem;
+    transition: background-color 0.3s ease, color 0.3s ease;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
-/* Bright Navbar with dropdown animation */
-.nav-bright {
-  background: linear-gradient(90deg, #ff9a9e, #fad0c4);
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-.nav-bright .navbar-brand,
-.nav-bright .nav-link {
-  color: #fff !important;
-  font-weight: 600;
-  transition: transform 0.3s, text-shadow 0.3s;
-}
-.nav-bright .nav-link:hover {
-  color: #333 !important;
-  transform: scale(1.1);
-  text-shadow: 0 0 8px rgba(255,255,255,0.8);
-}
-.nav-bright .dropdown-menu {
-  display: block;
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(10px);
-  transition: all 0.3s ease;
-}
-.nav-bright .dropdown.show .dropdown-menu {
-  opacity: 1;
-  visibility: visible;
-  transform: translateY(0);
-}
-.dropdown-item:hover {
-  background-color: #ffe5e0 !important;
+/* --- Light Mode (Default) --- */
+body {
+    --bg-color: #f4f7fc;
+    --text-color: #343a40;
+    --text-color-muted: #6c757d;
+    --card-bg: #ffffff;
+    --card-border: #e9ecef;
+    --navbar-bg: rgba(255, 255, 255, 0.85);
+    --navbar-border: #dee2e6;
+    --accent-color: #007bff;
+    --profit-color-text: #20c997;
+    --loss-color-text: #fd7e14;
+    --profit-bg-color: #20c997;
+    --loss-bg-color: #fd7e14;
+    --badge-profit-text: #ffffff;
+    --badge-loss-text: #ffffff;
+    --link-color: #007bff;
+    --link-hover-color: #0056b3;
+    --table-striped-bg: #f8f9fa;
+    --table-hover-bg: #e9ecef;
 }
 
-/* Breadcrumb */
-.breadcrumb a {
-  text-decoration: none;
-}
-.breadcrumb .breadcrumb-item.active {
-  color: #ff6f61;
-}
-
-/* Stat cards (now full-width of column) */
-.stat-card {
-  width: 100%;
-  border: none;
-  border-radius: 12px;
-  box-shadow: 0 4px 8px rgba(0,0,0,0.05);
-  transition: transform 0.3s, box-shadow 0.3s;
-}
-.stat-card:hover {
-  transform: translateY(-5px);
-  box-shadow: 0 6px 12px rgba(0,0,0,0.1);
-}
-.card-eq {
-  background: linear-gradient(135deg, #f6d365, #fda085);
-}
-.card-pl {
-  background: linear-gradient(135deg, #a1c4fd, #c2e9fb);
-}
-.stat-card .card-title {
-  font-size: 1rem;
-  color: #fff;
-}
-.stat-value {
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: #fff;
-  margin: 0;
+/* --- Dark Mode --- */
+body.dark-mode {
+    --bg-color: #0a192f;
+    --text-color: #ccd6f6;
+    --text-color-muted: #8892b0;
+    --card-bg: #112240;
+    --card-border: #233554;
+    --navbar-bg: rgba(10, 25, 47, 0.85);
+    --navbar-border: #0a192f;
+    --accent-color: #64ffda;
+    --profit-color-text: #64ffda;
+    --loss-color-text: #ff8b8b;
+    --profit-bg-color: #64ffda;
+    --loss-bg-color: #ff8b8b;
+    --badge-profit-text: #0a192f;
+    --badge-loss-text: #0a192f;
+    --link-color: #64ffda;
+    --link-hover-color: #a7ffeb;
+    --table-striped-bg: #112a4c;
+    --table-hover-bg: #1d3b66;
 }
 
-/* Tables & hover */
-.table-hover tbody tr:hover {
-  background-color: rgba(255, 193, 7, 0.1);
-  transition: background-color 0.3s;
+/* --- Apply Theme Colors --- */
+body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
 }
-.table-success { background-color: #d4edda !important; }
-.table-danger  { background-color: #f8d7da !important; }
+.navbar { background-color: var(--navbar-bg); border-bottom: 1px solid var(--navbar-border); backdrop-filter: blur(10px); }
+.navbar-brand { color: var(--accent-color) !important; font-weight: 600; }
+.nav-link { color: var(--text-color) !important; }
+.nav-link.active { color: var(--accent-color) !important; font-weight: bold; }
+.card { background-color: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; }
+.list-group-item { background-color: var(--card-bg); border-color: var(--card-border); color: var(--text-color); }
+.list-group-item > span:first-child { color: var(--text-color); }
+.table { --bs-table-bg: transparent; --bs-table-border-color: var(--card-border); --bs-table-striped-bg: var(--table-striped-bg); --bs-table-hover-bg: var(--table-hover-bg); color: var(--text-color); }
+.card-header { background-color: transparent; border-bottom: 1px solid var(--card-border); font-weight: 600; color: var(--text-color); }
+.form-control, .form-select { background-color: var(--card-bg); color: var(--text-color); border-color: var(--card-border); }
+.form-control::placeholder { color: var(--text-color-muted); }
+.form-control:focus, .form-select:focus { background-color: var(--card-bg); color: var(--text-color); border-color: var(--accent-color); box-shadow: 0 0 0 0.2rem rgba(100, 255, 218, 0.25); }
+.dropdown-menu { background-color: var(--card-bg); border-color: var(--card-border); }
+.dropdown-item { color: var(--text-color); }
+.dropdown-item:hover { background-color: var(--table-hover-bg); }
+a { color: var(--link-color); text-decoration: none; }
+a:hover { color: var(--link-hover-color); }
 
-/* Log viewer */
-.log-view {
-  background: #272c34;
-  color: #f8f8f2;
-  padding: 1rem;
-  border-radius: 4px;
-  height: 70vh;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  font-family: monospace;
-  font-size: 0.9rem;
-}
-.navbar .nav-link { color: #fff !important; }
-.navbar .nav-link.active { color: #ffd700 !important; }
-
-/* Mobile tweaks */
-@media (max-width: 576px) {
-  .stat-value { font-size: 1.2rem; }
-  .navbar-brand { font-size: 1.25rem !important; }
-}
+/* --- Badges & P/L Colors --- */
+.profit { color: var(--profit-color-text); font-weight: 600; }
+.loss { color: var(--loss-color-text); font-weight: 600; }
+.badge.bg-profit { background-color: var(--profit-bg-color) !important; color: var(--badge-profit-text) !important; }
+.badge.bg-loss { background-color: var(--loss-bg-color) !important; color: var(--badge-loss-text) !important; }
+.badge.bg-neutral { background-color: var(--text-color-muted) !important; color: var(--bg-color) !important; }
+.form-check-input { border-color: #444; background-color: #333; }
+.form-check-input:checked { background-color: var(--accent-color); border-color: var(--accent-color); }
+#themeSwitch + label i { color: var(--text-color); }

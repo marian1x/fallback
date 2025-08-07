@@ -4,7 +4,9 @@
     <meta charset="UTF-8">
     <title>{% block title %}Trading Dashboard{% endblock %}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <!-- Bootstrap 5 -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;600&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css"/>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"/>
@@ -12,43 +14,45 @@
     <link rel="stylesheet" href="https://cdn.datatables.net/responsive/2.5.0/css/responsive.bootstrap5.min.css"/>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     {% block head_extra %}{% endblock %}
-    <style>
-      body.dark-mode { background: #18191a; color: #ececec; }
-      .navbar { border-bottom: 2px solid #0d6efd; }
-      .nav-link.active { font-weight:bold; color:#0d6efd !important;}
-      .fa-file-lines { color: #0d6efd; }
-    </style>
 </head>
-<body class="">
-    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+<body>
+    <nav class="navbar navbar-expand-lg fixed-top">
       <div class="container-fluid">
-        <a class="navbar-brand fw-bold fs-4" href="{{ url_for('dashboard') }}">TradingBot</a>
+        <a class="navbar-brand fw-bold fs-4" href="{{ url_for('dashboard') }}"><i class="fa-solid fa-rocket me-2"></i>TradingBot</a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
             <span class="navbar-toggler-icon"></span>
         </button>
         <div class="collapse navbar-collapse justify-content-end" id="navMenu">
-          <ul class="navbar-nav">
+          <ul class="navbar-nav align-items-center">
             <li class="nav-item"><a class="nav-link {% if request.endpoint=='dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Dashboard</a></li>
             <li class="nav-item"><a class="nav-link {% if request.endpoint=='closed_trades' %}active{% endif %}" href="{{ url_for('closed_trades') }}">Closed Trades</a></li>
-            <li class="nav-item"><a class="nav-link {% if request.endpoint=='open_analytics' %}active{% endif %}" href="{{ url_for('open_analytics') }}">Open Trades Analytics</a></li>
+            <li class="nav-item"><a class="nav-link {% if request.endpoint=='open_analytics' %}active{% endif %}" href="{{ url_for('open_analytics') }}">Open Analytics</a></li>
             <li class="nav-item"><a class="nav-link {% if request.endpoint=='stats' %}active{% endif %}" href="{{ url_for('stats') }}">Advanced Analytics</a></li>
-            <li class="nav-item"><a class="nav-link" href="/logout"><i class="fa fa-sign-out-alt"></i></a></li>
             <li class="nav-item dropdown">
               <a class="nav-link dropdown-toggle" href="#" id="debugMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-                Debug
+                Admin
               </a>
-              <ul class="dropdown-menu" aria-labelledby="debugMenu">
-                <li><a class="dropdown-item" href="{{ url_for('sync_open_trades') }}">Sync Open Trades</a></li>
-                <li><a class="dropdown-item" href="{{ url_for('logs') }}">Logs</a></li>
-                <li><a class="dropdown-item text-danger" href="{{ url_for('reinit_db') }}">Reinitialize DB</a></li>
+              <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="debugMenu">
+                <li><a class="dropdown-item" href="{{ url_for('logs') }}">View Logs</a></li>
+                <li><hr class="dropdown-divider"></li>
+                <li><a class="dropdown-item text-danger" href="{{ url_for('reinit_db') }}">Re-initialize DB</a></li>
               </ul>
             </li>
-
+            <li class="nav-item"><a class="nav-link" href="/logout"><i class="fa fa-sign-out-alt"></i></a></li>
+            <li class="nav-item ms-lg-2">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="themeSwitch">
+                    <label class="form-check-label" for="themeSwitch"><i class="fa-solid fa-moon"></i></label>
+                </div>
+            </li>
           </ul>
         </div>
       </div>
     </nav>
-    {% block content %}{% endblock %}
+    <main class="container-fluid mt-5 pt-4">
+        {% block content %}{% endblock %}
+    </main>
+    
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -57,6 +61,36 @@
     <script src="https://cdn.datatables.net/responsive/2.5.0/js/dataTables.responsive.min.js"></script>
     <script src="https://cdn.datatables.net/responsive/2.5.0/js/responsive.bootstrap5.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+    // --- Theme Switcher ---
+    (function() {
+        const themeSwitch = document.getElementById('themeSwitch');
+        const themeIcon = document.querySelector('label[for="themeSwitch"] i');
+        const currentTheme = localStorage.getItem('theme') || 'dark';
+
+        function setTheme(theme) {
+            document.body.classList.toggle('dark-mode', theme === 'dark');
+            themeSwitch.checked = theme === 'dark';
+            themeIcon.className = theme === 'dark' ? 'fa-solid fa-moon' : 'fa-solid fa-sun';
+            // For Chart.js
+            Chart.defaults.color = theme === 'dark' ? '#adb5bd' : '#666';
+        }
+
+        setTheme(currentTheme);
+
+        themeSwitch.addEventListener('change', function() {
+            const newTheme = this.checked ? 'dark' : 'light';
+            localStorage.setItem('theme', newTheme);
+            setTheme(newTheme);
+            // Force charts to re-render with new default colors
+            for (let id in Chart.instances) {
+                Chart.instances[id].update();
+            }
+        });
+    })();
+    </script>
+
     {% block scripts %}{% endblock %}
 </body>
 </html>
