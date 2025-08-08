@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ get_locale() }}">
 <head>
     <meta charset="UTF-8">
-    <title>{% block title %}Trading Dashboard{% endblock %}</title>
+    <title>{% block title %}{{ _('Trading Dashboard') }}{% endblock %}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -24,24 +24,39 @@
         </button>
         <div class="collapse navbar-collapse justify-content-end" id="navMenu">
           <ul class="navbar-nav align-items-center">
-            <li class="nav-item"><a class="nav-link {% if request.endpoint=='dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">Dashboard</a></li>
-            <li class="nav-item"><a class="nav-link {% if request.endpoint=='closed_trades' %}active{% endif %}" href="{{ url_for('closed_trades') }}">Closed Trades</a></li>
-            <li class="nav-item"><a class="nav-link {% if request.endpoint=='open_analytics' %}active{% endif %}" href="{{ url_for('open_analytics') }}">Open Analytics</a></li>
-            <li class="nav-item"><a class="nav-link {% if request.endpoint=='stats' %}active{% endif %}" href="{{ url_for('stats') }}">Advanced Analytics</a></li>
+            <li class="nav-item"><a class="nav-link {% if request.endpoint=='dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}" data-bs-toggle="tooltip" data-bs-placement="bottom" title="{{ _('Main dashboard with open positions and account summary') }}">{{ _('Dashboard') }}</a></li>
+            <li class="nav-item"><a class="nav-link {% if request.endpoint=='closed_trades' %}active{% endif %}" href="{{ url_for('closed_trades') }}" data-bs-toggle="tooltip" data-bs-placement="bottom" title="{{ _('View and filter your trade history') }}">{{ _('Closed Trades') }}</a></li>
+            <li class="nav-item"><a class="nav-link {% if request.endpoint=='open_analytics' %}active{% endif %}" href="{{ url_for('open_analytics') }}" data-bs-toggle="tooltip" data-bs-placement="bottom" title="{{ _('Analyze currently open positions') }}">{{ _('Open Analytics') }}</a></li>
+            <li class="nav-item"><a class="nav-link {% if request.endpoint=='stats' %}active{% endif %}" href="{{ url_for('stats') }}" data-bs-toggle="tooltip" data-bs-placement="bottom" title="{{ _('In-depth strategy performance metrics') }}">{{ _('Advanced Analytics') }}</a></li>
             <li class="nav-item dropdown">
-              <a class="nav-link dropdown-toggle" href="#" id="debugMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-                Admin
+              <a class="nav-link dropdown-toggle" href="#" id="adminMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false" title="{{ _('Administrative tools') }}">
+                {{ _('Admin') }}
               </a>
-              <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="debugMenu">
-                <li><a class="dropdown-item" href="{{ url_for('config') }}">Configuration</a></li>
-                <li><a class="dropdown-item" href="{{ url_for('logs') }}">View Logs</a></li>
-                <li><hr class="dropdown-divider"></li>
-                <li><a class="dropdown-item text-danger" href="{{ url_for('reinit_db') }}">Re-initialize DB</a></li>
+              <ul class="dropdown-menu dropdown-menu-dark" aria-labelledby="adminMenu">
+                <li><a class="dropdown-item" href="{{ url_for('config') }}" data-bs-toggle="tooltip" data-bs-placement="left" title="{{ _('Edit the .env configuration file') }}">{{ _('Configuration') }}</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('logs') }}" data-bs-toggle="tooltip" data-bs-placement="left" title="{{ _('View application and trade logs') }}">{{ _('View Logs') }}</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('db_management') }}" data-bs-toggle="tooltip" data-bs-placement="left" title="{{ _('Backup, restore, or re-initialize the database') }}">{{ _('DB Management') }}</a></li>
               </ul>
             </li>
-            <li class="nav-item"><a class="nav-link" href="/logout"><i class="fa fa-sign-out-alt"></i></a></li>
+            <li class="nav-item"><a class="nav-link" href="/logout" data-bs-toggle="tooltip" data-bs-placement="bottom" title="{{ _('Log Out') }}"><i class="fa fa-sign-out-alt"></i></a></li>
+            
+            <li class="nav-item dropdown">
+                <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false" title="{{ _('Change Language') }}">
+                    <i class="fa-solid fa-language"></i>
+                </a>
+                <ul class="dropdown-menu dropdown-menu-dark dropdown-menu-end">
+                    {% for lang_code, lang_name in config['LANGUAGES'].items() %}
+                    <li>
+                        <a class="dropdown-item {% if get_locale() == lang_code %}active{% endif %}" href="{{ url_for('set_language', lang=lang_code) }}">
+                            {{ lang_name }}
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </li>
+
             <li class="nav-item ms-lg-2">
-                <div class="form-check form-switch">
+                <div class="form-check form-switch" data-bs-toggle="tooltip" data-bs-placement="bottom" title="{{ _('Toggle Dark/Light Mode') }}">
                     <input class="form-check-input" type="checkbox" id="themeSwitch">
                     <label class="form-check-label" for="themeSwitch"><i class="fa-solid fa-moon"></i></label>
                 </div>
@@ -74,9 +89,7 @@
     <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
     <script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
     <script src="https://cdn.datatables.net/responsive/2.5.0/js/dataTables.responsive.min.js"></script>
-    <script src="https://cdn.datatables.net/responsive/2.5.0/js/responsive.bootstrap5.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
     <script>
     // --- Theme Switcher ---
     (function() {
@@ -88,7 +101,6 @@
             document.body.classList.toggle('dark-mode', theme === 'dark');
             themeSwitch.checked = theme === 'dark';
             themeIcon.className = theme === 'dark' ? 'fa-solid fa-moon' : 'fa-solid fa-sun';
-            // For Chart.js
             if (window.Chart) {
                 Chart.defaults.color = theme === 'dark' ? '#8892b0' : '#666';
                  for (let id in Chart.instances) {
@@ -105,8 +117,15 @@
             setTheme(newTheme);
         });
     })();
+    
+    // --- Initialize Bootstrap Tooltips ---
+    document.addEventListener('DOMContentLoaded', function () {
+        const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+        const tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
+            return new bootstrap.Tooltip(tooltipTriggerEl)
+        })
+    });
     </script>
-
     {% block scripts %}{% endblock %}
 </body>
 </html>

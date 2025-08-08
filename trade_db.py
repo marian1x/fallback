@@ -45,7 +45,6 @@ def record_closed_trade(data, payload, position_obj):
     
     if not position_obj:
         logger.error(f"Cannot record closed trade for {symbol}: No pre-close position data available.")
-        # Clean up any potentially orphaned open trades in the DB
         Trade.query.filter_by(symbol=symbol, status='open').delete()
         db.session.commit()
         return None
@@ -87,15 +86,14 @@ def record_closed_trade(data, payload, position_obj):
     
     if not trade_to_update:
         logger.warning(f"A close was recorded for {symbol}, but no open trade was found in DB. Creating a new closed record.")
-        # Create a new record if none is found (e.g., for positions opened manually and never synced)
         trade_to_update = Trade(
             trade_id=f"closed_{position_obj.asset_id}_{int(time.time())}",
             symbol=symbol,
-            open_time=close_time - timedelta(minutes=5) # Approximate open time
+            open_time=close_time - timedelta(minutes=5)
         )
         db.session.add(trade_to_update)
 
-    # Clean up any other (older) open trades for the same symbol, which shouldn't exist
+    # Clean up any other (older) open trades for the same symbol
     other_open_trades = Trade.query.filter(Trade.symbol == symbol, Trade.status == 'open', Trade.id != trade_to_update.id).all()
     if other_open_trades:
         logger.warning(f"Found {len(other_open_trades)} older, orphaned open trades for {symbol}. Deleting them now.")
@@ -105,12 +103,11 @@ def record_closed_trade(data, payload, position_obj):
     pl = (close_price - avg_entry_price) * total_qty if position_side == 'long' else (avg_entry_price - close_price) * total_qty
     pl_pct = (pl / (avg_entry_price * total_qty)) * 100 if avg_entry_price > 0 and total_qty > 0 else 0
 
-    # Update the existing trade record instead of creating a new one
+    # Update the existing trade record
     trade_to_update.status = 'closed'
     trade_to_update.side = 'buy' if position_side == 'long' else 'sell'
     trade_to_update.qty = total_qty
     trade_to_update.open_price = avg_entry_price
-    # Keep the original open_time
     trade_to_update.close_price = close_price
     trade_to_update.close_time = close_time
     trade_to_update.profit_loss = pl

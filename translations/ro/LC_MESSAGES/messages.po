@@ -1,0 +1,147 @@
+# Romanian translations for messages.
+# Copyright (C) 2025
+# This file is distributed under the same license as the PROJECT project.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2025.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: PROJECT VERSION\n"
+"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
+"POT-Creation-Date: 2025-08-08 22:00+0300\n"
+"PO-Revision-Date: 2025-08-08 22:00+0300\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: ro <LL@li.org>\n"
+"Language: ro\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.12.1\n"
+
+msgid "Trading Dashboard"
+msgstr "Panou de Tranzacționare"
+
+msgid "Please log in first."
+msgstr "Vă rugăm să vă autentificați mai întâi."
+
+msgid "Logged in."
+msgstr "Autentificat cu succes."
+
+msgid "Invalid credentials."
+msgstr "Date de autentificare invalide."
+
+msgid "Logged out."
+msgstr "Deconectat cu succes."
+
+msgid "Dashboard"
+msgstr "Panou Principal"
+
+msgid "Closed Trades"
+msgstr "Tranzacții Închise"
+
+msgid "Open Analytics"
+msgstr "Analiză Poziții Deschise"
+
+msgid "Advanced Analytics"
+msgstr "Analiză Avansată"
+
+msgid "Admin"
+msgstr "Admin"
+
+msgid "Configuration"
+msgstr "Configurație"
+
+msgid "View Logs"
+msgstr "Vizualizare Jurnale"
+
+msgid "DB Management"
+msgstr "Gestiune Bază de Date"
+
+msgid "Log Out"
+msgstr "Deconectare"
+
+msgid "Change Language"
+msgstr "Schimbă Limba"
+
+msgid "Toggle Dark/Light Mode"
+msgstr "Comută Modul Întunecat/Luminos"
+
+msgid "Main dashboard with open positions and account summary"
+msgstr "Panoul principal cu poziții deschise și sumarul contului"
+
+msgid "View and filter your trade history"
+msgstr "Vizualizați și filtrați istoricul tranzacțiilor"
+
+msgid "Analyze currently open positions"
+msgstr "Analizați pozițiile deschise în prezent"
+
+msgid "In-depth strategy performance metrics"
+msgstr "Metrici detaliate despre performanța strategiei"
+
+msgid "Administrative tools"
+msgstr "Unelte administrative"
+
+msgid "Edit the .env configuration file"
+msgstr "Editați fișierul de configurare .env"
+
+msgid "View application and trade logs"
+msgstr "Vizualizați jurnalele aplicației și ale tranzacțiilor"
+
+msgid "Backup, restore, or re-initialize the database"
+msgstr "Backup, restaurare sau reinițializare a bazei de date"
+
+msgid "Account Summary"
+msgstr "Sumar Cont"
+
+msgid "Live Open P/L"
+msgstr "P/L Live Poziții Deschise"
+
+msgid "# Open Trades"
+msgstr "# Tranzacții Deschise"
+
+msgid "Equity"
+msgstr "Capital Propriu"
+
+msgid "Cash"
+msgstr "Numerar"
+
+msgid "Manual Trade"
+msgstr "Tranzacție Manuală"
+
+msgid "Symbol"
+msgstr "Simbol"
+
+msgid "Amount ($)"
+msgstr "Suma ($)"
+
+msgid "Side"
+msgstr "Parte"
+
+msgid "Buy (Long)"
+msgstr "Cumpărare (Long)"
+
+msgid "Sell (Short)"
+msgstr "Vânzare (Short)"
+
+msgid "Send"
+msgstr "Trimite"
+
+msgid "Open Positions"
+msgstr "Poziții Deschise"
+
+msgid "Qty"
+msgstr "Cant."
+
+msgid "Open Price"
+msgstr "Preț Deschidere"
+
+msgid "Current Price"
+msgstr "Preț Curent"
+
+msgid "P/L"
+msgstr "P/L"
+
+msgid "Open Time"
+msgstr "Data Deschiderii"
+
+msgid "Action"
+msgstr "Acțiune"

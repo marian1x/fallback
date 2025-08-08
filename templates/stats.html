@@ -1,70 +1,104 @@
 {% extends "base.html" %}
-{% block title %}Advanced Analytics - TradingBot{% endblock %}
+{% block title %}Strategy Analytics - TradingBot{% endblock %}
 {% block content %}
 <div class="container-fluid my-4 animate__animated animate__fadeIn">
-  <h3 class="mb-3">Advanced Analytics</h3>
-  <div class="row mb-3">
-    <div class="col-12 col-md-8">
-      <label>Filter by Close Date:</label>
-      <input type="date" id="aDateFrom" class="form-control form-control-sm d-inline" style="width:auto;">
-      <input type="date" id="aDateTo" class="form-control form-control-sm d-inline" style="width:auto;">
-      <button class="btn btn-sm btn-outline-primary" id="aClearDate">Clear</button>
+  <h3 class="mb-3">Strategy Analytics</h3>
+  
+  <div class="row mb-3 align-items-end">
+    <div class="col-md-3">
+      <label for="symbolFilter" class="form-label small">Symbol</label>
+      <select id="symbolFilter" class="form-select form-select-sm">
+        <option value="all" selected>All Symbols</option>
+      </select>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label small">Filter by Close Date</label>
+      <div>
+        <input type="date" id="aDateFrom" class="form-control form-control-sm d-inline" style="width:auto;">
+        <input type="date" id="aDateTo" class="form-control form-control-sm d-inline" style="width:auto;">
+        <button class="btn btn-sm btn-outline-secondary" id="aClearDate">Clear</button>
+      </div>
     </div>
   </div>
+
   <div class="row g-4">
-    <div class="col-lg-4">
-      <div class="card shadow-sm h-100">
-        <div class="card-header"><i class="fa-solid fa-gauge-high me-2"></i>Core Performance</div>
-        <div class="card-body">
-            <div class="d-flex justify-content-between border-bottom pb-2 mb-2"><span>Total Net P&L</span><strong id="aTotalPL">$0.00</strong></div>
-            <div class="d-flex justify-content-between border-bottom pb-2 mb-2"><span>Total Trades</span><strong id="aTotalTrades">0</strong></div>
-            <div class="d-flex justify-content-between border-bottom pb-2 mb-2"><span>Win Rate</span><strong id="aWinRate">0%</strong></div>
-            <div class="d-flex justify-content-between border-bottom pb-2 mb-2"><span>Profit Factor</span><strong id="aProfitFactor">0.00</strong></div>
-            <div class="d-flex justify-content-between border-bottom pb-2 mb-2"><span>Avg. Trade P&L</span><strong id="aAvgRet">$0.00</strong></div>
-            <div class="d-flex justify-content-between pb-2 mb-2"><span>Max Drawdown</span><strong id="aMaxDD">$0.00</strong></div>
-            <hr>
-            <div class="row">
-                <div class="col-6">
-                    <div class="text-center">
-                        <div class="small text-muted">Wins / Losses</div>
-                        <strong><span id="aWins">0</span> / <span id="aLosses">0</span></strong>
-                    </div>
-                </div>
-                 <div class="col-6">
-                    <div class="text-center">
-                        <div class="small text-muted">Avg Win / Loss</div>
-                        <strong><span id="aAvgWin">$0</span> / <span id="aAvgLoss">$0</span></strong>
-                    </div>
-                </div>
-            </div>
-        </div>
-      </div>
-    </div>
     <div class="col-lg-8">
       <div class="card shadow-sm mb-4">
-        <div class="card-header"><i class="fa-solid fa-chart-line me-2"></i>Cumulative P&L Over Time</div>
+        <div class="card-header"><i class="fa-solid fa-gauge-high me-2"></i>Key Performance Indicators</div>
         <div class="card-body">
-          <canvas id="aPLTimeChart" height="110"></canvas>
+          <div class="row text-center">
+            <div class="col-6 col-md-3 mb-3">
+              <div class="small text-muted">Total Net P&L</div>
+              <h4 id="aTotalPL" class="fw-bold mb-0">$0.00</h4>
+            </div>
+            <div class="col-6 col-md-3 mb-3">
+              <div class="small text-muted">Profit Factor</div>
+              <h4 id="aProfitFactor" class="fw-bold mb-0">0.00</h4>
+            </div>
+            <div class="col-6 col-md-3 mb-3">
+              <div class="small text-muted">Win Rate</div>
+              <h4 id="aWinRate" class="fw-bold mb-0">0%</h4>
+            </div>
+            <div class="col-6 col-md-3 mb-3">
+              <div class="small text-muted">Total Trades</div>
+              <h4 id="aTotalTrades" class="fw-bold mb-0">0</h4>
+            </div>
+             <div class="col-6 col-md-3">
+              <div class="small text-muted">Avg. Trade P&L</div>
+              <h4 id="aAvgRet" class="fw-bold mb-0">$0.00</h4>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="small text-muted">Avg. Win / Loss</div>
+              <h4 class="fw-bold mb-0"><span id="aAvgWin" class="profit">$0</span>/<span id="aAvgLoss" class="loss">$0</span></h4>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="small text-muted">Wins / Losses</div>
+              <h4 class="fw-bold mb-0"><span id="aWins">0</span> / <span id="aLosses">0</span></h4>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="small text-muted">Max Drawdown</div>
+              <h4 id="aMaxDD" class="fw-bold mb-0">$0.00</h4>
+            </div>
+          </div>
         </div>
       </div>
-       <div class="row g-4">
+      <div class="row g-4">
             <div class="col-md-6">
                 <div class="card shadow-sm">
-                    <div class="card-header"><i class="fa-solid fa-chart-pie me-2"></i>Long vs. Short P&L</div>
+                    <div class="card-header"><i class="fa-solid fa-chart-line me-2"></i>Equity Curve</div>
                     <div class="card-body">
-                        <canvas id="aLongShortChart" height="150"></canvas>
+                        <canvas id="aPLTimeChart" height="150"></canvas>
                     </div>
                 </div>
             </div>
             <div class="col-md-6">
                  <div class="card shadow-sm">
-                    <div class="card-header"><i class="fa-solid fa-calendar-days me-2"></i>Monthly P&L</div>
+                    <div class="card-header"><i class="fa-solid fa-calendar-days me-2"></i>Monthly P&L Breakdown</div>
                     <div class="card-body">
                         <canvas id="aMonthlyPLChart" height="150"></canvas>
                     </div>
                 </div>
             </div>
         </div>
+    </div>
+    
+    <div class="col-lg-4">
+      <div class="card shadow-sm h-100">
+        <div class="card-header"><i class="fa-solid fa-list-check me-2"></i>Symbol Performance</div>
+        <div class="card-body p-0">
+          <table id="symbolPerformanceTable" class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Net P&L</th>
+                <th>Win %</th>
+                <th>Trades</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -73,57 +107,46 @@
 <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
 <script>
 let allTrades = [];
-let aDateFrom = "", aDateTo = "";
 let charts = {};
+let symbolPerformanceTable;
 
-// Utility to destroy old charts before creating new ones
 function destroyChart(chartId) {
-    if (charts[chartId]) {
-        charts[chartId].destroy();
-    }
+    if (charts[chartId]) charts[chartId].destroy();
 }
 
 function computeAnalytics() {
-    // Filter trades by date range
+    const symbolFilter = $('#symbolFilter').val();
+    const dateFrom = $('#aDateFrom').val();
+    const dateTo = $('#aDateTo').val();
+
+    // 1. Filter trades based on controls
     let filteredTrades = allTrades.filter(t => {
         if (!t.close_time) return false;
+        const symbolOk = symbolFilter === 'all' || t.symbol === symbolFilter;
         const closeDate = t.close_time.slice(0, 10);
-        const fromOk = !aDateFrom || closeDate >= aDateFrom;
-        const toOk = !aDateTo || closeDate <= aDateTo;
-        return fromOk && toOk;
+        const fromOk = !dateFrom || closeDate >= dateFrom;
+        const toOk = !dateTo || closeDate <= dateTo;
+        return symbolOk && fromOk && toOk;
     }).sort((a, b) => new Date(a.close_time) - new Date(b.close_time));
 
-    // --- Core Stats Calculations ---
+    // 2. Calculate Overall KPIs
     let totalPL = 0, grossProfit = 0, grossLoss = 0;
     let wins = 0, losses = 0, tradeCount = filteredTrades.length;
-    let longPL = 0, shortPL = 0;
     let equityCurve = [0];
     let monthlyPL = {};
-
+    
     filteredTrades.forEach(t => {
         const pl = t.profit_loss || 0;
         totalPL += pl;
         equityCurve.push(totalPL);
-        
-        if (pl > 0) {
-            wins++;
-            grossProfit += pl;
-        } else if (pl < 0) {
-            losses++;
-            grossLoss += Math.abs(pl);
-        }
-
-        if (t.side.toLowerCase() === 'buy') {
-            longPL += pl;
-        } else {
-            shortPL += pl;
-        }
+        if (pl > 0) { wins++; grossProfit += pl; } 
+        else if (pl < 0) { losses++; grossLoss += Math.abs(pl); }
 
         const month = luxon.DateTime.fromISO(t.close_time).toFormat('yyyy-MM');
         monthlyPL[month] = (monthlyPL[month] || 0) + pl;
     });
 
-    // Max Drawdown
+    // Max Drawdown Calculation
     let peak = 0, maxDD = 0;
     equityCurve.forEach(equity => {
         if (equity > peak) peak = equity;
@@ -137,87 +160,108 @@ function computeAnalytics() {
     const avgWin = wins > 0 ? (grossProfit / wins) : 0;
     const avgLoss = losses > 0 ? (grossLoss / losses) : 0;
 
-    // --- Update DOM ---
-    $("#aTotalPL").text(`$${totalPL.toFixed(2)}`).toggleClass('profit', totalPL > 0).toggleClass('loss', totalPL < 0);
-    $("#aTotalTrades").text(tradeCount);
-    $("#aWinRate").text(`${winRate.toFixed(1)}%`);
-    $("#aProfitFactor").text(profitFactor.toFixed(2));
-    $("#aAvgRet").text(`$${avgReturn.toFixed(2)}`);
-    $("#aMaxDD").text(`$${maxDD.toFixed(2)}`);
-    $("#aWins").text(wins);
-    $("#aLosses").text(losses);
-    $("#aAvgWin").text(`$${avgWin.toFixed(2)}`).addClass('profit');
-    $("#aAvgLoss").text(`$${avgLoss.toFixed(2)}`).addClass('loss');
+    // 3. Update DOM for KPIs
+    $('#aTotalPL').text(`$${totalPL.toFixed(2)}`).toggleClass('profit', totalPL > 0).toggleClass('loss', totalPL < 0);
+    $('#aTotalTrades').text(tradeCount);
+    $('#aWinRate').text(`${winRate.toFixed(1)}%`);
+    $('#aProfitFactor').text(profitFactor.toFixed(2));
+    $('#aAvgRet').text(`$${avgReturn.toFixed(2)}`);
+    $('#aMaxDD').text(`$${maxDD.toFixed(2)}`);
+    $('#aWins').text(wins);
+    $('#aLosses').text(losses);
+    $('#aAvgWin').text(`$${avgWin.toFixed(2)}`);
+    $('#aAvgLoss').text(`$${avgLoss.toFixed(2)}`);
 
-    // --- Render Charts ---
-    // P&L Over Time Chart
+    // 4. Calculate Symbol-Specific Performance (only if 'all' is selected)
+    if (symbolFilter === 'all') {
+        const symbolStats = {};
+        // Use the date-filtered trades for this calculation as well
+        filteredTrades.forEach(t => {
+            const sym = t.symbol;
+            if (!symbolStats[sym]) {
+                symbolStats[sym] = { netPL: 0, wins: 0, count: 0 };
+            }
+            symbolStats[sym].netPL += t.profit_loss || 0;
+            symbolStats[sym].count++;
+            if ((t.profit_loss || 0) > 0) symbolStats[sym].wins++;
+        });
+
+        symbolPerformanceTable.clear();
+        Object.keys(symbolStats).forEach(sym => {
+            const stats = symbolStats[sym];
+            const winPct = stats.count > 0 ? (100 * stats.wins / stats.count) : 0;
+            symbolPerformanceTable.row.add([
+                sym.replace('USD', '/USD'),
+                `<span class="${stats.netPL > 0 ? 'profit' : 'loss'}">${stats.netPL.toFixed(2)}</span>`,
+                `${winPct.toFixed(1)}%`,
+                stats.count
+            ]);
+        });
+        symbolPerformanceTable.draw();
+    } else {
+        // If a specific symbol is selected, the table is not needed.
+        symbolPerformanceTable.clear().draw();
+    }
+
+    // 5. Render Charts
     destroyChart('aPLTimeChart');
     charts['aPLTimeChart'] = new Chart(document.getElementById('aPLTimeChart'), {
         type: 'line',
         data: {
             labels: Array.from({length: equityCurve.length}, (_, i) => i),
             datasets: [{
-                label: "Cumulative P&L",
-                data: equityCurve,
-                borderColor: 'rgba(100, 255, 218, 0.8)',
-                backgroundColor: 'rgba(100, 255, 218, 0.1)',
-                tension: 0.1,
-                fill: true
+                data: equityCurve, borderColor: '#64ffda', backgroundColor: 'rgba(100, 255, 218, 0.1)',
+                tension: 0.1, fill: true, pointRadius: 0
             }]
         },
         options: { plugins: { legend: { display: false } }, scales: { x: { display: false } } }
     });
-
-    // Long vs. Short Chart
-    destroyChart('aLongShortChart');
-    charts['aLongShortChart'] = new Chart(document.getElementById('aLongShortChart'), {
-        type: 'doughnut',
-        data: {
-            labels: ['Long Trades', 'Short Trades'],
-            datasets: [{
-                data: [longPL, shortPL],
-                backgroundColor: ['#28a745', '#dc3545']
-            }]
-        },
-        options: { responsive: true, plugins: { legend: { position: 'top' } } }
-    });
-
-    // Monthly P&L Chart
+    
     destroyChart('aMonthlyPLChart');
     const sortedMonths = Object.keys(monthlyPL).sort();
     charts['aMonthlyPLChart'] = new Chart(document.getElementById('aMonthlyPLChart'), {
         type: 'bar',
         data: {
-            labels: sortedMonths,
+            labels: sortedMonths.map(m => luxon.DateTime.fromISO(m).toFormat('MMM yyyy')),
             datasets: [{
-                label: 'Monthly P&L',
                 data: sortedMonths.map(m => monthlyPL[m]),
-                backgroundColor: sortedMonths.map(m => monthlyPL[m] > 0 ? '#64ffda' : '#ff8b8b')
+                backgroundColor: sortedMonths.map(m => monthlyPL[m] >= 0 ? 'rgba(100, 255, 218, 0.6)' : 'rgba(255, 139, 139, 0.6)')
             }]
         },
         options: { responsive: true, plugins: { legend: { display: false } } }
     });
 }
 
-function fetchAnalyticsData(){
-    $.get('/api/closed_orders', function(data){
-        allTrades = data;
+function initialSetup(){
+    symbolPerformanceTable = $('#symbolPerformanceTable').DataTable({
+        paging: false, searching: false, info: false, order: [[1, 'desc']]
+    });
+
+    const tradesPromise = $.get('/api/closed_orders');
+
+    tradesPromise.then(function(tradesData) {
+        allTrades = tradesData;
+        
+        // Populate symbol filter from actual trade history
+        const symbolFilter = $('#symbolFilter');
+        const uniqueSymbols = [...new Set(allTrades.map(t => t.symbol))].sort();
+        
+        uniqueSymbols.forEach(function(symbol) {
+            symbolFilter.append(`<option value="${symbol}">${symbol.replace('USD','/USD')}</option>`);
+        });
+
+        computeAnalytics(); // Initial computation
+    }).fail(function() {
+        console.error("Failed to fetch initial trade data.");
+    });
+
+    $('#symbolFilter, #aDateFrom, #aDateTo').on('change', computeAnalytics);
+    $('#aClearDate').on('click', function(){
+        $('#aDateFrom, #aDateTo').val('');
         computeAnalytics();
     });
 }
 
-$(document).ready(function(){
-    fetchAnalyticsData();
-    $('#aDateFrom, #aDateTo').on('change', function(){
-        aDateFrom = $('#aDateFrom').val();
-        aDateTo = $('#aDateTo').val();
-        computeAnalytics();
-    });
-    $('#aClearDate').on('click', function(){
-        $('#aDateFrom, #aDateTo').val('');
-        aDateFrom = aDateTo = "";
-        computeAnalytics();
-    });
-});
+$(document).ready(initialSetup);
 </script>
 {% endblock %}

@@ -84,7 +84,7 @@
 {% block scripts %}
 <script>
     function colorPL(val, isBadge = false) {
-        const sign = val > 0 ? '+' : '';
+        const sign = val > 0 ? '+' : (val < 0 ? '-' : '');
         const absVal = Math.abs(val).toFixed(2);
 
         if (isBadge) {
@@ -108,13 +108,13 @@
             data.forEach(r => {
                 totalPL += r.unrealized_pl || 0;
                 t.row.add([
-                    r.symbol.replace('USD', '/USD'), // Display with slash
+                    r.symbol.replace('USD', '/USD'),
                     r.side ? r.side.toUpperCase() : '-',
                     r.qty.toFixed(4),
                     (r.open_price || 0).toFixed(4),
                     (r.current_price || 0).toFixed(4),
                     colorPL(r.unrealized_pl || 0),
-                    r.open_time || '-',
+                    r.open_time_str || '-', // Corrected to use open_time_str
                     `<button class="btn btn-outline-danger btn-sm close-btn" data-symbol="${r.symbol}">
                         <i class="fa fa-times"></i>
                     </button>`
@@ -133,11 +133,13 @@
         });
     }
     
+    let tradableSymbols = [];
     function populateSymbolsDatalist() {
         $.get('/api/assets', function(data){
+            tradableSymbols = data;
             const datalist = $('#symbols-datalist');
-            datalist.empty(); // Clear existing options
-            data.forEach(function(symbol) {
+            datalist.empty();
+            tradableSymbols.forEach(function(symbol) {
                 datalist.append(`<option value="${symbol}">`);
             });
         }).fail(function() {
@@ -145,11 +147,22 @@
         });
     }
 
+    function validateSymbolInput() {
+        const symbolInput = $('#symbolInput');
+        const currentSymbol = symbolInput.val().toUpperCase();
+        if (tradableSymbols.includes(currentSymbol)) {
+            symbolInput.removeClass('is-invalid');
+        } else {
+            symbolInput.addClass('is-invalid');
+        }
+    }
+
     $(document).ready(function(){
         const MIN_CRYPTO_AMOUNT = 10.0;
 
-        // Populate the symbols list on page load
         populateSymbolsDatalist();
+
+        $('#symbolInput').on('input', validateSymbolInput);
 
         $('#openTable').DataTable({
             paging: false, 
@@ -162,9 +175,9 @@
                 }
             },
             columnDefs: [
-                { responsivePriority: 1, targets: 0 }, // Symbol
-                { responsivePriority: 3, targets: 5 }, // P/L
-                { responsivePriority: 2, targets: 7 }  // Action
+                { responsivePriority: 1, targets: 0 },
+                { responsivePriority: 3, targets: 5 },
+                { responsivePriority: 2, targets: 7 }
             ],
             order: [[0, 'asc']]
         });
@@ -222,7 +235,11 @@
                 return;
             }
 
-            // Crypto minimum amount check
+            if (!tradableSymbols.includes(sym)) {
+                Swal.fire({ title: "Invalid Symbol", text: `The symbol "${sym}" is not tradable or does not exist.`, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
+                return;
+            }
+
             const isCrypto = sym.includes('USD') || sym.includes('/');
             if (isCrypto && amount < MIN_CRYPTO_AMOUNT) {
                 Swal.fire({
@@ -257,6 +274,11 @@
     });
 </script>
 <style>
+/* Style for invalid symbol input */
+.form-control.is-invalid {
+    color: var(--loss-color-text);
+    border-color: var(--loss-color-text);
+}
 /* SweetAlert2 Dark Theme */
 .swal2-popup.swal2-dark {
     background: var(--card-bg) !important;

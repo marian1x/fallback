@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Backup & Restore - TradingBot{% endblock %}
+{% block content %}
+<div class="container my-4 animate__animated animate__fadeIn">
+    <div class="row justify-content-center">
+        <div class="col-12 col-md-8 col-lg-6">
+            <div class="card shadow-sm mb-4">
+                <div class="card-header">
+                    <i class="fa-solid fa-download me-2"></i>Backup Database
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">Download a complete backup of your trade history database (`app.db`). Keep this file in a safe place.</p>
+                    <a href="{{ url_for('backup_db') }}" class="btn btn-primary w-100"><i class="fa-solid fa-database me-2"></i>Download Backup</a>
+                </div>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-header text-warning">
+                    <i class="fa-solid fa-upload me-2"></i>Restore Database
+                </div>
+                <div class="card-body">
+                    <p class="text-warning"><strong>Warning:</strong> Restoring will overwrite your current database. This action cannot be undone. It is highly recommended to take a backup first.</p>
+                    <form action="{{ url_for('backup_restore') }}" method="post" enctype="multipart/form-data">
+                        <div class="mb-3">
+                            <label for="restoreFile" class="form-label">Select `.db` backup file</label>
+                            <input class="form-control" type="file" id="restoreFile" name="restore_file" accept=".db" required>
+                        </div>
+                        <button type="submit" class="btn btn-warning w-100"><i class="fa-solid fa-triangle-exclamation me-2"></i>Restore Now</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

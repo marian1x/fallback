@@ -22,9 +22,9 @@ body {
     --navbar-border: #dee2e6;
     --accent-color: #007bff;
     --profit-color-text: #20c997;
-    --loss-color-text: #fd7e14;
+    --loss-color-text: #e55353; /* Brighter Red */
     --profit-bg-color: #20c997;
-    --loss-bg-color: #fd7e14;
+    --loss-bg-color: #e55353;
     --badge-profit-text: #ffffff;
     --badge-loss-text: #ffffff;
     --link-color: #007bff;
@@ -60,6 +60,9 @@ body {
     background-color: var(--bg-color);
     color: var(--text-color);
 }
+h1, h2, h3, h4, h5, h6 {
+    color: var(--text-color);
+}
 .navbar { background-color: var(--navbar-bg); border-bottom: 1px solid var(--navbar-border); backdrop-filter: blur(10px); }
 .navbar-brand { color: var(--accent-color) !important; font-weight: 600; }
 .nav-link { color: var(--text-color) !important; }
@@ -67,16 +70,36 @@ body {
 .card { background-color: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; }
 .list-group-item { background-color: var(--card-bg); border-color: var(--card-border); color: var(--text-color); }
 .list-group-item > span:first-child { color: var(--text-color); }
-.table { --bs-table-bg: transparent; --bs-table-border-color: var(--card-border); --bs-table-striped-bg: var(--table-striped-bg); --bs-table-hover-bg: var(--table-hover-bg); color: var(--text-color); }
-.card-header { background-color: transparent; border-bottom: 1px solid var(--card-border); font-weight: 600; color: var(--text-color); }
+.table, .table th, .table td {
+    color: var(--text-color);
+}
+.table {
+    --bs-table-bg: transparent;
+    --bs-table-border-color: var(--card-border);
+    --bs-table-striped-bg: var(--table-striped-bg);
+    --bs-table-hover-bg: var(--table-hover-bg);
+}
+.card-header, .card-body div, .card-body p {
+    color: var(--text-color) !important;
+}
+.text-muted, .small.text-muted {
+    color: var(--text-color-muted) !important;
+}
 .form-control, .form-select { background-color: var(--card-bg); color: var(--text-color); border-color: var(--card-border); }
 .form-control::placeholder { color: var(--text-color-muted); }
 .form-control:focus, .form-select:focus { background-color: var(--card-bg); color: var(--text-color); border-color: var(--accent-color); box-shadow: 0 0 0 0.2rem rgba(100, 255, 218, 0.25); }
 .dropdown-menu { background-color: var(--card-bg); border-color: var(--card-border); }
 .dropdown-item { color: var(--text-color); }
-.dropdown-item:hover { background-color: var(--table-hover-bg); }
 a { color: var(--link-color); text-decoration: none; }
 a:hover { color: var(--link-hover-color); }
+
+/* --- Hamburger Menu Icon Fix --- */
+body.dark-mode .navbar-toggler {
+    border-color: var(--card-border);
+}
+body.dark-mode .navbar-toggler-icon {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba%28204, 214, 246, 0.75%29' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
 
 /* --- Badges & P/L Colors --- */
 .profit { color: var(--profit-color-text); font-weight: 600; }
