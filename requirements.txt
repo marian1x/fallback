@@ -1,3 +1,5 @@
 Flask
 Flask-SQLAlchemy
 alpaca-trade-api
+Flask-Babel
+python-dotenv
