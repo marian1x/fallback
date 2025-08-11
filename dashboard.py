@@ -86,6 +86,7 @@ def inject_locale():
     return dict(get_locale=get_locale)
 
 # --- Logging Setup ---
+# Main dashboard logger
 logging.basicConfig(
     filename='dashboard.log',
     filemode='a',
@@ -93,6 +94,14 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s: %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Dedicated logger for logins
+login_logger = logging.getLogger('login_logger')
+login_logger.setLevel(logging.INFO)
+login_handler = logging.FileHandler('login.log')
+login_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+login_logger.addHandler(login_handler)
+
 
 # --- Database and API Initialization ---
 db.init_app(app)
@@ -151,9 +160,23 @@ def login():
         user = User.query.filter_by(username=u).first()
         if user and check_password_hash(user.password_hash, p):
             session['user_id'] = user.id
+            
+            # Log the login event to login.log
+            try:
+                ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
+                user_agent = request.user_agent.string
+                login_logger.info(f"SUCCESSFUL LOGIN - User: '{user.username}', IP: {ip_address}, User-Agent: '{user_agent}'")
+            except Exception as e:
+                logger.error(f"Failed to write to login.log: {e}")
+
             flash(gettext("Logged in."), "success")
             return redirect(request.args.get('next') or url_for('dashboard'))
+        
+        # Log failed login attempt
+        ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
+        login_logger.warning(f"FAILED LOGIN ATTEMPT - User: '{u}', IP: {ip_address}")
         flash(gettext("Invalid credentials."), "danger")
+        
     return render_template('login.html')
 
 @app.route('/logout')
@@ -252,10 +275,9 @@ def api_open_positions():
                 open_time_utc = datetime.now(utc)
 
         current_price = float(p.current_price or 0)
-        # If current_price is 0 (market closed), get the latest quote as a fallback
         if current_price == 0:
             try:
-                if getattr(p, 'asset_class') == 'crypto':
+                if getattr(p, 'class') == 'crypto':
                     latest = api.get_latest_crypto_trade(p.symbol, "CBSE")
                     current_price = float(latest.p)
                 else:
@@ -263,7 +285,7 @@ def api_open_positions():
                     current_price = (float(latest.ap) + float(latest.bp)) / 2
             except Exception as e:
                 logger.warning(f"Could not get fallback latest price for {p.symbol}: {e}")
-                current_price = 0 # Keep it 0 if fallback fails
+                current_price = 0
 
         open_time_str = "-"
         open_time_iso = None
@@ -446,7 +468,7 @@ def config():
 @app.route('/logs')
 @login_required
 def logs():
-    logfiles = ['dashboard.log', 'trades.log']
+    logfiles = ['dashboard.log', 'trades.log', 'login.log']
     logs_content = {}
     for name in logfiles:
         try:

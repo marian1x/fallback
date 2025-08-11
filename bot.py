@@ -26,7 +26,7 @@ logger = logging.getLogger()
 app = Flask(__name__)
 api = tradeapi.REST(API_KEY, API_SECRET, BASE_URL, api_version='v2')
 
-# Action keywords that mean "close this position"
+# Action keywords that mean "close this position" - EXPANDED LIST
 CLOSE_ACTIONS = [
     "trailing exit long", "trailing exit short",
     "fixed stop loss (long)", "fixed stop loss (short)",
@@ -62,6 +62,7 @@ def webhook():
 
     symbol = payload.get("symbol")
     action = payload.get("action", "")
+    user = payload.get("user", "Unknown")
     amount = float(payload.get("amount", TRADE_NOTIONAL))
 
     if not symbol or not action:
@@ -83,31 +84,32 @@ def webhook():
             logger.info(f"[CLOSE] Submitted close order {close_order.id} for {api_symbol}")
             
             # --- Notify Dashboard to Record the Close ---
-            try:
-                notification_payload = {
-                    "result": "closed",
-                    "symbol": symbol,
-                    "close_order_id": close_order.id,
-                    "payload": payload,
-                    "position_obj": {
-                        'avg_entry_price': position_to_close.avg_entry_price,
-                        'qty': position_to_close.qty,
-                        'side': position_to_close.side,
-                        'asset_id': position_to_close.asset_id
+            if user != "Dashboard":
+                try:
+                    notification_payload = {
+                        "result": "closed",
+                        "symbol": symbol,
+                        "close_order_id": close_order.id,
+                        "payload": payload,
+                        "position_obj": {
+                            'avg_entry_price': position_to_close.avg_entry_price,
+                            'qty': position_to_close.qty,
+                            'side': position_to_close.side,
+                            'asset_id': position_to_close.asset_id
+                        }
                     }
-                }
-                headers = {'X-Internal-API-Key': INTERNAL_API_KEY}
-                requests.post(
-                    f"{DASHBOARD_INTERNAL_URL}/api/internal/record_close",
-                    json=notification_payload,
-                    headers=headers,
-                    timeout=3 
-                )
-                logger.info(f"Sent close notification to dashboard for order {close_order.id}")
-            except requests.exceptions.ReadTimeout:
-                logger.info("Dashboard accepted the close notification (timeout is expected).")
-            except Exception as e:
-                logger.error(f"Failed to send close notification to dashboard: {e}")
+                    headers = {'X-Internal-API-Key': INTERNAL_API_KEY}
+                    requests.post(
+                        f"{DASHBOARD_INTERNAL_URL}/api/internal/record_close",
+                        json=notification_payload,
+                        headers=headers,
+                        timeout=3 
+                    )
+                    logger.info(f"Sent close notification to dashboard for order {close_order.id}")
+                except requests.exceptions.ReadTimeout:
+                    logger.info("Dashboard accepted the close notification (timeout is expected).")
+                except Exception as e:
+                    logger.error(f"Failed to send close notification to dashboard: {e}")
             # --- End Notification ---
 
             return jsonify({"result": "closed", "symbol": symbol, "close_order_id": close_order.id}), 200
@@ -136,7 +138,7 @@ def webhook():
             else: # Stocks
                 if action.lower() == 'buy':
                     order_params = {'symbol': api_symbol, 'side': 'buy', 'type': 'market', 'notional': amount, 'time_in_force': 'day'}
-                else: # Sell (Short)
+                else: # Sell (Short) - MUST use qty for shorting stocks
                     qty = math.floor(amount / last_price)
                     if qty == 0:
                         return jsonify({"error": f"Amount ${amount} is too small to short 1 share of {api_symbol} at ${last_price}."}), 400

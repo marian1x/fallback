@@ -82,53 +82,146 @@
         </div>
     </div>
 </div>
+
+<div class="modal fade" id="tpSlModal" tabindex="-1" aria-labelledby="tpSlModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="tpSlModalLabel">{{ _('Set Take Profit / Stop Loss for') }} <span id="tpSlSymbol"></span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="tpSlSide">
+        <input type="hidden" id="tpSlQty">
+        <input type="hidden" id="tpSlOpenPrice">
+        <div class="row">
+            <div class="col-6 mb-3">
+                <label for="tpPrice" class="form-label">{{ _('Take Profit Price') }}</label>
+                <input type="number" class="form-control" id="tpPrice" step="any" placeholder="{{ _('e.g., 150.25') }}">
+            </div>
+            <div class="col-6 mb-3">
+                <label for="tpPl" class="form-label">{{ _('Take Profit P/L ($)') }}</label>
+                <input type="number" class="form-control" id="tpPl" step="any" placeholder="{{ _('e.g., 20') }}">
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-6">
+                <label for="slPrice" class="form-label">{{ _('Stop Loss Price') }}</label>
+                <input type="number" class="form-control" id="slPrice" step="any" placeholder="{{ _('e.g., 140.50') }}">
+            </div>
+            <div class="col-6">
+                <label for="slPl" class="form-label">{{ _('Stop Loss P/L ($)') }}</label>
+                <input type="number" class="form-control" id="slPl" step="any" placeholder="{{ _('e.g., -10') }}">
+            </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-danger me-auto" id="clearTpSlBtn">{{ _('Clear & Deactivate') }}</button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ _('Cancel') }}</button>
+        <button type="button" class="btn btn-primary" id="saveTpSlBtn">{{ _('Save & Activate') }}</button>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>
-    function colorPL(val, isBadge = false) {
+    let openTable; // Define table instance in a broader scope
+
+    function colorPL(val, isBadge = false, tp = null, sl = null) {
         const sign = val > 0 ? '+' : (val < 0 ? '-' : '');
         const absVal = Math.abs(val).toFixed(2);
+        let className = 'text-muted';
+        if (val > 0.001) className = 'profit';
+        if (val < -0.001) className = 'loss';
 
+        let baseHtml;
         if (isBadge) {
             let badgeClass = 'bg-neutral';
             if (val > 0.001) badgeClass = 'bg-profit';
             if (val < -0.001) badgeClass = 'bg-loss';
-            return `<span class="badge ${badgeClass}">${sign}$${absVal}</span>`;
+            baseHtml = `<span class="badge ${badgeClass}">${sign}$${absVal}</span>`;
+        } else {
+            baseHtml = `<span class="${className}">${sign}$${absVal}</span>`;
         }
-        
-        let className = '';
-        if (val > 0.001) className = 'profit';
-        if (val < -0.001) className = 'loss';
-        return `<span class="${className}">${sign}$${absVal}</span>`;
+
+        let tpSlHtml = '';
+        if (tp || sl) {
+            tpSlHtml += '<div class="small text-muted" style="line-height: 1;">';
+            if (tp) tpSlHtml += `<span class="profit">TP: ${tp.toFixed(2)}</span> `;
+            if (sl) tpSlHtml += `<span class="loss">SL: ${sl.toFixed(2)}</span>`;
+            tpSlHtml += '</div>';
+        }
+        return `<div>${baseHtml}${tpSlHtml}</div>`;
     }
 
+    // --- Core Data Fetching and Table Population ---
     function fetchOpenPositions() {
+        const bracketOrders = JSON.parse(localStorage.getItem('bracketOrders')) || {};
+        
         $.get('/api/open_positions', function(data){
-            let t = $('#openTable').DataTable();
-            t.clear();
+            openTable.clear(); // Use the global instance and clear it
             let totalPL = 0;
+            const symbolsWithActiveBrackets = Object.keys(bracketOrders);
+
             data.forEach(r => {
                 totalPL += r.unrealized_pl || 0;
                 let side_text = r.side ? r.side.toUpperCase() : '-';
                 if (side_text === 'BUY') { side_text = `{{ _('BUY') }}` }
                 if (side_text === 'SELL') { side_text = `{{ _('SELL') }}` }
 
-                t.row.add([
+                // Check if a TP/SL should trigger a close
+                const bracket = bracketOrders[r.symbol];
+                if (bracket) {
+                    const pl = r.unrealized_pl;
+                    const price = r.current_price;
+                    let triggerReason = null;
+                    
+                    if (bracket.tp && (r.side === 'buy' ? price >= bracket.tp : price <= bracket.tp)) {
+                        triggerReason = `Take Profit hit at price ${bracket.tp}`;
+                    } else if (bracket.sl && (r.side === 'buy' ? price <= bracket.sl : price >= bracket.sl)) {
+                        triggerReason = `Stop Loss hit at price ${bracket.sl}`;
+                    }
+                    
+                    if(triggerReason) {
+                        console.log(`Triggering close for ${r.symbol}: ${triggerReason}`);
+                        closePosition(r.symbol, triggerReason, true); // Auto-close without confirmation
+                        delete bracketOrders[r.symbol];
+                        localStorage.setItem('bracketOrders', JSON.stringify(bracketOrders));
+                    }
+                }
+
+                openTable.row.add([
                     r.symbol.replace('USD', '/USD'),
                     side_text,
                     r.qty.toFixed(4),
                     (r.open_price || 0).toFixed(4),
                     (r.current_price || 0).toFixed(4),
-                    colorPL(r.unrealized_pl || 0),
+                    colorPL(r.unrealized_pl || 0, false, bracket?.tp, bracket?.sl),
                     r.open_time_str || '-',
-                    `<button class="btn btn-outline-danger btn-sm close-btn" data-symbol="${r.symbol}">
-                        <i class="fa fa-times"></i>
-                    </button>`
+                    `<div class="btn-group" role="group">
+                        <button class="btn btn-sm btn-outline-info tpsl-btn" data-symbol="${r.symbol}" data-side="${r.side}" data-qty="${r.qty}" data-open-price="${r.open_price}" data-bs-toggle="tooltip" title="{{_('Set Take Profit / Stop Loss')}}">
+                            <i class="fa-solid fa-crosshairs"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger close-btn" data-symbol="${r.symbol}" data-bs-toggle="tooltip" title="{{_('Close Position Immediately')}}">
+                            <i class="fa fa-times"></i>
+                        </button>
+                    </div>`
                 ]);
             });
-            t.draw();
+
+            const openSymbols = data.map(p => p.symbol);
+            symbolsWithActiveBrackets.forEach(symbol => {
+                if (!openSymbols.includes(symbol)) {
+                    delete bracketOrders[symbol];
+                }
+            });
+            localStorage.setItem('bracketOrders', JSON.stringify(bracketOrders));
+            
+            openTable.draw(false); // Redraw the table without resetting the page
             $("#statPL").html(colorPL(totalPL, true));
             $("#statOpenCount").text(data.length);
+            $('[data-bs-toggle="tooltip"]').tooltip('dispose').tooltip();
         });
     }
 
@@ -163,72 +256,178 @@
         }
     }
 
+    function closePosition(symbol, reason = null, autoConfirm = false) {
+        const swalConfig = {
+            title: `{{ _('Close') }} ${symbol}?`,
+            text: reason,
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonColor: '#d33',
+            confirmButtonText: `{{ _('Yes, close it!') }}`,
+            cancelButtonText: `{{ _('Cancel') }}`,
+            customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
+        };
+
+        const executeClose = () => {
+            $.ajax({
+                url: '/api/proxy_trade',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({symbol: symbol, action: "close", user: "Dashboard"}),
+                success: function(){ 
+                    Swal.fire({
+                        title: `{{ _('Success!') }}`, text: `{{ _('Close order for %(symbol)s sent.', symbol=symbol) }}`, icon: 'success',
+                        timer: 1500, showConfirmButton: false,
+                        customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
+                    });
+                    setTimeout(fetchOpenPositions, 1500); 
+                },
+                error: function(xhr){ 
+                    let msg = `{{ _('An unknown error occurred.') }}`;
+                    try { msg = JSON.parse(xhr.responseText).detail || xhr.responseText; } catch(e) { msg = xhr.responseText; }
+                     Swal.fire({ title: `{{ _('Close Failed') }}`, text: msg, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
+                }
+            });
+        };
+
+        if (autoConfirm) {
+            executeClose();
+        } else {
+            Swal.fire(swalConfig).then((result) => {
+                if(result.isConfirmed) {
+                    executeClose();
+                }
+            });
+        }
+    }
+
+    // --- Main Document Ready ---
     $(document).ready(function(){
         const MIN_CRYPTO_AMOUNT = 10.0;
+        const tpSlModal = new bootstrap.Modal(document.getElementById('tpSlModal'));
 
-        populateSymbolsDatalist();
-
-        $('#symbolInput').on('input', validateSymbolInput);
-
-        $('#openTable').DataTable({
+        openTable = $('#openTable').DataTable({
             paging: false, 
             searching: false, 
             info: false, 
-            responsive: {
-                details: {
-                    type: 'column',
-                    target: 'tr'
-                }
-            },
-            columnDefs: [
-                { responsivePriority: 1, targets: 0 },
-                { responsivePriority: 3, targets: 5 },
-                { responsivePriority: 2, targets: 7 }
-            ],
-            order: [[0, 'asc']]
+            responsive: true,
+            order: [[0, 'asc']],
+            columnDefs: [ { responsivePriority: 1, targets: 0 }, { responsivePriority: 3, targets: 5 }, { responsivePriority: 2, targets: 7 } ]
         });
+        
+        populateSymbolsDatalist();
+        $('#symbolInput').on('input', validateSymbolInput);
 
         fetchOpenPositions();
         fetchAccountSummary();
-        setInterval(fetchOpenPositions, 8000);
+        setInterval(fetchOpenPositions, 5000);
         setInterval(fetchAccountSummary, 20000);
 
+        // --- Event Handlers ---
+        $('#openTable tbody').on('click', '.tpsl-btn', function() {
+            const button = $(this);
+            // Hide the tooltip manually
+            const tooltip = bootstrap.Tooltip.getInstance(this);
+            if (tooltip) {
+                tooltip.hide();
+            }
+            
+            $('#tpSlSymbol').text(button.data('symbol'));
+            $('#tpSlSide').val(button.data('side'));
+            $('#tpSlQty').val(button.data('qty'));
+            $('#tpSlOpenPrice').val(button.data('open-price'));
+            
+            const bracketOrders = JSON.parse(localStorage.getItem('bracketOrders')) || {};
+            const bracket = bracketOrders[button.data('symbol')];
+            $('#tpPrice').val(bracket?.tp || '');
+            $('#slPrice').val(bracket?.sl || '');
+            $('#tpPl').val('');
+            $('#slPl').val('');
+            
+            tpSlModal.show();
+        });
+        
+        function calculateTpSlFromPrice() {
+            const side = $('#tpSlSide').val();
+            const qty = parseFloat($('#tpSlQty').val());
+            const openPrice = parseFloat($('#tpSlOpenPrice').val());
+            
+            const tpPrice = parseFloat($('#tpPrice').val());
+            if (tpPrice && qty > 0) {
+                const tpPl = (side === 'buy') ? (tpPrice - openPrice) * qty : (openPrice - tpPrice) * qty;
+                $('#tpPl').val(tpPl.toFixed(2));
+            } else {
+                 $('#tpPl').val('');
+            }
+            
+            const slPrice = parseFloat($('#slPrice').val());
+            if (slPrice && qty > 0) {
+                const slPl = (side === 'buy') ? (slPrice - openPrice) * qty : (openPrice - slPrice) * qty;
+                $('#slPl').val(slPl.toFixed(2));
+            } else {
+                 $('#slPl').val('');
+            }
+        }
+
+        function calculatePriceFromPl() {
+            const side = $('#tpSlSide').val();
+            const qty = parseFloat($('#tpSlQty').val());
+            const openPrice = parseFloat($('#tpSlOpenPrice').val());
+            
+            const tpPl = parseFloat($('#tpPl').val());
+            if (tpPl && qty > 0) {
+                const priceChange = tpPl / qty;
+                const tpPrice = (side === 'buy') ? openPrice + priceChange : openPrice - priceChange;
+                $('#tpPrice').val(tpPrice.toFixed(4));
+            } else {
+                 $('#tpPrice').val('');
+            }
+
+            const slPl = parseFloat($('#slPl').val());
+            if (slPl && qty > 0) {
+                const priceChange = slPl / qty;
+                const slPrice = (side === 'buy') ? openPrice + priceChange : openPrice - priceChange;
+                $('#slPrice').val(slPrice.toFixed(4));
+            } else {
+                 $('#slPrice').val('');
+            }
+        }
+
+        $('#tpPrice, #slPrice').on('input', calculateTpSlFromPrice);
+        $('#tpPl, #slPl').on('input', calculatePriceFromPl);
+
+        $('#saveTpSlBtn').on('click', function() {
+            const symbol = $('#tpSlSymbol').text();
+            const tp = parseFloat($('#tpPrice').val());
+            const sl = parseFloat($('#slPrice').val());
+            
+            const bracketOrders = JSON.parse(localStorage.getItem('bracketOrders')) || {};
+            if (!tp && !sl) {
+                delete bracketOrders[symbol];
+            } else {
+                bracketOrders[symbol] = {
+                    tp: isNaN(tp) ? null : tp,
+                    sl: isNaN(sl) ? null : sl
+                };
+            }
+            localStorage.setItem('bracketOrders', JSON.stringify(bracketOrders));
+            tpSlModal.hide();
+            fetchOpenPositions();
+        });
+
+        $('#clearTpSlBtn').on('click', function() {
+            const symbol = $('#tpSlSymbol').text();
+            const bracketOrders = JSON.parse(localStorage.getItem('bracketOrders')) || {};
+            delete bracketOrders[symbol];
+            localStorage.setItem('bracketOrders', JSON.stringify(bracketOrders));
+            tpSlModal.hide();
+            fetchOpenPositions();
+        });
+        
         $('#openTable tbody').on('click', '.close-btn', function(e){
             e.stopPropagation();
             let symbol = $(this).data('symbol');
-            Swal.fire({
-                title: `{{ _('Close') }} ${symbol}?`,
-                icon: 'warning',
-                showCancelButton: true,
-                confirmButtonColor: '#d33',
-                confirmButtonText: `{{ _('Yes, close it!') }}`,
-                cancelButtonText: `{{ _('Cancel') }}`,
-                customClass: {
-                    popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : ''
-                }
-            }).then((result) => {
-                if(result.isConfirmed) {
-                    $.ajax({
-                        url: '/api/proxy_trade',
-                        method: 'POST',
-                        contentType: 'application/json',
-                        data: JSON.stringify({symbol: symbol, action: "close", user: "Dashboard"}),
-                        success: function(){ 
-                            Swal.fire({
-                                title: `{{ _('Success!') }}`, text: `{{ _('Close order for %(symbol)s sent.', symbol=symbol) }}`, icon: 'success',
-                                timer: 1500, showConfirmButton: false,
-                                customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
-                            });
-                            setTimeout(fetchOpenPositions, 1500); 
-                        },
-                        error: function(xhr){ 
-                            let msg = `{{ _('An unknown error occurred.') }}`;
-                            try { msg = JSON.parse(xhr.responseText).detail || xhr.responseText; } catch(e) { msg = xhr.responseText; }
-                             Swal.fire({ title: `{{ _('Close Failed') }}`, text: msg, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
-                        }
-                    });
-                }
-            });
+            closePosition(symbol);
         });
 
         $('#openTradeForm').on('submit', function(e){
