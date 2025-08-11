@@ -1,23 +1,23 @@
 {% extends "base.html" %}
-{% block title %}Configuration - TradingBot{% endblock %}
+{% block title %}{{ _('Configuration') }} - {{ _('TradingBot') }}{% endblock %}
 {% block content %}
 <div class="container my-4 animate__animated animate__fadeIn">
     <div class="row justify-content-center">
         <div class="col-12 col-md-8 col-lg-6">
             <div class="card shadow-sm">
                 <div class="card-header">
-                    <i class="fa-solid fa-gears me-2"></i>Application Configuration
+                    <i class="fa-solid fa-gears me-2"></i>{{ _('Application Configuration') }}
                 </div>
                 <div class="card-body">
-                    <p class="text-muted">Edit the values for your `.env` file. Changes may require an application restart to take effect.</p>
+                    <p class="text-muted">{{ _('Edit the values for your .env file. Changes may require an application restart to take effect.') }}</p>
                     <form method="post">
-                        {% for key, value in config.items() %}
+                        {% for key, value in env_config.items() %}
                         <div class="mb-3">
                             <label for="{{ key }}" class="form-label">{{ key }}</label>
                             <input type="text" class="form-control" id="{{ key }}" name="{{ key }}" value="{{ value }}">
                         </div>
                         {% endfor %}
-                        <button type="submit" class="btn btn-primary w-100"><i class="fa-solid fa-save me-2"></i>Save Configuration</button>
+                        <button type="submit" class="btn btn-primary w-100"><i class="fa-solid fa-save me-2"></i>{{ _('Save Configuration') }}</button>
                     </form>
                 </div>
             </div>

@@ -1,28 +1,28 @@
 {% extends "base.html" %}
-{% block title %}Dashboard - TradingBot{% endblock %}
+{% block title %}{{ _('Dashboard') }} - {{ _('TradingBot') }}{% endblock %}
 {% block content %}
 <div class="my-4 animate__animated animate__fadeInUp">
     <div class="row g-4">
         <div class="col-12 col-lg-4">
             <div class="card shadow-sm mb-4">
                 <div class="card-header">
-                    <i class="fa-solid fa-wallet me-2"></i>Account Summary
+                    <i class="fa-solid fa-wallet me-2"></i>{{ _('Account Summary') }}
                 </div>
                 <ul class="list-group list-group-flush">
                     <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <span>Live Open P/L</span>
+                        <span data-bs-toggle="tooltip" title="{{ _('Total profit or loss from all open positions') }}">{{ _('Live Open P/L') }}</span>
                         <span class="badge fs-6" id="statPL">$0.00</span>
                     </li>
                     <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <span># Open Trades</span>
+                        <span data-bs-toggle="tooltip" title="{{ _('The number of currently open trades') }}">{{ _('# Open Trades') }}</span>
                         <span class="badge bg-primary rounded-pill fs-6" id="statOpenCount">0</span>
                     </li>
                     <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <span>Equity</span>
+                        <span data-bs-toggle="tooltip" title="{{ _('The total value of your account (Cash + Positions)') }}">{{ _('Equity') }}</span>
                         <span class="badge bg-info rounded-pill fs-6" id="statEquity">$0</span>
                     </li>
                     <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <span>Cash</span>
+                        <span data-bs-toggle="tooltip" title="{{ _('The funds available for trading') }}">{{ _('Cash') }}</span>
                         <span class="badge bg-secondary rounded-pill fs-6" id="statCash">$0</span>
                     </li>
                 </ul>
@@ -31,27 +31,27 @@
         <div class="col-12 col-lg-8">
             <div class="card shadow-sm mb-3">
                 <div class="card-header">
-                    <i class="fa fa-plus-circle me-2"></i> Manual Trade
+                    <i class="fa fa-plus-circle me-2"></i> {{ _('Manual Trade') }}
                 </div>
                 <div class="card-body">
                     <form id="openTradeForm" class="row g-2 align-items-end">
                         <div class="col-sm-4">
-                            <label for="symbolInput" class="form-label small">Symbol</label>
-                            <input type="text" id="symbolInput" name="symbol" class="form-control" placeholder="e.g., AAPL, BTC/USD" required list="symbols-datalist">
+                            <label for="symbolInput" class="form-label small">{{ _('Symbol') }}</label>
+                            <input type="text" id="symbolInput" name="symbol" class="form-control" placeholder="{{ _('e.g., AAPL, BTC/USD') }}" required list="symbols-datalist" data-bs-toggle="tooltip" title="{{ _('Enter the stock or crypto symbol to trade') }}">
                         </div>
                         <div class="col-sm-3">
-                            <label for="amountInput" class="form-label small">Amount ($)</label>
-                            <input type="number" id="amountInput" name="amount" class="form-control" value="{{ per_trade_amount }}" step="any" required>
+                            <label for="amountInput" class="form-label small">{{ _('Amount ($)') }}</label>
+                            <input type="number" id="amountInput" name="amount" class="form-control" value="{{ per_trade_amount }}" step="any" required data-bs-toggle="tooltip" title="{{ _('The notional value of the trade in USD') }}">
                         </div>
                         <div class="col-sm-3">
-                            <label for="sideSelect" class="form-label small">Side</label>
-                            <select id="sideSelect" name="side" class="form-select" required>
-                                <option value="buy">Buy (Long)</option>
-                                <option value="sell">Sell (Short)</option>
+                            <label for="sideSelect" class="form-label small">{{ _('Side') }}</label>
+                            <select id="sideSelect" name="side" class="form-select" required data-bs-toggle="tooltip" title="{{ _('Choose to buy (long) or sell (short)') }}">
+                                <option value="buy">{{ _('Buy (Long)') }}</option>
+                                <option value="sell">{{ _('Sell (Short)') }}</option>
                             </select>
                         </div>
                         <div class="col-sm-2">
-                            <button type="submit" class="btn btn-primary w-100"><i class="fa fa-paper-plane"></i> Send</button>
+                            <button type="submit" class="btn btn-primary w-100" data-bs-toggle="tooltip" title="{{ _('Submit the trade to the bot') }}"><i class="fa fa-paper-plane"></i> {{ _('Send') }}</button>
                         </div>
                     </form>
                     <datalist id="symbols-datalist"></datalist>
@@ -59,19 +59,21 @@
             </div>
             <div class="card shadow-sm">
                 <div class="card-header d-flex justify-content-between align-items-center">
-                    <span><i class="fa fa-folder-open me-2"></i>Open Positions</span>
+                    <span><i class="fa fa-folder-open me-2"></i>{{ _('Open Positions') }}</span>
                 </div>
                 <div class="card-body">
                     <table id="openTable" class="table table-hover" style="width:100%;">
                         <thead>
                             <tr>
-                                <th>Symbol</th>
-                                <th>Side</th>
-                                <th>Qty</th>
-                                <th>Open Price</th>
-                                <th>Current Price</th>
-                                <th data-priority="1">P/L</th> <th>Open Time</th>
-                                <th data-priority="2">Action</th> </tr>
+                                <th data-bs-toggle="tooltip" title="{{ _('The asset being traded') }}">{{ _('Symbol') }}</th>
+                                <th data-bs-toggle="tooltip" title="{{ _('The direction of the trade') }}">{{ _('Side') }}</th>
+                                <th data-bs-toggle="tooltip" title="{{ _('The quantity of the asset held') }}">{{ _('Qty') }}</th>
+                                <th data-bs-toggle="tooltip" title="{{ _('The average price at which the position was opened') }}">{{ _('Open Price') }}</th>
+                                <th data-bs-toggle="tooltip" title="{{ _('The current market price of the asset') }}">{{ _('Current Price') }}</th>
+                                <th data-priority="1" data-bs-toggle="tooltip" title="{{ _('Unrealized Profit or Loss') }}">{{ _('P/L') }}</th>
+                                <th data-bs-toggle="tooltip" title="{{ _('The date and time the position was opened') }}">{{ _('Open Time') }}</th>
+                                <th data-priority="2" data-bs-toggle="tooltip" title="{{ _('Manually close this position') }}">{{ _('Action') }}</th>
+                            </tr>
                         </thead>
                         <tbody></tbody>
                     </table>
@@ -107,14 +109,18 @@
             let totalPL = 0;
             data.forEach(r => {
                 totalPL += r.unrealized_pl || 0;
+                let side_text = r.side ? r.side.toUpperCase() : '-';
+                if (side_text === 'BUY') { side_text = `{{ _('BUY') }}` }
+                if (side_text === 'SELL') { side_text = `{{ _('SELL') }}` }
+
                 t.row.add([
                     r.symbol.replace('USD', '/USD'),
-                    r.side ? r.side.toUpperCase() : '-',
+                    side_text,
                     r.qty.toFixed(4),
                     (r.open_price || 0).toFixed(4),
                     (r.current_price || 0).toFixed(4),
                     colorPL(r.unrealized_pl || 0),
-                    r.open_time_str || '-', // Corrected to use open_time_str
+                    r.open_time_str || '-',
                     `<button class="btn btn-outline-danger btn-sm close-btn" data-symbol="${r.symbol}">
                         <i class="fa fa-times"></i>
                     </button>`
@@ -191,11 +197,12 @@
             e.stopPropagation();
             let symbol = $(this).data('symbol');
             Swal.fire({
-                title: `Close ${symbol}?`,
+                title: `{{ _('Close') }} ${symbol}?`,
                 icon: 'warning',
                 showCancelButton: true,
                 confirmButtonColor: '#d33',
-                confirmButtonText: 'Yes, close it!',
+                confirmButtonText: `{{ _('Yes, close it!') }}`,
+                cancelButtonText: `{{ _('Cancel') }}`,
                 customClass: {
                     popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : ''
                 }
@@ -208,16 +215,16 @@
                         data: JSON.stringify({symbol: symbol, action: "close", user: "Dashboard"}),
                         success: function(){ 
                             Swal.fire({
-                                title: 'Success!', text: `Close order for ${symbol} sent.`, icon: 'success',
+                                title: `{{ _('Success!') }}`, text: `{{ _('Close order for %(symbol)s sent.', symbol=symbol) }}`, icon: 'success',
                                 timer: 1500, showConfirmButton: false,
                                 customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
                             });
                             setTimeout(fetchOpenPositions, 1500); 
                         },
                         error: function(xhr){ 
-                            let msg = "An unknown error occurred.";
+                            let msg = `{{ _('An unknown error occurred.') }}`;
                             try { msg = JSON.parse(xhr.responseText).detail || xhr.responseText; } catch(e) { msg = xhr.responseText; }
-                             Swal.fire({ title: "Close Failed", text: msg, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
+                             Swal.fire({ title: `{{ _('Close Failed') }}`, text: msg, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
                         }
                     });
                 }
@@ -231,20 +238,20 @@
             const amount = parseFloat($('#amountInput').val());
 
             if(!sym || !side || !amount) {
-                 Swal.fire({ title: "Invalid Input", text: "Please fill all fields correctly.", icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
+                 Swal.fire({ title: `{{ _('Invalid Input') }}`, text: `{{ _('Please fill all fields correctly.') }}`, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
                 return;
             }
 
             if (!tradableSymbols.includes(sym)) {
-                Swal.fire({ title: "Invalid Symbol", text: `The symbol "${sym}" is not tradable or does not exist.`, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
+                Swal.fire({ title: `{{ _('Invalid Symbol') }}`, text: `{{ _('The symbol "%(symbol)s" is not tradable or does not exist.', symbol=sym) }}`, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
                 return;
             }
 
             const isCrypto = sym.includes('USD') || sym.includes('/');
             if (isCrypto && amount < MIN_CRYPTO_AMOUNT) {
                 Swal.fire({
-                    title: 'Amount Too Low',
-                    text: `The minimum order size for crypto is $${MIN_CRYPTO_AMOUNT}. Please increase your trade amount.`,
+                    title: `{{ _('Amount Too Low') }}`,
+                    text: `{{ _('The minimum order size for crypto is $%(amount)s. Please increase your trade amount.', amount=MIN_CRYPTO_AMOUNT) }}`,
                     icon: 'warning',
                     customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
                 });
@@ -258,16 +265,16 @@
                 data: JSON.stringify({symbol: sym, action: side, user: "Dashboard", amount: amount}),
                 success: function(response){
                     Swal.fire({
-                        title: 'Success!', text: `Trade order for ${sym} sent.`, icon: 'success',
+                        title: `{{ _('Success!') }}`, text: `{{ _('Trade order for %(symbol)s sent.', symbol=sym) }}`, icon: 'success',
                         timer: 1500, showConfirmButton: false,
                         customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
                     });
                     setTimeout(fetchOpenPositions, 1500);
                 },
                 error: function(xhr){
-                    let msg = "An unknown error occurred.";
+                    let msg = `{{ _('An unknown error occurred.') }}`;
                     try { msg = JSON.parse(xhr.responseText).detail || JSON.parse(xhr.responseText).error || xhr.responseText; } catch(e) { msg = xhr.responseText; }
-                    Swal.fire({ title: "Trade Failed", text: msg, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
+                    Swal.fire({ title: `{{ _('Trade Failed') }}`, text: msg, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
                 }
             });
         });

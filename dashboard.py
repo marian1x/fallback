@@ -35,11 +35,10 @@ HOST = os.getenv('HOST', '0.0.0.0')
 PORT = int(os.getenv('DASHBOARD_PORT', 5050))
 SECRET_KEY = os.getenv('FLASK_SECRET', 'changeme')
 BOT_WEBHOOK = os.getenv('TRADING_BOT_URL', 'http://127.0.0.1:5000/webhook')
-if not BOT_WEBHOOK.endswith('/webhook'):
-    BOT_WEBHOOK = BOT_WEBHOOK.rstrip('/') + '/webhook'
 ADMIN_USER = os.getenv('ADMIN_USERNAME', 'admin')
 ADMIN_PASS = os.getenv('ADMIN_PASSWORD', 'admin')
 PER_TRADE_AMOUNT = os.getenv('PER_TRADE_AMOUNT', '2000')
+INTERNAL_API_KEY = os.getenv('INTERNAL_API_KEY', 'your-very-secret-internal-key')
 
 # Action keywords that mean "close this position"
 CLOSE_ACTIONS = [
@@ -67,7 +66,7 @@ app.config.update(
     UPLOAD_FOLDER=os.path.join(app.instance_path, 'uploads'),
     BACKUP_FOLDER=os.path.join(app.instance_path, 'backups'),
     BABEL_DEFAULT_LOCALE='en',
-    LANGUAGES={'en': 'English', 'ro': 'Română'}
+    LANGUAGES={'en': 'English', 'ro': 'Română', 'ro_GUST': 'Gusterească'}
 )
 os.makedirs(app.instance_path, exist_ok=True)
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -75,14 +74,16 @@ os.makedirs(app.config['BACKUP_FOLDER'], exist_ok=True)
 
 # --- Internationalization Setup ---
 def get_locale():
-    return session.get('language', request.accept_languages.best_match(list(app.config['LANGUAGES'].keys())))
+    user_language = session.get('language')
+    if user_language in app.config['LANGUAGES']:
+        return user_language
+    return request.accept_languages.best_match(list(app.config['LANGUAGES'].keys())) or app.config['BABEL_DEFAULT_LOCALE']
 
 babel = Babel(app, locale_selector=get_locale)
 
 @app.context_processor
 def inject_locale():
     return dict(get_locale=get_locale)
-
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -218,8 +219,52 @@ def api_open_positions():
         return jsonify([])
     
     out = []
+    db_changed = False
     for p in positions:
         open_time_utc = db_trades.get(p.symbol)
+
+        if open_time_utc is None:
+            logger.info(f"Position for {p.symbol} found on Alpaca but not in DB. Fetching fill time and creating record now.")
+            try:
+                all_fills = api.get_activities(activity_types='FILL', direction='desc', page_size=100)
+                symbol_fill = next((fill for fill in all_fills if fill.symbol == p.symbol), None)
+
+                if symbol_fill:
+                    open_time_utc = symbol_fill.transaction_time
+                else:
+                    open_time_utc = datetime.now(utc)
+                    logger.warning(f"Could not find a fill activity for {p.symbol}, using current time as a fallback.")
+
+                new_trade = Trade(
+                    trade_id=f"sync_{p.asset_id}_{int(time.time())}",
+                    symbol=p.symbol,
+                    side='sell' if float(p.qty) < 0 else 'buy',
+                    qty=abs(float(p.qty)),
+                    open_price=float(p.avg_entry_price),
+                    open_time=open_time_utc,
+                    status='open',
+                    action="synced_on_demand"
+                )
+                db.session.add(new_trade)
+                db_changed = True
+            except Exception as e:
+                logger.error(f"Failed to fetch fill time for new position {p.symbol}: {e}")
+                open_time_utc = datetime.now(utc)
+
+        current_price = float(p.current_price or 0)
+        # If current_price is 0 (market closed), get the latest quote as a fallback
+        if current_price == 0:
+            try:
+                if getattr(p, 'asset_class') == 'crypto':
+                    latest = api.get_latest_crypto_trade(p.symbol, "CBSE")
+                    current_price = float(latest.p)
+                else:
+                    latest = api.get_latest_quote(p.symbol)
+                    current_price = (float(latest.ap) + float(latest.bp)) / 2
+            except Exception as e:
+                logger.warning(f"Could not get fallback latest price for {p.symbol}: {e}")
+                current_price = 0 # Keep it 0 if fallback fails
+
         open_time_str = "-"
         open_time_iso = None
         if open_time_utc:
@@ -235,11 +280,16 @@ def api_open_positions():
             'side': 'sell' if float(p.qty) < 0 else 'buy',
             'qty': abs(float(p.qty)),
             'open_price': float(p.avg_entry_price),
+            'current_price': current_price,
             'market_value': float(p.market_value),
             'unrealized_pl': float(p.unrealized_pl),
             'open_time_str': open_time_str,
             'open_time_iso': open_time_iso
         })
+    
+    if db_changed:
+        db.session.commit()
+        
     return jsonify(out)
 
 @app.route('/api/closed_orders')
@@ -302,6 +352,37 @@ def proxy_trade():
     
     return jsonify(data), r.status_code
 
+@app.route('/api/internal/record_close', methods=['POST'])
+def record_close_internal():
+    if request.headers.get('X-Internal-API-Key') != INTERNAL_API_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    data = request.get_json(force=True)
+    
+    def background_task(data):
+        with app.app_context():
+            logger.info(f"Internal background task to record close: {data}")
+            try:
+                payload = data.get('payload')
+                position_data = data.get('position_obj')
+                
+                class MockPosition:
+                    def __init__(self, **entries):
+                        self.__dict__.update(entries)
+                
+                position_obj = MockPosition(**position_data) if position_data else None
+
+                t = record_closed_trade(data, payload, position_obj)
+                if t:
+                    logger.info(f"DB: Logged closed trade from internal API: {t.symbol}, P/L={t.profit_loss:.2f}")
+                else:
+                    logger.error(f"Internal API: record_closed_trade returned None for symbol {data.get('symbol')}")
+            except Exception as ex:
+                logger.error(f"DB update error in internal API background task: {ex}", exc_info=True)
+    
+    threading.Thread(target=background_task, args=(data,)).start()
+    return jsonify({"status": "accepted"}), 202
+
 @app.route('/api/account')
 @login_required
 def api_account():
@@ -360,7 +441,7 @@ def config():
     except Exception as e:
         flash(gettext("Could not read .env file: %(error)s", error=e), "warning")
 
-    return render_template('config.html', config=config_vars)
+    return render_template('config.html', env_config=config_vars)
 
 @app.route('/logs')
 @login_required

@@ -1,4 +1,4 @@
-# trade_db.py
+#!/usr/bin/env python3
 from datetime import datetime, timedelta, timezone
 from models import db, Trade
 import alpaca_trade_api as tradeapi
@@ -47,6 +47,7 @@ def record_closed_trade(data, payload, position_obj):
         logger.error(f"Cannot record closed trade for {symbol}: No pre-close position data available.")
         Trade.query.filter_by(symbol=symbol, status='open').delete()
         db.session.commit()
+        logger.info(f"DB: Cleaned up orphaned open trades for {symbol}.")
         return None
 
     close_order_id = data.get('close_order_id')
@@ -84,35 +85,45 @@ def record_closed_trade(data, payload, position_obj):
     # Find the most recent open trade for this symbol to update it.
     trade_to_update = Trade.query.filter_by(symbol=symbol, status='open').order_by(Trade.open_time.desc()).first()
     
+    pl = (close_price - avg_entry_price) * total_qty if position_side == 'long' else (avg_entry_price - close_price) * total_qty
+    pl_pct = (pl / (avg_entry_price * total_qty)) * 100 if avg_entry_price > 0 and total_qty > 0 else 0
+    
     if not trade_to_update:
-        logger.warning(f"A close was recorded for {symbol}, but no open trade was found in DB. Creating a new closed record.")
+        logger.warning(f"A close was recorded for {symbol}, but no open trade was found in DB. Creating a new closed record from Alpaca data.")
+        # Create a new record if none is found
         trade_to_update = Trade(
             trade_id=f"closed_{position_obj.asset_id}_{int(time.time())}",
             symbol=symbol,
-            open_time=close_time - timedelta(minutes=5)
+            side='buy' if position_side == 'long' else 'sell',
+            qty=total_qty,
+            open_price=avg_entry_price,
+            open_time=close_time - timedelta(minutes=5), # Approximate open time
+            status='closed',
+            close_price=close_price,
+            close_time=close_time,
+            profit_loss=pl,
+            profit_loss_pct=pl_pct,
+            action=payload.get('action', '')
         )
         db.session.add(trade_to_update)
+    else:
+        # Clean up any other (older) open trades for the same symbol
+        other_open_trades = Trade.query.filter(Trade.symbol == symbol, Trade.status == 'open', Trade.id != trade_to_update.id).all()
+        if other_open_trades:
+            logger.warning(f"Found {len(other_open_trades)} older, orphaned open trades for {symbol}. Deleting them now.")
+            for trade in other_open_trades:
+                db.session.delete(trade)
 
-    # Clean up any other (older) open trades for the same symbol
-    other_open_trades = Trade.query.filter(Trade.symbol == symbol, Trade.status == 'open', Trade.id != trade_to_update.id).all()
-    if other_open_trades:
-        logger.warning(f"Found {len(other_open_trades)} older, orphaned open trades for {symbol}. Deleting them now.")
-        for trade in other_open_trades:
-            db.session.delete(trade)
-
-    pl = (close_price - avg_entry_price) * total_qty if position_side == 'long' else (avg_entry_price - close_price) * total_qty
-    pl_pct = (pl / (avg_entry_price * total_qty)) * 100 if avg_entry_price > 0 and total_qty > 0 else 0
-
-    # Update the existing trade record
-    trade_to_update.status = 'closed'
-    trade_to_update.side = 'buy' if position_side == 'long' else 'sell'
-    trade_to_update.qty = total_qty
-    trade_to_update.open_price = avg_entry_price
-    trade_to_update.close_price = close_price
-    trade_to_update.close_time = close_time
-    trade_to_update.profit_loss = pl
-    trade_to_update.profit_loss_pct = pl_pct
-    trade_to_update.action = payload.get('action', '')
+        # Update the existing trade record
+        trade_to_update.status = 'closed'
+        trade_to_update.side = 'buy' if position_side == 'long' else 'sell'
+        trade_to_update.qty = total_qty
+        trade_to_update.open_price = avg_entry_price
+        trade_to_update.close_price = close_price
+        trade_to_update.close_time = close_time
+        trade_to_update.profit_loss = pl
+        trade_to_update.profit_loss_pct = pl_pct
+        trade_to_update.action = payload.get('action', '')
 
     db.session.commit()
     logger.info(f"DB: Updated and closed position for {symbol} with P/L={pl}")

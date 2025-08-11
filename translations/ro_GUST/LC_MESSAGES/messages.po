@@ -1,19 +1,15 @@
-# Romanian translations for messages.
-# Copyright (C) 2025
-# This file is distributed under the same license as the PROJECT project.
-# FIRST AUTHOR <EMAIL@ADDRESS>, 2025.
-#
+
 msgid ""
 msgstr ""
 "Project-Id-Version: PROJECT VERSION\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
 "POT-Creation-Date: 2025-08-08 22:09+0300\n"
-"PO-Revision-Date: 2025-08-08 22:00+0300\n"
-"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
-"Language: ro\n"
-"Language-Team: ro <LL@li.org>\n"
-"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : (n==0 || (n%100 > 0 && n%100"
-" < 20)) ? 1 : 2);\n"
+"PO-Revision-Date: 2025-08-09 00:04+0300\n"
+"Last-Translator: \n"
+"Language: ro_GUST\n"
+"Language-Team: \n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : (n==0 || (n%100>0 && "
+"n%100<20)) ? 1 : 2);\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -21,19 +17,19 @@ msgstr ""
 
 #: dashboard.py:142
 msgid "Please log in first."
-msgstr "Vă rugăm să vă autentificați mai întâi."
+msgstr "Bagă parola, șefu'."
 
 #: dashboard.py:155
 msgid "Logged in."
-msgstr "Autentificat cu succes."
+msgstr "Ai intrat, gata cu gluma."
 
 #: dashboard.py:157
 msgid "Invalid credentials."
-msgstr "Date de autentificare invalide."
+msgstr "N-ai nimerit-o."
 
 #: dashboard.py:164
 msgid "Logged out."
-msgstr "Deconectat cu succes."
+msgstr "Te-ai lepădat."
 
 #: dashboard.py:325 dashboard.py:390 dashboard.py:453
 msgid "Admin access required."
@@ -101,92 +97,91 @@ msgstr ""
 
 #: templates/base.html:5
 msgid "Trading Dashboard"
-msgstr "Panou de Tranzacționare"
+msgstr "Loc de Pierdut Banii"
 
 #: templates/base.html:27
 msgid "Main dashboard with open positions and account summary"
-msgstr "Panoul principal cu poziții deschise și sumarul contului"
+msgstr "Panoul principal cu ce-ai pierdut azi și pe ce mai ai bani"
 
 #: templates/base.html:27 templates/dashboard.html:2
 msgid "Dashboard"
-msgstr "Panou Principal"
+msgstr "Butoane și Leduri"
 
 #: templates/base.html:28
 msgid "View and filter your trade history"
-msgstr "Vizualizați și filtrați istoricul tranzacțiilor"
+msgstr "Vezi unde ai dat cu bățu-n baltă"
 
 #: templates/base.html:28
 msgid "Closed Trades"
-msgstr "Tranzacții Închise"
+msgstr "Meniul Unde Vezi Roșu"
 
 #: templates/base.html:29
 msgid "Analyze currently open positions"
-msgstr "Analizați pozițiile deschise în prezent"
+msgstr "Uită-te la banii blocați"
 
 #: templates/base.html:29
 msgid "Open Analytics"
-msgstr "Analiză Poziții Deschise"
+msgstr "Grafice Amuzante"
 
 #: templates/base.html:30
 msgid "In-depth strategy performance metrics"
-msgstr "Metrici detaliate despre performanța strategiei"
+msgstr "Cifre care te fac să plângi"
 
 #: templates/base.html:30
 msgid "Advanced Analytics"
-msgstr "Analiză Avansată"
+msgstr "Statistică Dureroasă"
 
 #: templates/base.html:32
 msgid "Administrative tools"
-msgstr "Unelte administrative"
+msgstr "Butoanele alea mari"
 
 #: templates/base.html:33
 msgid "Admin"
-msgstr "Admin"
+msgstr "Șefu'"
 
 #: templates/base.html:36
 msgid "Edit the .env configuration file"
-msgstr "Editați fișierul de configurare .env"
+msgstr "Schimbă parolele, poate merge mai bine"
 
 #: templates/base.html:36
 msgid "Configuration"
-msgstr "Configurație"
+msgstr "Setări degeaba"
 
 #: templates/base.html:37
 msgid "View application and trade logs"
-msgstr "Vizualizați jurnalele aplicației și ale tranzacțiilor"
+msgstr "Citește ce zice computeru'"
 
 #: templates/base.html:37
 msgid "View Logs"
-msgstr "Vizualizare Jurnale"
+msgstr "Ce-am mai greșit"
 
 #: templates/base.html:38
 msgid "Backup, restore, or re-initialize the database"
-msgstr "Backup, restaurare sau reinițializare a bazei de date"
+msgstr "Fă o copie la dezastru, sau șterge tot"
 
 #: templates/base.html:38
 msgid "DB Management"
-msgstr "Gestiune Bază de Date"
+msgstr "Gestiune Găleată Date"
 
 #: templates/base.html:41
 msgid "Log Out"
-msgstr "Deconectare"
+msgstr "Fugi D-aici"
 
 #: templates/base.html:44
 msgid "Change Language"
-msgstr "Schimbă Limba"
+msgstr "Schimbă Vorba"
 
 #: templates/base.html:59
 msgid "Toggle Dark/Light Mode"
-msgstr "Comută Modul Întunecat/Luminos"
+msgstr "Stinge/Aprinde Becul"
 
 #: templates/dashboard.html:2
-#, fuzzy
 msgid "TradingBot"
-msgstr "Panou de Tranzacționare"
+msgstr "TradingBot"
 
 #: templates/dashboard.html:9
 msgid "Account Summary"
-msgstr ""
+msgstr "Sumar Cont (pe scurt, nasol)"
 
 #: templates/dashboard.html:13
 msgid "Total profit or loss from all open positions"
@@ -194,16 +189,15 @@ msgstr ""
 
 #: templates/dashboard.html:13
 msgid "Live Open P/L"
-msgstr ""
+msgstr "Profit pentru Bere"
 
 #: templates/dashboard.html:17
 msgid "The number of currently open trades"
 msgstr ""
 
 #: templates/dashboard.html:17
-#, fuzzy
 msgid "# Open Trades"
-msgstr "Tranzacții Închise"
+msgstr "# Șanse de Câștig"
 
 #: templates/dashboard.html:21
 msgid "The total value of your account (Cash + Positions)"
@@ -211,7 +205,7 @@ msgstr ""
 
 #: templates/dashboard.html:21
 msgid "Equity"
-msgstr ""
+msgstr "Bani Virtuali"
 
 #: templates/dashboard.html:25
 msgid "The funds available for trading"
@@ -219,119 +213,115 @@ msgstr ""
 
 #: templates/dashboard.html:25
 msgid "Cash"
-msgstr ""
+msgstr "Bani de Pâine"
 
 #: templates/dashboard.html:34
 msgid "Manual Trade"
-msgstr ""
+msgstr "Joc de Noroc Manual"
 
 #: templates/dashboard.html:39 templates/dashboard.html:68
 msgid "Symbol"
-msgstr ""
+msgstr "Hieroglifă"
 
 #: templates/dashboard.html:40
 msgid "e.g., AAPL, BTC/USD"
-msgstr ""
+msgstr "ex., GME, DOGE"
 
 #: templates/dashboard.html:40
 msgid "Enter the stock or crypto symbol to trade"
-msgstr ""
+msgstr "Scrie aici ce vrei să cumperi și să-ți pară rău"
 
 #: templates/dashboard.html:43
 msgid "Amount ($)"
-msgstr ""
+msgstr "Cât Vrei Să Pierzi ($)"
 
 #: templates/dashboard.html:44
 msgid "The notional value of the trade in USD"
-msgstr ""
+msgstr "Câți gologani arunci în foc"
 
 #: templates/dashboard.html:47 templates/dashboard.html:69
 msgid "Side"
-msgstr ""
+msgstr "Pe ce Pariezi"
 
 #: templates/dashboard.html:48
 msgid "Choose to buy (long) or sell (short)"
-msgstr ""
+msgstr "Alege: speranță sau disperare"
 
 #: templates/dashboard.html:49
 msgid "Buy (Long)"
-msgstr ""
+msgstr "Crede și nu cerceta (Cumpără)"
 
 #: templates/dashboard.html:50
 msgid "Sell (Short)"
-msgstr ""
+msgstr "Vinde ce n-ai (Vinde)"
 
 #: templates/dashboard.html:54
 msgid "Submit the trade to the bot"
-msgstr ""
+msgstr "Trimite ordinul și roagă-te"
 
 #: templates/dashboard.html:54
 msgid "Send"
-msgstr ""
+msgstr "Dă-i Bice"
 
 #: templates/dashboard.html:62
-#, fuzzy
 msgid "Open Positions"
-msgstr "Poziții Deschise"
+msgstr "Banii la Muncă"
 
 #: templates/dashboard.html:68
 msgid "The asset being traded"
-msgstr ""
+msgstr "Marfa de pe tarabă"
 
 #: templates/dashboard.html:69
 msgid "The direction of the trade"
-msgstr ""
+msgstr "În ce direcție o iau banii tăi"
 
 #: templates/dashboard.html:70
 msgid "The quantity of the asset held"
-msgstr ""
+msgstr "Câte bucăți ai pe stoc"
 
 #: templates/dashboard.html:70
 msgid "Qty"
-msgstr ""
+msgstr "Bucăți"
 
 #: templates/dashboard.html:71
 msgid "The average price at which the position was opened"
-msgstr ""
+msgstr "Prețul la care te-ai ars prima dată"
 
 #: templates/dashboard.html:71
 msgid "Open Price"
-msgstr ""
+msgstr "Preț de Prost"
 
 #: templates/dashboard.html:72
 msgid "The current market price of the asset"
-msgstr ""
+msgstr "Cât face acum (probabil mai puțin)"
 
 #: templates/dashboard.html:72
 msgid "Current Price"
-msgstr ""
+msgstr "Preț de Deștept"
 
 #: templates/dashboard.html:73
 msgid "Unrealized Profit or Loss"
-msgstr ""
+msgstr "Câștigul pe care încă nu-l ai"
 
 #: templates/dashboard.html:73
 msgid "P/L"
-msgstr ""
+msgstr "Câștig/Pierzanie"
 
 #: templates/dashboard.html:74
 msgid "The date and time the position was opened"
-msgstr ""
+msgstr "Momentul deciziei proaste"
 
 #: templates/dashboard.html:74
-#, fuzzy
 msgid "Open Time"
-msgstr "Analiză Poziții Deschise"
+msgstr "Când ai Greșit"
 
 #: templates/dashboard.html:75
-#, fuzzy
 msgid "Manually close this position"
-msgstr "Analizați pozițiile deschise în prezent"
+msgstr "Apasă aici ca să nu mai pierzi"
 
 #: templates/dashboard.html:75
-#, fuzzy
 msgid "Action"
-msgstr "Poziții Deschise"
+msgstr "Ce să-i Facem"
 
 #: templates/dashboard.html:113
 msgid "BUY"
@@ -373,7 +363,7 @@ msgstr ""
 #: templates/dashboard.html:241
 #, fuzzy
 msgid "Invalid Input"
-msgstr "Date de autentificare invalide."
+msgstr "N-ai nimerit-o."
 
 #: templates/dashboard.html:241
 msgid "Please fill all fields correctly."
@@ -382,7 +372,7 @@ msgstr ""
 #: templates/dashboard.html:246
 #, fuzzy
 msgid "Invalid Symbol"
-msgstr "Date de autentificare invalide."
+msgstr "N-ai nimerit-o."
 
 #: templates/dashboard.html:246
 #, python-format
@@ -428,7 +418,7 @@ msgstr ""
 #: venv/lib/python3.11/site-packages/click/core.py:1140
 #, fuzzy
 msgid "Options"
-msgstr "Poziții Deschise"
+msgstr "Banii la Muncă"
 
 #: venv/lib/python3.11/site-packages/click/core.py:1202
 #, python-brace-format
@@ -604,7 +594,7 @@ msgstr ""
 #: venv/lib/python3.11/site-packages/click/termui.py:162
 #, fuzzy
 msgid "Repeat for confirmation"
-msgstr "Configurație"
+msgstr "Setări degeaba"
 
 #: venv/lib/python3.11/site-packages/click/termui.py:178
 msgid "Error: The value you entered was invalid."
@@ -792,7 +782,7 @@ msgstr ""
 #: venv/lib/python3.11/site-packages/wtforms/validators.py:358
 #, fuzzy
 msgid "Invalid input."
-msgstr "Date de autentificare invalide."
+msgstr "N-ai nimerit-o."
 
 #: venv/lib/python3.11/site-packages/wtforms/validators.py:422
 msgid "Invalid email address."
@@ -801,22 +791,22 @@ msgstr ""
 #: venv/lib/python3.11/site-packages/wtforms/validators.py:460
 #, fuzzy
 msgid "Invalid IP address."
-msgstr "Date de autentificare invalide."
+msgstr "N-ai nimerit-o."
 
 #: venv/lib/python3.11/site-packages/wtforms/validators.py:503
 #, fuzzy
 msgid "Invalid Mac address."
-msgstr "Date de autentificare invalide."
+msgstr "N-ai nimerit-o."
 
 #: venv/lib/python3.11/site-packages/wtforms/validators.py:540
 #, fuzzy
 msgid "Invalid URL."
-msgstr "Date de autentificare invalide."
+msgstr "N-ai nimerit-o."
 
 #: venv/lib/python3.11/site-packages/wtforms/validators.py:561
 #, fuzzy
 msgid "Invalid UUID."
-msgstr "Date de autentificare invalide."
+msgstr "N-ai nimerit-o."
 
 #: venv/lib/python3.11/site-packages/wtforms/validators.py:595
 #, python-format
@@ -839,7 +829,7 @@ msgstr ""
 #: venv/lib/python3.11/site-packages/wtforms/csrf/core.py:96
 #, fuzzy
 msgid "Invalid CSRF Token."
-msgstr "Date de autentificare invalide."
+msgstr "N-ai nimerit-o."
 
 #: venv/lib/python3.11/site-packages/wtforms/csrf/session.py:64
 msgid "CSRF token missing."
@@ -907,90 +897,9 @@ msgstr ""
 msgid "Not a valid float value."
 msgstr ""
 
-#~ msgid "Account Summary"
-#~ msgstr "Sumar Cont"
-
-#~ msgid "Live Open P/L"
-#~ msgstr "P/L Live Poziții Deschise"
-
-#~ msgid "# Open Trades"
-#~ msgstr "# Tranzacții Deschise"
-
-#~ msgid "Equity"
-#~ msgstr "Capital Propriu"
-
-#~ msgid "Cash"
-#~ msgstr "Numerar"
-
-#~ msgid "Manual Trade"
-#~ msgstr "Tranzacție Manuală"
-
-#~ msgid "Symbol"
-#~ msgstr "Simbol"
-
-#~ msgid "Amount ($)"
-#~ msgstr "Suma ($)"
-
-#~ msgid "Side"
-#~ msgstr "Parte"
-
-#~ msgid "Buy (Long)"
-#~ msgstr "Cumpărare (Long)"
-
-#~ msgid "Sell (Short)"
-#~ msgstr "Vânzare (Short)"
-
-#~ msgid "Send"
-#~ msgstr "Trimite"
-
-#~ msgid "Qty"
-#~ msgstr "Cant."
-
-#~ msgid "Open Price"
-#~ msgstr "Preț Deschidere"
-
-#~ msgid "Current Price"
-#~ msgstr "Preț Curent"
-
-#~ msgid "P/L"
-#~ msgstr "P/L"
-
-#~ msgid "Open Time"
-#~ msgstr "Data Deschiderii"
-
-#~ msgid "Action"
-#~ msgstr "Acțiune"
-
-#~ msgid "TradingBot"
-#~ msgstr "TradingBot"
-
 #~ msgid "BUY"
-#~ msgstr "CUMPĂRARE"
+#~ msgstr "BAGĂ BANU'"
 
 #~ msgid "SELL"
-#~ msgstr "VÂNZARE"
-
-#~ msgid "Date range"
-#~ msgstr "Interval de date"
-
-#~ msgid "Clear"
-#~ msgstr "Curăță"
-
-#~ msgid "Closed Orders"
-#~ msgstr "Ordine Închise"
-
-#~ msgid "Close Price"
-#~ msgstr "Preț Închidere"
-
-#~ msgid "P/L %"
-#~ msgstr "P/L %"
-
-#~ msgid "Close Time"
-#~ msgstr "Data Închiderii"
-
-#~ msgid "Exit Reason"
-#~ msgstr "Motiv Ieșire"
-
-#~ msgid "Closed Trade Stats"
-#~ msgstr "Statistici Tranzacții Închise"
+#~ msgstr "SCAPĂ DE EA"
 
