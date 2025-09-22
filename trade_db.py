@@ -65,8 +65,9 @@ def record_closed_trade(data, payload, position_obj):
     for i in range(15):
         try:
             exit_order = api.get_order(close_order_id)
-            if exit_order.status == 'filled':
-                logger.info(f"Close order {close_order_id} for {symbol} confirmed as filled.")
+            # Accept either 'filled' or 'partially_filled' as a valid closing state
+            if exit_order.status in ['filled', 'partially_filled']:
+                logger.info(f"Close order {close_order_id} for {symbol} confirmed as '{exit_order.status}'.")
                 break
             else:
                 logger.warning(f"Waiting for close order {close_order_id} to fill... Status is '{exit_order.status}'. Attempt {i+1}/15")
@@ -75,7 +76,7 @@ def record_closed_trade(data, payload, position_obj):
             logger.error(f"Error fetching close order {close_order_id}: {e}")
             time.sleep(1)
 
-    if not exit_order or exit_order.status != 'filled':
+    if not exit_order or exit_order.status not in ['filled', 'partially_filled']:
         logger.error(f"Could not confirm fill for close order {close_order_id} for {symbol}. Aborting DB update.")
         return None
 
@@ -85,45 +86,34 @@ def record_closed_trade(data, payload, position_obj):
     # Find the most recent open trade for this symbol to update it.
     trade_to_update = Trade.query.filter_by(symbol=symbol, status='open').order_by(Trade.open_time.desc()).first()
     
-    pl = (close_price - avg_entry_price) * total_qty if position_side == 'long' else (avg_entry_price - close_price) * total_qty
-    pl_pct = (pl / (avg_entry_price * total_qty)) * 100 if avg_entry_price > 0 and total_qty > 0 else 0
-    
     if not trade_to_update:
         logger.warning(f"A close was recorded for {symbol}, but no open trade was found in DB. Creating a new closed record from Alpaca data.")
-        # Create a new record if none is found
         trade_to_update = Trade(
             trade_id=f"closed_{position_obj.asset_id}_{int(time.time())}",
             symbol=symbol,
-            side='buy' if position_side == 'long' else 'sell',
-            qty=total_qty,
-            open_price=avg_entry_price,
-            open_time=close_time - timedelta(minutes=5), # Approximate open time
-            status='closed',
-            close_price=close_price,
-            close_time=close_time,
-            profit_loss=pl,
-            profit_loss_pct=pl_pct,
-            action=payload.get('action', '')
+            open_time=close_time - timedelta(minutes=5)
         )
         db.session.add(trade_to_update)
-    else:
-        # Clean up any other (older) open trades for the same symbol
-        other_open_trades = Trade.query.filter(Trade.symbol == symbol, Trade.status == 'open', Trade.id != trade_to_update.id).all()
-        if other_open_trades:
-            logger.warning(f"Found {len(other_open_trades)} older, orphaned open trades for {symbol}. Deleting them now.")
-            for trade in other_open_trades:
-                db.session.delete(trade)
 
-        # Update the existing trade record
-        trade_to_update.status = 'closed'
-        trade_to_update.side = 'buy' if position_side == 'long' else 'sell'
-        trade_to_update.qty = total_qty
-        trade_to_update.open_price = avg_entry_price
-        trade_to_update.close_price = close_price
-        trade_to_update.close_time = close_time
-        trade_to_update.profit_loss = pl
-        trade_to_update.profit_loss_pct = pl_pct
-        trade_to_update.action = payload.get('action', '')
+    other_open_trades = Trade.query.filter(Trade.symbol == symbol, Trade.status == 'open', Trade.id != trade_to_update.id).all()
+    if other_open_trades:
+        logger.warning(f"Found {len(other_open_trades)} older, orphaned open trades for {symbol}. Deleting them now.")
+        for trade in other_open_trades:
+            db.session.delete(trade)
+
+    pl = (close_price - avg_entry_price) * total_qty if position_side == 'long' else (avg_entry_price - close_price) * total_qty
+    pl_pct = (pl / (avg_entry_price * total_qty)) * 100 if avg_entry_price > 0 and total_qty > 0 else 0
+
+    # Update the existing trade record
+    trade_to_update.status = 'closed'
+    trade_to_update.side = 'buy' if position_side == 'long' else 'sell'
+    trade_to_update.qty = total_qty
+    trade_to_update.open_price = avg_entry_price
+    trade_to_update.close_price = close_price
+    trade_to_update.close_time = close_time
+    trade_to_update.profit_loss = pl
+    trade_to_update.profit_loss_pct = pl_pct
+    trade_to_update.action = payload.get('action', '')
 
     db.session.commit()
     logger.info(f"DB: Updated and closed position for {symbol} with P/L={pl}")
