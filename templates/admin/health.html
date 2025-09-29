@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}System Health - Admin{% endblock %}
+{% block content %}
+<div class="container-fluid my-4 animate__animated animate__fadeIn">
+    <h3 class="mb-3">System Health Dashboard</h3>
+
+    <div class="row g-4 mb-4">
+        <div class="col-md-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-body d-flex flex-column justify-content-center text-center">
+                    <div class="text-muted small">BOT STATUS</div>
+                    <h4 id="bot-status" class="fw-bold mb-0">
+                        <span class="spinner-border spinner-border-sm" role="status"></span> Loading...
+                    </h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-body d-flex flex-column justify-content-center text-center">
+                    <div class="text-muted small">LAST WEBHOOK RECEIVED</div>
+                    <h5 id="last-webhook" class="fw-bold mb-0">N/A</h5>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card shadow-sm h-100">
+                <div class="card-body d-flex flex-column justify-content-center text-center">
+                    <div class="text-muted small">DATABASE SIZE</div>
+                    <h5 id="db-size" class="fw-bold mb-0">0 MB</h5>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-6">
+            <div class="card shadow-sm">
+                <div class="card-header"><i class="fa-solid fa-file-waveform me-2"></i>Recent Dashboard Log Issues</div>
+                <div class="card-body">
+                    <pre id="dashboard-log-errors" class="log-box">Loading...</pre>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card shadow-sm">
+                <div class="card-header"><i class="fa-solid fa-file-invoice-dollar me-2"></i>Recent Trades Log Issues</div>
+                <div class="card-body">
+                    <pre id="trades-log-errors" class="log-box">Loading...</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+<script>
+    function fetchHealthData() {
+        $.get('/api/admin/health_data', function(data) {
+            // Bot Status
+            let statusHtml = '';
+            if (data.bot_status === 'Active') {
+                statusHtml = `<span class="text-success"><i class="fa-solid fa-circle me-2"></i>Active</span>`;
+            } else if (data.bot_status === 'Idle') {
+                statusHtml = `<span class="text-warning"><i class="fa-solid fa-circle me-2"></i>Idle</span>`;
+            } else {
+                statusHtml = `<span class="text-danger"><i class="fa-solid fa-circle me-2"></i>Offline / Check Status</span>`;
+            }
+            $('#bot-status').html(statusHtml);
+
+            // Last Webhook
+            if (data.last_webhook_utc) {
+                const webhookTime = luxon.DateTime.fromISO(data.last_webhook_utc);
+                $('#last-webhook').text(webhookTime.toRelative() || 'Never');
+            } else {
+                 $('#last-webhook').text('Never');
+            }
+
+
+            // DB Size
+            $('#db-size').text(data.db_size_mb + ' MB');
+
+            // Log Errors
+            $('#dashboard-log-errors').text(data.dashboard_log_errors.join('\\n') || 'No issues found.');
+            $('#trades-log-errors').text(data.trades_log_errors.join('\\n') || 'No issues found.');
+
+        }).fail(function() {
+            $('#bot-status').html('<span class="text-danger">Error fetching data</span>');
+        });
+    }
+
+    $(document).ready(function() {
+        fetchHealthData();
+        setInterval(fetchHealthData, 10000); // Refresh every 10 seconds
+    });
+</script>
+<style>
+    .log-box {
+        background-color: var(--bs-table-striped-bg);
+        border: 1px solid var(--card-border);
+        border-radius: 5px;
+        padding: 10px;
+        min-height: 200px;
+        max-height: 400px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+        font-size: 0.8rem;
+    }
+</style>
+{% endblock %}

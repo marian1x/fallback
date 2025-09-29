@@ -5,6 +5,17 @@
   <h3 class="mb-3">Strategy Analytics</h3>
   
   <div class="row mb-3 align-items-end">
+    {% if g.user.is_superuser and all_users %}
+    <div class="col-md-3">
+      <label for="userFilter" class="form-label small">Filter by User</label>
+      <select id="userFilter" class="form-select form-select-sm">
+        <option value="0" selected>All Users</option>
+        {% for u in all_users %}
+        <option value="{{ u.id }}">{{ u.username }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
     <div class="col-md-3">
       <label for="symbolFilter" class="form-label small">Symbol</label>
       <select id="symbolFilter" class="form-select form-select-sm">
@@ -27,59 +38,31 @@
         <div class="card-header"><i class="fa-solid fa-gauge-high me-2"></i>Key Performance Indicators</div>
         <div class="card-body">
           <div class="row text-center">
-            <div class="col-6 col-md-3 mb-3">
-              <div class="small text-muted">Total Net P&L</div>
-              <h4 id="aTotalPL" class="fw-bold mb-0">$0.00</h4>
-            </div>
-            <div class="col-6 col-md-3 mb-3">
-              <div class="small text-muted">Profit Factor</div>
-              <h4 id="aProfitFactor" class="fw-bold mb-0">0.00</h4>
-            </div>
-            <div class="col-6 col-md-3 mb-3">
-              <div class="small text-muted">Win Rate</div>
-              <h4 id="aWinRate" class="fw-bold mb-0">0%</h4>
-            </div>
-            <div class="col-6 col-md-3 mb-3">
-              <div class="small text-muted">Total Trades</div>
-              <h4 id="aTotalTrades" class="fw-bold mb-0">0</h4>
-            </div>
-             <div class="col-6 col-md-3">
-              <div class="small text-muted">Avg. Trade P&L</div>
-              <h4 id="aAvgRet" class="fw-bold mb-0">$0.00</h4>
-            </div>
-            <div class="col-6 col-md-3">
-              <div class="small text-muted">Avg. Win / Loss</div>
-              <h4 class="fw-bold mb-0"><span id="aAvgWin" class="profit">$0</span>/<span id="aAvgLoss" class="loss">$0</span></h4>
-            </div>
-            <div class="col-6 col-md-3">
-              <div class="small text-muted">Wins / Losses</div>
-              <h4 class="fw-bold mb-0"><span id="aWins">0</span> / <span id="aLosses">0</span></h4>
-            </div>
-            <div class="col-6 col-md-3">
-              <div class="small text-muted">Max Drawdown</div>
-              <h4 id="aMaxDD" class="fw-bold mb-0">$0.00</h4>
-            </div>
+            <div class="col-6 col-md-3 mb-3"><div class="small text-muted">Total Net P&L</div><h4 id="aTotalPL" class="fw-bold mb-0">$0.00</h4></div>
+            <div class="col-6 col-md-3 mb-3"><div class="small text-muted">Profit Factor</div><h4 id="aProfitFactor" class="fw-bold mb-0">0.00</h4></div>
+            <div class="col-6 col-md-3 mb-3"><div class="small text-muted">Win Rate</div><h4 id="aWinRate" class="fw-bold mb-0">0%</h4></div>
+            <div class="col-6 col-md-3 mb-3"><div class="small text-muted">Total Trades</div><h4 id="aTotalTrades" class="fw-bold mb-0">0</h4></div>
+            <div class="col-6 col-md-3"><div class="small text-muted">Avg. Trade P&L</div><h4 id="aAvgRet" class="fw-bold mb-0">$0.00</h4></div>
+            <div class="col-6 col-md-3"><div class="small text-muted">Avg. Win / Loss</div><h4 class="fw-bold mb-0"><span id="aAvgWin" class="profit">$0</span>/<span id="aAvgLoss" class="loss">$0</span></h4></div>
+            <div class="col-6 col-md-3"><div class="small text-muted">Wins / Losses</div><h4 class="fw-bold mb-0"><span id="aWins">0</span> / <span id="aLosses">0</span></h4></div>
+            <div class="col-6 col-md-3"><div class="small text-muted">Max Drawdown</div><h4 id="aMaxDD" class="fw-bold mb-0">$0.00</h4></div>
           </div>
         </div>
       </div>
       <div class="row g-4">
-            <div class="col-md-6">
-                <div class="card shadow-sm">
-                    <div class="card-header"><i class="fa-solid fa-chart-line me-2"></i>Equity Curve</div>
-                    <div class="card-body">
-                        <canvas id="aPLTimeChart" height="150"></canvas>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-6">
-                 <div class="card shadow-sm">
-                    <div class="card-header"><i class="fa-solid fa-calendar-days me-2"></i>Monthly P&L Breakdown</div>
-                    <div class="card-body">
-                        <canvas id="aMonthlyPLChart" height="150"></canvas>
-                    </div>
-                </div>
+        <div class="col-md-6">
+            <div class="card shadow-sm">
+                <div class="card-header"><i class="fa-solid fa-chart-line me-2"></i>Equity Curve</div>
+                <div class="card-body"><canvas id="aPLTimeChart" height="150"></canvas></div>
             </div>
         </div>
+        <div class="col-md-6">
+             <div class="card shadow-sm">
+                <div class="card-header"><i class="fa-solid fa-calendar-days me-2"></i>Monthly P&L Breakdown</div>
+                <div class="card-body"><canvas id="aMonthlyPLChart" height="150"></canvas></div>
+            </div>
+        </div>
+      </div>
     </div>
     
     <div class="col-lg-4">
@@ -87,14 +70,7 @@
         <div class="card-header"><i class="fa-solid fa-list-check me-2"></i>Symbol Performance</div>
         <div class="card-body p-0">
           <table id="symbolPerformanceTable" class="table table-hover mb-0">
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Net P&L</th>
-                <th>Win %</th>
-                <th>Trades</th>
-              </tr>
-            </thead>
+            <thead><tr><th>Symbol</th><th>Net P&L</th><th>Win %</th><th>Trades</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -114,12 +90,31 @@ function destroyChart(chartId) {
     if (charts[chartId]) charts[chartId].destroy();
 }
 
+function fetchAndComputeAnalytics() {
+    const userId = $('#userFilter').length ? $('#userFilter').val() : '{{ g.user.id }}';
+    
+    $.get('/api/closed_orders', { user_id: userId }, function(data) {
+        allTrades = data;
+        
+        // Populate symbol filter from the fetched trade history
+        const symbolFilterEl = $('#symbolFilter');
+        symbolFilterEl.html('<option value="all" selected>All Symbols</option>'); // Reset
+        const uniqueSymbols = [...new Set(allTrades.map(t => t.symbol))].sort();
+        uniqueSymbols.forEach(symbol => {
+            symbolFilterEl.append(`<option value="${symbol}">${symbol.replace('USD','/USD')}</option>`);
+        });
+
+        computeAnalytics(); // Run computation with the new data
+    }).fail(function() {
+        console.error("Failed to fetch trade data.");
+    });
+}
+
 function computeAnalytics() {
     const symbolFilter = $('#symbolFilter').val();
     const dateFrom = $('#aDateFrom').val();
     const dateTo = $('#aDateTo').val();
 
-    // 1. Filter trades based on controls
     let filteredTrades = allTrades.filter(t => {
         if (!t.close_time) return false;
         const symbolOk = symbolFilter === 'all' || t.symbol === symbolFilter;
@@ -129,9 +124,8 @@ function computeAnalytics() {
         return symbolOk && fromOk && toOk;
     }).sort((a, b) => new Date(a.close_time) - new Date(b.close_time));
 
-    // 2. Calculate Overall KPIs
-    let totalPL = 0, grossProfit = 0, grossLoss = 0;
-    let wins = 0, losses = 0, tradeCount = filteredTrades.length;
+    // --- Calculations ---
+    let totalPL = 0, grossProfit = 0, grossLoss = 0, wins = 0, losses = 0;
     let equityCurve = [0];
     let monthlyPL = {};
     
@@ -141,26 +135,21 @@ function computeAnalytics() {
         equityCurve.push(totalPL);
         if (pl > 0) { wins++; grossProfit += pl; } 
         else if (pl < 0) { losses++; grossLoss += Math.abs(pl); }
-
         const month = luxon.DateTime.fromISO(t.close_time).toFormat('yyyy-MM');
         monthlyPL[month] = (monthlyPL[month] || 0) + pl;
     });
 
-    // Max Drawdown Calculation
     let peak = 0, maxDD = 0;
-    equityCurve.forEach(equity => {
-        if (equity > peak) peak = equity;
-        const drawdown = peak - equity;
-        if (drawdown > maxDD) maxDD = drawdown;
-    });
-
+    equityCurve.forEach(e => { peak = Math.max(peak, e); maxDD = Math.max(maxDD, peak - e); });
+    
+    const tradeCount = filteredTrades.length;
     const winRate = tradeCount > 0 ? (100 * wins / tradeCount) : 0;
     const profitFactor = grossLoss > 0 ? (grossProfit / grossLoss) : 0;
     const avgReturn = tradeCount > 0 ? (totalPL / tradeCount) : 0;
     const avgWin = wins > 0 ? (grossProfit / wins) : 0;
     const avgLoss = losses > 0 ? (grossLoss / losses) : 0;
 
-    // 3. Update DOM for KPIs
+    // --- Update DOM ---
     $('#aTotalPL').text(`$${totalPL.toFixed(2)}`).toggleClass('profit', totalPL > 0).toggleClass('loss', totalPL < 0);
     $('#aTotalTrades').text(tradeCount);
     $('#aWinRate').text(`${winRate.toFixed(1)}%`);
@@ -172,47 +161,34 @@ function computeAnalytics() {
     $('#aAvgWin').text(`$${avgWin.toFixed(2)}`);
     $('#aAvgLoss').text(`$${avgLoss.toFixed(2)}`);
 
-    // 4. Calculate Symbol-Specific Performance (only if 'all' is selected)
-    if (symbolFilter === 'all') {
-        const symbolStats = {};
-        // Use the date-filtered trades for this calculation as well
-        filteredTrades.forEach(t => {
-            const sym = t.symbol;
-            if (!symbolStats[sym]) {
-                symbolStats[sym] = { netPL: 0, wins: 0, count: 0 };
-            }
-            symbolStats[sym].netPL += t.profit_loss || 0;
-            symbolStats[sym].count++;
-            if ((t.profit_loss || 0) > 0) symbolStats[sym].wins++;
-        });
+    // --- Symbol Table ---
+    const symbolStats = {};
+    filteredTrades.forEach(t => {
+        const s = t.symbol;
+        if (!symbolStats[s]) symbolStats[s] = { netPL: 0, wins: 0, count: 0 };
+        symbolStats[s].netPL += t.profit_loss || 0;
+        symbolStats[s].count++;
+        if ((t.profit_loss || 0) > 0) symbolStats[s].wins++;
+    });
+    symbolPerformanceTable.clear();
+    Object.keys(symbolStats).forEach(s => {
+        const stats = symbolStats[s];
+        symbolPerformanceTable.row.add([
+            s.replace('USD', '/USD'),
+            `<span class="${stats.netPL > 0 ? 'profit' : 'loss'}">${stats.netPL.toFixed(2)}</span>`,
+            `${(stats.count > 0 ? (100 * stats.wins / stats.count) : 0).toFixed(1)}%`,
+            stats.count
+        ]);
+    });
+    symbolPerformanceTable.draw();
 
-        symbolPerformanceTable.clear();
-        Object.keys(symbolStats).forEach(sym => {
-            const stats = symbolStats[sym];
-            const winPct = stats.count > 0 ? (100 * stats.wins / stats.count) : 0;
-            symbolPerformanceTable.row.add([
-                sym.replace('USD', '/USD'),
-                `<span class="${stats.netPL > 0 ? 'profit' : 'loss'}">${stats.netPL.toFixed(2)}</span>`,
-                `${winPct.toFixed(1)}%`,
-                stats.count
-            ]);
-        });
-        symbolPerformanceTable.draw();
-    } else {
-        // If a specific symbol is selected, the table is not needed.
-        symbolPerformanceTable.clear().draw();
-    }
-
-    // 5. Render Charts
+    // --- Render Charts ---
     destroyChart('aPLTimeChart');
     charts['aPLTimeChart'] = new Chart(document.getElementById('aPLTimeChart'), {
         type: 'line',
         data: {
             labels: Array.from({length: equityCurve.length}, (_, i) => i),
-            datasets: [{
-                data: equityCurve, borderColor: '#64ffda', backgroundColor: 'rgba(100, 255, 218, 0.1)',
-                tension: 0.1, fill: true, pointRadius: 0
-            }]
+            datasets: [{ data: equityCurve, borderColor: '#64ffda', tension: 0.1, pointRadius: 0 }]
         },
         options: { plugins: { legend: { display: false } }, scales: { x: { display: false } } }
     });
@@ -232,36 +208,20 @@ function computeAnalytics() {
     });
 }
 
-function initialSetup(){
+$(document).ready(function() {
     symbolPerformanceTable = $('#symbolPerformanceTable').DataTable({
         paging: false, searching: false, info: false, order: [[1, 'desc']]
     });
 
-    const tradesPromise = $.get('/api/closed_orders');
+    fetchAndComputeAnalytics(); // Initial data load
 
-    tradesPromise.then(function(tradesData) {
-        allTrades = tradesData;
-        
-        // Populate symbol filter from actual trade history
-        const symbolFilter = $('#symbolFilter');
-        const uniqueSymbols = [...new Set(allTrades.map(t => t.symbol))].sort();
-        
-        uniqueSymbols.forEach(function(symbol) {
-            symbolFilter.append(`<option value="${symbol}">${symbol.replace('USD','/USD')}</option>`);
-        });
-
-        computeAnalytics(); // Initial computation
-    }).fail(function() {
-        console.error("Failed to fetch initial trade data.");
-    });
-
-    $('#symbolFilter, #aDateFrom, #aDateTo').on('change', computeAnalytics);
+    // Event handlers
+    $('#userFilter').on('change', fetchAndComputeAnalytics); // Refetches all data for new user
+    $('#symbolFilter, #aDateFrom, #aDateTo').on('change', computeAnalytics); // Recomputes on existing data
     $('#aClearDate').on('click', function(){
         $('#aDateFrom, #aDateTo').val('');
         computeAnalytics();
     });
-}
-
-$(document).ready(initialSetup);
+});
 </script>
 {% endblock %}

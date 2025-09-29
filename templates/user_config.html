@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Configuration - TradingBot{% endblock %}
+{% block content %}
+<div class="container my-4">
+    <div class="row justify-content-center">
+        <div class="col-12 col-md-8 col-lg-6">
+            <div class="card shadow-sm">
+                <div class="card-header">
+                    <i class="fa-solid fa-gears me-2"></i>{{ _('My Configuration') }}
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">{{ _('Manage your personal settings and API credentials.') }}</p>
+                    <form method="post">
+                        <div class="mb-3">
+                            <label for="alpaca_key" class="form-label">Alpaca API Key</label>
+                            <input type="text" class="form-control" id="alpaca_key" name="alpaca_key" value="{{ decrypt(user.encrypted_alpaca_key) }}">
+                        </div>
+                        <div class="mb-3">
+                            <label for="alpaca_secret" class="form-label">Alpaca API Secret</label>
+                            <input type="password" class="form-control" id="alpaca_secret" name="alpaca_secret" value="{{ decrypt(user.encrypted_alpaca_secret) }}">
+                        </div>
+                        <hr class="my-4">
+                        <div class="mb-3">
+                            <label for="per_trade_amount" class="form-label">{{ _('Default Per-Trade Amount ($)') }}</label>
+                            <input type="number" class="form-control" id="per_trade_amount" name="per_trade_amount" value="{{ user.per_trade_amount }}" step="any">
+                        </div>
+                        <div class="mb-3">
+                            <label for="tradingview_user" class="form-label">{{ _('TradingView "user" Value') }}</label>
+                            <input type="text" class="form-control" id="tradingview_user" name="tradingview_user" value="{{ user.tradingview_user }}">
+                             <div class="form-text">{{ _('This must exactly match the "user" value in your webhook JSON for trades to be processed.') }}</div>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100"><i class="fa-solid fa-save me-2"></i>{{ _('Save Configuration') }}</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -3,3 +3,7 @@ Flask-SQLAlchemy
 alpaca-trade-api
 Flask-Babel
 python-dotenv
+cryptography
+requests
+pytz
+werkzeug

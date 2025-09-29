@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Admin Dashboard Overview{% endblock %}
+
+{% block content %}
+<div class="container-fluid my-4 animate__animated animate__fadeIn">
+    <h3 class="mb-3">Admin Dashboard: All Users Overview</h3>
+
+    <div class="card shadow-sm">
+        <div class="card-header">
+            <i class="fa-solid fa-users me-2"></i>Live User Account Summary
+        </div>
+        <div class="card-body">
+            <table id="usersSummaryTable" class="table table-hover" style="width:100%;">
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>Equity</th>
+                        <th>Open P/L</th>
+                        <th>Open Trades</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function colorPL(valStr) {
+        if (!valStr || valStr === 'N/A' || valStr === 'Error' || valStr === 'No API Keys') {
+            return `<span class="text-muted">${valStr}</span>`;
+        }
+        // Remove '$' and ',' for parsing
+        const val = parseFloat(valStr.replace(/[$,]/g, ''));
+        const className = val > 0 ? 'profit' : (val < 0 ? 'loss' : '');
+        return `<span class="${className}">${valStr}</span>`;
+    }
+
+    function fetchAdminSummary() {
+        $.get('/api/admin/dashboard_summary', function(data) {
+            const table = $('#usersSummaryTable').DataTable();
+            table.clear();
+
+            data.forEach(user => {
+                table.row.add([
+                    user.username,
+                    user.equity,
+                    colorPL(user.open_pl),
+                    user.open_trades_count
+                ]);
+            });
+
+            table.draw();
+        }).fail(function() {
+            console.error("Failed to fetch admin dashboard summary.");
+        });
+    }
+
+    $(document).ready(function() {
+        $('#usersSummaryTable').DataTable({
+            paging: false,
+            searching: true,
+            info: false,
+            order: [[0, 'asc']] // Sort by username
+        });
+
+        fetchAdminSummary();
+        setInterval(fetchAdminSummary, 15000); // Refresh every 15 seconds
+    });
+</script>
+{% endblock %}

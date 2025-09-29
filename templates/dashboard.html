@@ -5,74 +5,41 @@
     <div class="row g-4">
         <div class="col-12 col-lg-4">
             <div class="card shadow-sm mb-4">
-                <div class="card-header">
-                    <i class="fa-solid fa-wallet me-2"></i>{{ _('Account Summary') }}
-                </div>
+                <div class="card-header"><i class="fa-solid fa-wallet me-2"></i>{{ _('Account Summary') }}</div>
                 <ul class="list-group list-group-flush">
-                    <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <span data-bs-toggle="tooltip" title="{{ _('Total profit or loss from all open positions') }}">{{ _('Live Open P/L') }}</span>
-                        <span class="badge fs-6" id="statPL">$0.00</span>
-                    </li>
-                    <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <span data-bs-toggle="tooltip" title="{{ _('The number of currently open trades') }}">{{ _('# Open Trades') }}</span>
-                        <span class="badge bg-primary rounded-pill fs-6" id="statOpenCount">0</span>
-                    </li>
-                    <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <span data-bs-toggle="tooltip" title="{{ _('The total value of your account (Cash + Positions)') }}">{{ _('Equity') }}</span>
-                        <span class="badge bg-info rounded-pill fs-6" id="statEquity">$0</span>
-                    </li>
-                    <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <span data-bs-toggle="tooltip" title="{{ _('The funds available for trading') }}">{{ _('Cash') }}</span>
-                        <span class="badge bg-secondary rounded-pill fs-6" id="statCash">$0</span>
-                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center"><span>{{ _('Live Open P/L') }}</span><span class="badge fs-6" id="statPL">$0.00</span></li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center"><span>{{ _('# Open Trades') }}</span><span class="badge bg-primary rounded-pill fs-6" id="statOpenCount">0</span></li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center"><span>{{ _('Equity') }}</span><span class="badge bg-info rounded-pill fs-6" id="statEquity">$0</span></li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center"><span>{{ _('Cash') }}</span><span class="badge bg-secondary rounded-pill fs-6" id="statCash">$0</span></li>
                 </ul>
             </div>
         </div>
         <div class="col-12 col-lg-8">
             <div class="card shadow-sm mb-3">
-                <div class="card-header">
-                    <i class="fa fa-plus-circle me-2"></i> {{ _('Manual Trade') }}
-                </div>
+                <div class="card-header"><i class="fa fa-plus-circle me-2"></i> {{ _('Manual Trade') }}</div>
                 <div class="card-body">
                     <form id="openTradeForm" class="row g-2 align-items-end">
-                        <div class="col-sm-4">
-                            <label for="symbolInput" class="form-label small">{{ _('Symbol') }}</label>
-                            <input type="text" id="symbolInput" name="symbol" class="form-control" placeholder="{{ _('e.g., AAPL, BTC/USD') }}" required list="symbols-datalist" data-bs-toggle="tooltip" title="{{ _('Enter the stock or crypto symbol to trade') }}">
-                        </div>
-                        <div class="col-sm-3">
-                            <label for="amountInput" class="form-label small">{{ _('Amount ($)') }}</label>
-                            <input type="number" id="amountInput" name="amount" class="form-control" value="{{ per_trade_amount }}" step="any" required data-bs-toggle="tooltip" title="{{ _('The notional value of the trade in USD') }}">
-                        </div>
-                        <div class="col-sm-3">
-                            <label for="sideSelect" class="form-label small">{{ _('Side') }}</label>
-                            <select id="sideSelect" name="side" class="form-select" required data-bs-toggle="tooltip" title="{{ _('Choose to buy (long) or sell (short)') }}">
-                                <option value="buy">{{ _('Buy (Long)') }}</option>
-                                <option value="sell">{{ _('Sell (Short)') }}</option>
-                            </select>
-                        </div>
-                        <div class="col-sm-2">
-                            <button type="submit" class="btn btn-primary w-100" data-bs-toggle="tooltip" title="{{ _('Submit the trade to the bot') }}"><i class="fa fa-paper-plane"></i> {{ _('Send') }}</button>
-                        </div>
+                        <div class="col-sm-4"><label for="symbolInput" class="form-label small">{{ _('Symbol') }}</label><input type="text" id="symbolInput" name="symbol" class="form-control" placeholder="{{ _('e.g., AAPL, BTC/USD') }}" required></div>
+                        <div class="col-sm-3"><label for="amountInput" class="form-label small">{{ _('Amount ($)') }}</label><input type="number" id="amountInput" name="amount" class="form-control" value="{{ per_trade_amount }}" step="any" required></div>
+                        <div class="col-sm-3"><label for="sideSelect" class="form-label small">{{ _('Side') }}</label><select id="sideSelect" name="side" class="form-select" required><option value="buy">{{ _('Buy (Long)') }}</option><option value="sell">{{ _('Sell (Short)') }}</option></select></div>
+                        <div class="col-sm-2"><button type="submit" class="btn btn-primary w-100"><i class="fa fa-paper-plane"></i> {{ _('Send') }}</button></div>
                     </form>
-                    <datalist id="symbols-datalist"></datalist>
                 </div>
             </div>
             <div class="card shadow-sm">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <span><i class="fa fa-folder-open me-2"></i>{{ _('Open Positions') }}</span>
-                </div>
+                <div class="card-header"><span><i class="fa fa-folder-open me-2"></i>{{ _('Open Positions') }}</span></div>
                 <div class="card-body">
                     <table id="openTable" class="table table-hover" style="width:100%;">
                         <thead>
                             <tr>
-                                <th data-bs-toggle="tooltip" title="{{ _('The asset being traded') }}">{{ _('Symbol') }}</th>
-                                <th data-bs-toggle="tooltip" title="{{ _('The direction of the trade') }}">{{ _('Side') }}</th>
-                                <th data-bs-toggle="tooltip" title="{{ _('The quantity of the asset held') }}">{{ _('Qty') }}</th>
-                                <th data-bs-toggle="tooltip" title="{{ _('The average price at which the position was opened') }}">{{ _('Open Price') }}</th>
-                                <th data-bs-toggle="tooltip" title="{{ _('The current market price of the asset') }}">{{ _('Current Price') }}</th>
-                                <th data-priority="1" data-bs-toggle="tooltip" title="{{ _('Unrealized Profit or Loss') }}">{{ _('P/L') }}</th>
-                                <th data-bs-toggle="tooltip" title="{{ _('The date and time the position was opened') }}">{{ _('Open Time') }}</th>
-                                <th data-priority="2" data-bs-toggle="tooltip" title="{{ _('Manually close this position') }}">{{ _('Action') }}</th>
+                                <th>{{ _('Symbol') }}</th>
+                                <th>{{ _('Side') }}</th>
+                                <th>{{ _('Qty') }}</th>
+                                <th>{{ _('Open Price') }}</th>
+                                <th>{{ _('Current Price') }}</th>
+                                <th data-priority="1">{{ _('P/L') }}</th>
+                                <th>{{ _('Open Time') }}</th>
+                                <th data-priority="2">{{ _('Action') }}</th>
                             </tr>
                         </thead>
                         <tbody></tbody>
@@ -94,25 +61,13 @@
         <input type="hidden" id="tpSlSide">
         <input type="hidden" id="tpSlQty">
         <input type="hidden" id="tpSlOpenPrice">
-        <div class="row">
-            <div class="col-6 mb-3">
-                <label for="tpPrice" class="form-label">{{ _('Take Profit Price') }}</label>
-                <input type="number" class="form-control" id="tpPrice" step="any" placeholder="{{ _('e.g., 150.25') }}">
-            </div>
-            <div class="col-6 mb-3">
-                <label for="tpPl" class="form-label">{{ _('Take Profit P/L ($)') }}</label>
-                <input type="number" class="form-control" id="tpPl" step="any" placeholder="{{ _('e.g., 20') }}">
-            </div>
+        <div class="row mb-3">
+            <div class="col-6"><label for="tpPrice" class="form-label">{{ _('Take Profit Price') }}</label><input type="number" class="form-control" id="tpPrice" step="any"></div>
+            <div class="col-6"><label for="tpPl" class="form-label">{{ _('Take Profit P/L ($)') }}</label><input type="number" class="form-control" id="tpPl" step="any"></div>
         </div>
         <div class="row">
-            <div class="col-6">
-                <label for="slPrice" class="form-label">{{ _('Stop Loss Price') }}</label>
-                <input type="number" class="form-control" id="slPrice" step="any" placeholder="{{ _('e.g., 140.50') }}">
-            </div>
-            <div class="col-6">
-                <label for="slPl" class="form-label">{{ _('Stop Loss P/L ($)') }}</label>
-                <input type="number" class="form-control" id="slPl" step="any" placeholder="{{ _('e.g., -10') }}">
-            </div>
+            <div class="col-6"><label for="slPrice" class="form-label">{{ _('Stop Loss Price') }}</label><input type="number" class="form-control" id="slPrice" step="any"></div>
+            <div class="col-6"><label for="slPl" class="form-label">{{ _('Stop Loss P/L ($)') }}</label><input type="number" class="form-control" id="slPl" step="any"></div>
         </div>
       </div>
       <div class="modal-footer">
@@ -125,9 +80,12 @@
 </div>
 {% endblock %}
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script>
-    let openTable; // Define table instance in a broader scope
+    let openTable; 
 
+    // FIX: Restore full TP/SL JavaScript logic
     function colorPL(val, isBadge = false, tp = null, sl = null) {
         const sign = val > 0 ? '+' : (val < 0 ? '-' : '');
         const absVal = Math.abs(val).toFixed(2);
@@ -138,8 +96,8 @@
         let baseHtml;
         if (isBadge) {
             let badgeClass = 'bg-neutral';
-            if (val > 0.001) badgeClass = 'bg-profit';
-            if (val < -0.001) badgeClass = 'bg-loss';
+            if (val > 0.001) badgeClass = 'bg-success';
+            if (val < -0.001) badgeClass = 'bg-danger';
             baseHtml = `<span class="badge ${badgeClass}">${sign}$${absVal}</span>`;
         } else {
             baseHtml = `<span class="${className}">${sign}$${absVal}</span>`;
@@ -147,81 +105,89 @@
 
         let tpSlHtml = '';
         if (tp || sl) {
-            tpSlHtml += '<div class="small text-muted" style="line-height: 1;">';
+            tpSlHtml += '<div class="small text-muted" style="line-height: 1.2;">';
             if (tp) tpSlHtml += `<span class="profit">TP: ${tp.toFixed(2)}</span> `;
             if (sl) tpSlHtml += `<span class="loss">SL: ${sl.toFixed(2)}</span>`;
             tpSlHtml += '</div>';
         }
         return `<div>${baseHtml}${tpSlHtml}</div>`;
     }
+    
+    function closePosition(symbol, reason = null, autoConfirm = false) {
+        const swalConfig = {
+            title: `{{ _('Close') }} ${symbol}?`, text: reason, icon: 'warning',
+            showCancelButton: true, confirmButtonColor: '#d33',
+            confirmButtonText: `{{ _('Yes, close it!') }}`, cancelButtonText: `{{ _('Cancel') }}`
+        };
 
-    // --- Core Data Fetching and Table Population ---
+        const executeClose = () => {
+            $.ajax({
+                url: '/api/internal/proxy_trade', method: 'POST', contentType: 'application/json',
+                data: JSON.stringify({symbol: symbol, action: "close", user: "Dashboard"}),
+                success: function(){ 
+                    Swal.fire('{{ _("Success!") }}', `{{ _('Close order for') }} ${symbol} {{ _('sent.') }}`, 'success');
+                    setTimeout(fetchOpenPositions, 1500); 
+                },
+                error: function(xhr){ 
+                     let msg = xhr.responseJSON?.detail || '{{ _("An unknown error occurred.") }}';
+                     Swal.fire('{{ _("Close Failed") }}', msg, "error");
+                }
+            });
+        };
+
+        if (autoConfirm) { executeClose(); } 
+        else { Swal.fire(swalConfig).then((result) => { if(result.isConfirmed) { executeClose(); } }); }
+    }
+
     function fetchOpenPositions() {
         const bracketOrders = JSON.parse(localStorage.getItem('bracketOrders')) || {};
         
         $.get('/api/open_positions', function(data){
-            openTable.clear(); // Use the global instance and clear it
+            openTable.clear();
             let totalPL = 0;
-            const symbolsWithActiveBrackets = Object.keys(bracketOrders);
+            const openSymbols = data.map(p => p.symbol);
 
             data.forEach(r => {
                 totalPL += r.unrealized_pl || 0;
-                let side_text = r.side ? r.side.toUpperCase() : '-';
-                if (side_text === 'BUY') { side_text = `{{ _('BUY') }}` }
-                if (side_text === 'SELL') { side_text = `{{ _('SELL') }}` }
-
-                // Check if a TP/SL should trigger a close
+                let openTimeStr = r.open_time_iso ? luxon.DateTime.fromISO(r.open_time_iso).toFormat('MMM dd, HH:mm') : "-";
+                
                 const bracket = bracketOrders[r.symbol];
                 if (bracket) {
-                    const pl = r.unrealized_pl;
                     const price = r.current_price;
                     let triggerReason = null;
-                    
                     if (bracket.tp && (r.side === 'buy' ? price >= bracket.tp : price <= bracket.tp)) {
                         triggerReason = `Take Profit hit at price ${bracket.tp}`;
                     } else if (bracket.sl && (r.side === 'buy' ? price <= bracket.sl : price >= bracket.sl)) {
                         triggerReason = `Stop Loss hit at price ${bracket.sl}`;
                     }
-                    
                     if(triggerReason) {
-                        console.log(`Triggering close for ${r.symbol}: ${triggerReason}`);
-                        closePosition(r.symbol, triggerReason, true); // Auto-close without confirmation
+                        closePosition(r.symbol, triggerReason, true);
                         delete bracketOrders[r.symbol];
                         localStorage.setItem('bracketOrders', JSON.stringify(bracketOrders));
                     }
                 }
 
                 openTable.row.add([
-                    r.symbol.replace('USD', '/USD'),
-                    side_text,
-                    r.qty.toFixed(4),
-                    (r.open_price || 0).toFixed(4),
-                    (r.current_price || 0).toFixed(4),
-                    colorPL(r.unrealized_pl || 0, false, bracket?.tp, bracket?.sl),
-                    r.open_time_str || '-',
+                    r.symbol.replace('USD', '/USD'), r.side.toUpperCase(), r.qty.toFixed(4),
+                    r.open_price.toFixed(4), r.current_price.toFixed(4),
+                    colorPL(r.unrealized_pl, false, bracket?.tp, bracket?.sl),
+                    openTimeStr,
                     `<div class="btn-group" role="group">
-                        <button class="btn btn-sm btn-outline-info tpsl-btn" data-symbol="${r.symbol}" data-side="${r.side}" data-qty="${r.qty}" data-open-price="${r.open_price}" data-bs-toggle="tooltip" title="{{_('Set Take Profit / Stop Loss')}}">
-                            <i class="fa-solid fa-crosshairs"></i>
-                        </button>
-                        <button class="btn btn-sm btn-outline-danger close-btn" data-symbol="${r.symbol}" data-bs-toggle="tooltip" title="{{_('Close Position Immediately')}}">
-                            <i class="fa fa-times"></i>
-                        </button>
+                        <button class="btn btn-sm btn-outline-info tpsl-btn" data-symbol="${r.symbol}" data-side="${r.side}" data-qty="${r.qty}" data-open-price="${r.open_price}"><i class="fa-solid fa-crosshairs"></i></button>
+                        <button class="btn btn-sm btn-outline-danger close-btn" data-symbol="${r.symbol}"><i class="fa fa-times"></i></button>
                     </div>`
                 ]);
             });
 
-            const openSymbols = data.map(p => p.symbol);
-            symbolsWithActiveBrackets.forEach(symbol => {
-                if (!openSymbols.includes(symbol)) {
-                    delete bracketOrders[symbol];
-                }
+            // Cleanup stale bracket orders from localStorage
+            Object.keys(bracketOrders).forEach(symbol => {
+                if (!openSymbols.includes(symbol)) delete bracketOrders[symbol];
             });
             localStorage.setItem('bracketOrders', JSON.stringify(bracketOrders));
             
-            openTable.draw(false); // Redraw the table without resetting the page
+            openTable.draw(false);
             $("#statPL").html(colorPL(totalPL, true));
             $("#statOpenCount").text(data.length);
-            $('[data-bs-toggle="tooltip"]').tooltip('dispose').tooltip();
         });
     }
 
@@ -231,188 +197,53 @@
             $("#statCash").text("$" + Number(data.cash || 0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}));
         });
     }
-    
-    let tradableSymbols = [];
-    function populateSymbolsDatalist() {
-        $.get('/api/assets', function(data){
-            tradableSymbols = data;
-            const datalist = $('#symbols-datalist');
-            datalist.empty();
-            tradableSymbols.forEach(function(symbol) {
-                datalist.append(`<option value="${symbol}">`);
-            });
-        }).fail(function() {
-            console.error("Failed to fetch tradable assets.");
-        });
-    }
 
-    function validateSymbolInput() {
-        const symbolInput = $('#symbolInput');
-        const currentSymbol = symbolInput.val().toUpperCase();
-        if (tradableSymbols.includes(currentSymbol)) {
-            symbolInput.removeClass('is-invalid');
-        } else {
-            symbolInput.addClass('is-invalid');
-        }
-    }
-
-    function closePosition(symbol, reason = null, autoConfirm = false) {
-        const swalConfig = {
-            title: `{{ _('Close') }} ${symbol}?`,
-            text: reason,
-            icon: 'warning',
-            showCancelButton: true,
-            confirmButtonColor: '#d33',
-            confirmButtonText: `{{ _('Yes, close it!') }}`,
-            cancelButtonText: `{{ _('Cancel') }}`,
-            customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
-        };
-
-        const executeClose = () => {
-            $.ajax({
-                url: '/api/proxy_trade',
-                method: 'POST',
-                contentType: 'application/json',
-                data: JSON.stringify({symbol: symbol, action: "close", user: "Dashboard"}),
-                success: function(){ 
-                    Swal.fire({
-                        title: `{{ _('Success!') }}`, text: `{{ _('Close order for %(symbol)s sent.', symbol=symbol) }}`, icon: 'success',
-                        timer: 1500, showConfirmButton: false,
-                        customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
-                    });
-                    setTimeout(fetchOpenPositions, 1500); 
-                },
-                error: function(xhr){ 
-                    let msg = `{{ _('An unknown error occurred.') }}`;
-                    try { msg = JSON.parse(xhr.responseText).detail || xhr.responseText; } catch(e) { msg = xhr.responseText; }
-                     Swal.fire({ title: `{{ _('Close Failed') }}`, text: msg, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
-                }
-            });
-        };
-
-        if (autoConfirm) {
-            executeClose();
-        } else {
-            Swal.fire(swalConfig).then((result) => {
-                if(result.isConfirmed) {
-                    executeClose();
-                }
-            });
-        }
-    }
-
-    // --- Main Document Ready ---
     $(document).ready(function(){
-        const MIN_CRYPTO_AMOUNT = 10.0;
         const tpSlModal = new bootstrap.Modal(document.getElementById('tpSlModal'));
-
-        openTable = $('#openTable').DataTable({
-            paging: false, 
-            searching: false, 
-            info: false, 
-            responsive: true,
-            order: [[0, 'asc']],
-            columnDefs: [ { responsivePriority: 1, targets: 0 }, { responsivePriority: 3, targets: 5 }, { responsivePriority: 2, targets: 7 } ]
-        });
+        openTable = $('#openTable').DataTable({ paging: false, searching: false, info: false, responsive: true, order: [[0, 'asc']] });
         
-        populateSymbolsDatalist();
-        $('#symbolInput').on('input', validateSymbolInput);
-
         fetchOpenPositions();
         fetchAccountSummary();
         setInterval(fetchOpenPositions, 5000);
         setInterval(fetchAccountSummary, 20000);
-
-        // --- Event Handlers ---
+        
+        // Event Handlers for TP/SL modal
         $('#openTable tbody').on('click', '.tpsl-btn', function() {
             const button = $(this);
-            // Hide the tooltip manually
-            const tooltip = bootstrap.Tooltip.getInstance(this);
-            if (tooltip) {
-                tooltip.hide();
-            }
-            
             $('#tpSlSymbol').text(button.data('symbol'));
             $('#tpSlSide').val(button.data('side'));
             $('#tpSlQty').val(button.data('qty'));
             $('#tpSlOpenPrice').val(button.data('open-price'));
             
-            const bracketOrders = JSON.parse(localStorage.getItem('bracketOrders')) || {};
-            const bracket = bracketOrders[button.data('symbol')];
-            $('#tpPrice').val(bracket?.tp || '');
-            $('#slPrice').val(bracket?.sl || '');
-            $('#tpPl').val('');
-            $('#slPl').val('');
-            
+            const bracket = (JSON.parse(localStorage.getItem('bracketOrders')) || {})[button.data('symbol')];
+            $('#tpPrice').val(bracket?.tp || ''); $('#slPrice').val(bracket?.sl || '');
+            $('#tpPl').val(''); $('#slPl').val('');
             tpSlModal.show();
         });
         
-        function calculateTpSlFromPrice() {
-            const side = $('#tpSlSide').val();
-            const qty = parseFloat($('#tpSlQty').val());
-            const openPrice = parseFloat($('#tpSlOpenPrice').val());
-            
-            const tpPrice = parseFloat($('#tpPrice').val());
-            if (tpPrice && qty > 0) {
-                const tpPl = (side === 'buy') ? (tpPrice - openPrice) * qty : (openPrice - tpPrice) * qty;
-                $('#tpPl').val(tpPl.toFixed(2));
-            } else {
-                 $('#tpPl').val('');
-            }
-            
-            const slPrice = parseFloat($('#slPrice').val());
-            if (slPrice && qty > 0) {
-                const slPl = (side === 'buy') ? (slPrice - openPrice) * qty : (openPrice - slPrice) * qty;
-                $('#slPl').val(slPl.toFixed(2));
-            } else {
-                 $('#slPl').val('');
-            }
-        }
+        const calculateFromPrice = () => {
+            const side = $('#tpSlSide').val(), qty = parseFloat($('#tpSlQty').val()), openPrice = parseFloat($('#tpSlOpenPrice').val());
+            const tpPrice = parseFloat($('#tpPrice').val()), slPrice = parseFloat($('#slPrice').val());
+            if (tpPrice) $('#tpPl').val(((side === 'buy' ? tpPrice - openPrice : openPrice - tpPrice) * qty).toFixed(2)); else $('#tpPl').val('');
+            if (slPrice) $('#slPl').val(((side === 'buy' ? slPrice - openPrice : openPrice - slPrice) * qty).toFixed(2)); else $('#slPl').val('');
+        };
+        const calculateFromPl = () => {
+            const side = $('#tpSlSide').val(), qty = parseFloat($('#tpSlQty').val()), openPrice = parseFloat($('#tpSlOpenPrice').val());
+            const tpPl = parseFloat($('#tpPl').val()), slPl = parseFloat($('#slPl').val());
+            if (tpPl && qty > 0) $('#tpPrice').val((side === 'buy' ? openPrice + (tpPl / qty) : openPrice - (tpPl / qty)).toFixed(4)); else $('#tpPrice').val('');
+            if (slPl && qty > 0) $('#slPrice').val((side === 'buy' ? openPrice + (slPl / qty) : openPrice - (slPl / qty)).toFixed(4)); else $('#slPrice').val('');
+        };
 
-        function calculatePriceFromPl() {
-            const side = $('#tpSlSide').val();
-            const qty = parseFloat($('#tpSlQty').val());
-            const openPrice = parseFloat($('#tpSlOpenPrice').val());
-            
-            const tpPl = parseFloat($('#tpPl').val());
-            if (tpPl && qty > 0) {
-                const priceChange = tpPl / qty;
-                const tpPrice = (side === 'buy') ? openPrice + priceChange : openPrice - priceChange;
-                $('#tpPrice').val(tpPrice.toFixed(4));
-            } else {
-                 $('#tpPrice').val('');
-            }
-
-            const slPl = parseFloat($('#slPl').val());
-            if (slPl && qty > 0) {
-                const priceChange = slPl / qty;
-                const slPrice = (side === 'buy') ? openPrice + priceChange : openPrice - priceChange;
-                $('#slPrice').val(slPrice.toFixed(4));
-            } else {
-                 $('#slPrice').val('');
-            }
-        }
-
-        $('#tpPrice, #slPrice').on('input', calculateTpSlFromPrice);
-        $('#tpPl, #slPl').on('input', calculatePriceFromPl);
+        $('#tpPrice, #slPrice').on('input', calculateFromPrice);
+        $('#tpPl, #slPl').on('input', calculateFromPl);
 
         $('#saveTpSlBtn').on('click', function() {
-            const symbol = $('#tpSlSymbol').text();
-            const tp = parseFloat($('#tpPrice').val());
-            const sl = parseFloat($('#slPrice').val());
-            
+            const symbol = $('#tpSlSymbol').text(), tp = parseFloat($('#tpPrice').val()), sl = parseFloat($('#slPrice').val());
             const bracketOrders = JSON.parse(localStorage.getItem('bracketOrders')) || {};
-            if (!tp && !sl) {
-                delete bracketOrders[symbol];
-            } else {
-                bracketOrders[symbol] = {
-                    tp: isNaN(tp) ? null : tp,
-                    sl: isNaN(sl) ? null : sl
-                };
-            }
+            if (!tp && !sl) delete bracketOrders[symbol];
+            else bracketOrders[symbol] = { tp: isNaN(tp) ? null : tp, sl: isNaN(sl) ? null : sl };
             localStorage.setItem('bracketOrders', JSON.stringify(bracketOrders));
-            tpSlModal.hide();
-            fetchOpenPositions();
+            tpSlModal.hide(); fetchOpenPositions();
         });
 
         $('#clearTpSlBtn').on('click', function() {
@@ -420,79 +251,30 @@
             const bracketOrders = JSON.parse(localStorage.getItem('bracketOrders')) || {};
             delete bracketOrders[symbol];
             localStorage.setItem('bracketOrders', JSON.stringify(bracketOrders));
-            tpSlModal.hide();
-            fetchOpenPositions();
+            tpSlModal.hide(); fetchOpenPositions();
         });
         
-        $('#openTable tbody').on('click', '.close-btn', function(e){
-            e.stopPropagation();
-            let symbol = $(this).data('symbol');
-            closePosition(symbol);
-        });
-
+        // Other event handlers
+        $('#openTable tbody').on('click', '.close-btn', function(){ closePosition($(this).data('symbol')); });
         $('#openTradeForm').on('submit', function(e){
             e.preventDefault();
-            const sym = $('#symbolInput').val().toUpperCase().trim();
-            const side = $('#sideSelect').val();
-            const amount = parseFloat($('#amountInput').val());
-
-            if(!sym || !side || !amount) {
-                 Swal.fire({ title: `{{ _('Invalid Input') }}`, text: `{{ _('Please fill all fields correctly.') }}`, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
-                return;
-            }
-
-            if (!tradableSymbols.includes(sym)) {
-                Swal.fire({ title: `{{ _('Invalid Symbol') }}`, text: `{{ _('The symbol "%(symbol)s" is not tradable or does not exist.', symbol=sym) }}`, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
-                return;
-            }
-
-            const isCrypto = sym.includes('USD') || sym.includes('/');
-            if (isCrypto && amount < MIN_CRYPTO_AMOUNT) {
-                Swal.fire({
-                    title: `{{ _('Amount Too Low') }}`,
-                    text: `{{ _('The minimum order size for crypto is $%(amount)s. Please increase your trade amount.', amount=MIN_CRYPTO_AMOUNT) }}`,
-                    icon: 'warning',
-                    customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
-                });
-                return;
-            }
-
+            const payload = {
+                symbol: $('#symbolInput').val().toUpperCase().trim(), action: $('#sideSelect').val(),
+                amount: parseFloat($('#amountInput').val()), user: "Dashboard"
+            };
             $.ajax({
-                url: '/api/proxy_trade',
-                method: 'POST',
-                contentType: 'application/json',
-                data: JSON.stringify({symbol: sym, action: side, user: "Dashboard", amount: amount}),
-                success: function(response){
-                    Swal.fire({
-                        title: `{{ _('Success!') }}`, text: `{{ _('Trade order for %(symbol)s sent.', symbol=sym) }}`, icon: 'success',
-                        timer: 1500, showConfirmButton: false,
-                        customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
-                    });
+                url: '/api/internal/proxy_trade', method: 'POST', contentType: 'application/json', data: JSON.stringify(payload),
+                success: function(){
+                    const successMessage = `{{ _('Trade order for') }} ${payload.symbol} {{ _('sent.') }}`;
+                    Swal.fire('{{ _("Success!") }}', successMessage, 'success');
                     setTimeout(fetchOpenPositions, 1500);
                 },
                 error: function(xhr){
-                    let msg = `{{ _('An unknown error occurred.') }}`;
-                    try { msg = JSON.parse(xhr.responseText).detail || JSON.parse(xhr.responseText).error || xhr.responseText; } catch(e) { msg = xhr.responseText; }
-                    Swal.fire({ title: `{{ _('Trade Failed') }}`, text: msg, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
+                    let msg = xhr.responseJSON?.detail || '{{ _("An unknown error occurred.") }}';
+                    Swal.fire('{{ _("Trade Failed") }}', msg, 'error');
                 }
             });
         });
     });
 </script>
-<style>
-/* Style for invalid symbol input */
-.form-control.is-invalid {
-    color: var(--loss-color-text);
-    border-color: var(--loss-color-text);
-}
-/* SweetAlert2 Dark Theme */
-.swal2-popup.swal2-dark {
-    background: var(--card-bg) !important;
-    color: var(--text-color) !important;
-}
-.swal2-dark .swal2-title,
-.swal2-dark .swal2-html-container {
-    color: var(--text-color) !important;
-}
-</style>
 {% endblock %}

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}DB Management - TradingBot{% endblock %}
+{% block content %}
+<div class="container my-4 animate__animated animate__fadeIn">
+    <h3 class="mb-3">Database & System Management</h3>
+    <div class="row justify-content-center">
+        <div class="col-12 col-md-10 col-lg-8">
+            
+            <div class="card shadow-sm mb-4">
+                <div class="card-header">
+                    <i class="fa-solid fa-sync me-2"></i>Symbol List Management
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">The list of tradable symbols is updated automatically. You can force a manual update here.</p>
+                    <a href="{{ url_for('admin_update_symbols') }}" class="btn btn-info"><i class="fa-solid fa-sync me-2"></i>Update Symbol List Now</a>
+                </div>
+            </div>
+
+            <div class="card shadow-sm mb-4">
+                <div class="card-header">
+                    <i class="fa-solid fa-download me-2"></i>Backup Database
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">Download a complete backup of your trade history database.</p>
+                    <a href="{{ url_for('admin_backup_db') }}" class="btn btn-primary"><i class="fa-solid fa-database me-2"></i>Download Manual Backup</a>
+                </div>
+            </div>
+            
+            <div class="card shadow-sm">
+                <div class="card-header text-danger">
+                    <i class="fa-solid fa-bomb me-2"></i>Re-initialize Database
+                </div>
+                <div class="card-body">
+                    <p class="text-danger"><strong>DANGER:</strong> This will permanently erase ALL trades and user data, resetting the database to a clean slate.</p>
+                    <form action="{{ url_for('admin_db_management') }}" method="post" onsubmit="return confirm('Are you absolutely sure you want to erase all data? This cannot be undone.');">
+                        <input type="hidden" name="action" value="reinitialize">
+                        <button type="submit" class="btn btn-danger w-100"><i class="fa-solid fa-skull-crossbones me-2"></i>Re-initialize Database</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
