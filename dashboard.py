@@ -55,20 +55,18 @@ INTERNAL_API_KEY = os.getenv('INTERNAL_API_KEY', 'your-very-secret-internal-key'
 BASE_URL = os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
 BOT_WEBHOOK = os.getenv('TRADING_BOT_URL', 'http://127.0.0.1:5000/webhook')
 
-# --- Setup & Logging ---
-def setup_logger(name, log_file, level=logging.INFO):
-    """Function to set up a rotating file logger."""
-    handler = RotatingFileHandler(log_file, maxBytes=100000, backupCount=5)
-    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'))
-    
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
-    if not logger.handlers:
-        logger.addHandler(handler)
-    return logger
+# --- Enhanced Logging Setup ---
+log_handler = RotatingFileHandler('dashboard.log', maxBytes=100000, backupCount=5)
+log_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'))
+app.logger.addHandler(log_handler)
+app.logger.setLevel(logging.INFO)
+logging.getLogger('werkzeug').addHandler(log_handler)
+login_logger_handler = RotatingFileHandler('login.log', maxBytes=10000, backupCount=3)
+login_logger_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+login_logger = logging.getLogger('login_logger')
+login_logger.setLevel(logging.INFO)
+login_logger.addHandler(login_logger_handler)
 
-logger = setup_logger('dashboard_logger', 'dashboard.log')
-login_logger = setup_logger('login_logger', 'login.log')
 db.init_app(app)
 
 def get_locale():
@@ -78,8 +76,7 @@ babel = Babel(app, locale_selector=get_locale)
 
 @app.context_processor
 def inject_globals():
-    """Makes variables available to all templates."""
-    return dict(get_locale=get_locale, config=app.config)
+    return dict(get_locale=get_locale, config=app.config, g=g)
 
 # --- User and Auth Management ---
 @app.before_request
@@ -108,12 +105,11 @@ def superuser_required(f):
 def get_user_api(user):
     key = decrypt_data(user.encrypted_alpaca_key)
     secret = decrypt_data(user.encrypted_alpaca_secret)
-    if not key or not secret:
-        return None
+    if not key or not secret: return None
     try:
         return tradeapi.REST(key, secret, BASE_URL, api_version='v2')
     except Exception as e:
-        logger.error(f"[API_FAIL] Failed to initialize Alpaca API for {user.username}: {e}")
+        app.logger.error(f"[API_FAIL] Failed to initialize Alpaca API for {user.username}: {e}")
         return None
 
 # --- Core Routes ---
@@ -126,13 +122,14 @@ def login():
         password = request.form['password']
         user = User.query.filter_by(username=username).first()
         ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
+        user_agent = request.user_agent.string
         if user and check_password_hash(user.password_hash, password):
             session.clear()
             session['user_id'] = user.id
-            login_logger.info(f"SUCCESSFUL LOGIN - User: '{username}', IP: {ip_address}")
+            login_logger.info(f"SUCCESSFUL LOGIN | UserID: {user.id}, Username: '{username}', Email: '{user.email}', IP: {ip_address}, Agent: '{user_agent}'")
             flash(gettext("Logged in."), "success")
             return redirect(request.args.get('next') or url_for('dashboard'))
-        login_logger.warning(f"FAILED LOGIN ATTEMPT - User: '{username}', IP: {ip_address}")
+        login_logger.warning(f"FAILED LOGIN ATTEMPT | Attempted Username: '{username}', IP: {ip_address}, Agent: '{user_agent}'")
         flash(gettext("Invalid credentials."), "danger")
     return render_template('login.html')
 
@@ -154,14 +151,15 @@ def register():
             )
             db.session.add(new_user)
             db.session.commit()
-            logger.info(f"[USER_ACTION] New user '{username}' registered.")
+            app.logger.info(f"[USER_ACTION] New user '{username}' registered.")
             flash("Registration successful! Please log in.", "success")
             return redirect(url_for('login'))
     return render_template('register.html')
 
 @app.route('/logout')
+@login_required
 def logout():
-    logger.info(f"[USER_ACTION] User '{g.user.username}' logged out.")
+    app.logger.info(f"[USER_ACTION] User '{g.user.username}' logged out.")
     session.clear()
     flash(gettext("Logged out."), "info")
     return redirect(url_for('login'))
@@ -206,7 +204,7 @@ def user_config():
             g.user.per_trade_amount = float(request.form['per_trade_amount'])
             g.user.tradingview_user = new_tv_user
             db.session.commit()
-            logger.info(f"[USER_ACTION] User '{g.user.username}' updated their configuration.")
+            app.logger.info(f"[USER_ACTION] User '{g.user.username}' updated their configuration.")
             flash("Configuration saved successfully!", "success")
         return redirect(url_for('user_config'))
     return render_template('user_config.html', user=g.user, decrypt=decrypt_data, current_user=g.user)
@@ -222,41 +220,41 @@ def set_language(lang=None):
 def admin_db_management():
     if request.method == 'POST' and request.form.get('action') == 'reinitialize':
         try:
-            logger.warning(f"[DATABASE] Admin '{g.user.username}' initiated database re-initialization.")
+            app.logger.warning(f"[DATABASE] Admin '{g.user.username}' initiated database re-initialization.")
             db.drop_all()
             init_db()
-            logger.info("[DATABASE] Database reinitialized successfully.")
+            app.logger.info("[DATABASE] Database reinitialized successfully.")
             flash("Database reinitialized successfully!", "success")
         except Exception as e:
-            logger.error(f"[DATABASE] Error during DB re-initialization by '{g.user.username}': {e}")
+            app.logger.error(f"[DATABASE] Error during DB re-initialization by '{g.user.username}': {e}")
             flash(f"Error reinitializing database: {e}", "danger")
         return redirect(url_for('admin_db_management'))
     return render_template('admin/db_management.html', current_user=g.user)
 
 def update_symbols_task():
     with app.app_context():
-        logger.info("[SYSTEM] Starting symbol update task.")
+        app.logger.info("[SYSTEM] Starting symbol update task.")
         api_user = User.query.filter_by(is_superuser=True).first() or User.query.first()
         if not api_user:
-            logger.error("[SYSTEM] Cannot update symbols: No users found in database.")
+            app.logger.error("[SYSTEM] Cannot update symbols: No users found in database.")
             return
         api = get_user_api(api_user)
         if not api:
-            logger.error(f"[SYSTEM] Cannot update symbols: Could not initialize API for user '{api_user.username}'.")
+            app.logger.error(f"[SYSTEM] Cannot update symbols: Could not initialize API for user '{api_user.username}'.")
             return
         symbols_file = os.path.join(app.instance_path, 'tradable_symbols.json')
         try:
             assets = api.list_assets(status='active')
             symbols = [a.symbol for a in assets if a.tradable]
             with open(symbols_file, 'w') as f: json.dump(sorted(symbols), f)
-            logger.info(f"[SYSTEM] Successfully updated and saved {len(symbols)} symbols.")
+            app.logger.info(f"[SYSTEM] Successfully updated and saved {len(symbols)} symbols.")
         except Exception as e:
-            logger.error(f"[SYSTEM] Failed to update symbol list: {e}")
+            app.logger.error(f"[SYSTEM] Failed to update symbol list: {e}")
 
 @app.route('/admin/update_symbols')
 @superuser_required
 def admin_update_symbols():
-    logger.info(f"[SYSTEM] Admin '{g.user.username}' manually initiated symbol list update.")
+    app.logger.info(f"[SYSTEM] Admin '{g.user.username}' manually initiated symbol list update.")
     threading.Thread(target=update_symbols_task).start()
     flash("Symbol list update initiated in the background.", 'info')
     return redirect(url_for('admin_db_management'))
@@ -282,15 +280,15 @@ def admin_logs():
 def admin_backup_db():
     try:
         db_path_str = app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
-        db_path = os.path.join(app.instance_path, db_path_str)
+        db_path = os.path.join(app.instance_path, db_path_str) if 'instance' not in db_path_str else os.path.join(os.path.dirname(app.instance_path), db_path_str)
         db_dir = os.path.dirname(db_path)
         db_filename = os.path.basename(db_path)
         backup_filename = f"backup-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.db"
-        logger.info(f"[DATABASE] Admin '{g.user.username}' created a database backup: {backup_filename}")
+        app.logger.info(f"[DATABASE] Admin '{g.user.username}' created a database backup: {backup_filename}")
         return send_from_directory(directory=db_dir, path=db_filename, as_attachment=True, download_name=backup_filename)
     except Exception as e:
         flash(f'Error creating backup: {e}', 'danger')
-        logger.error(f"[DATABASE] Backup failed for admin '{g.user.username}': {e}")
+        app.logger.error(f"[DATABASE] Backup failed for admin '{g.user.username}': {e}")
         return redirect(url_for('admin_db_management'))
 
 @app.route('/admin/users')
@@ -298,6 +296,11 @@ def admin_backup_db():
 def admin_user_management():
     users = User.query.order_by(User.id).all()
     return render_template('admin/user_management.html', users=users, current_user=g.user)
+    
+@app.route('/admin/all_open_trades')
+@superuser_required
+def admin_all_open_trades():
+    return render_template('admin/open_trades.html', current_user=g.user)
 
 @app.route('/admin/health')
 @superuser_required
@@ -320,7 +323,7 @@ def admin_create_user():
     new_user = User(username=username, email=email, tradingview_user=tv_user, password_hash=generate_password_hash(password), is_trading_restricted=False)
     db.session.add(new_user)
     db.session.commit()
-    logger.info(f"[USER_ACTION] Admin '{g.user.username}' created new user '{username}'.")
+    app.logger.info(f"[USER_ACTION] Admin '{g.user.username}' created new user '{username}'.")
     flash(f'User {username} created successfully.', 'success')
     return redirect(url_for('admin_user_management'))
 
@@ -336,7 +339,7 @@ def admin_update_user(user_id):
         user.tradingview_user = request.form['tradingview_user']
         user.is_trading_restricted = 'is_trading_restricted' in request.form
         db.session.commit()
-        logger.info(f"[USER_ACTION] Admin '{g.user.username}' updated user '{user.username}'. Restricted status: {user.is_trading_restricted}")
+        app.logger.info(f"[USER_ACTION] Admin '{g.user.username}' updated user '{user.username}'. Restricted status: {user.is_trading_restricted}")
         flash(f'User {user.username} updated successfully.', 'success')
     return redirect(url_for('admin_user_management'))
 
@@ -349,7 +352,7 @@ def admin_reset_password(user_id):
         if new_password:
             user.password_hash = generate_password_hash(new_password)
             db.session.commit()
-            logger.info(f"[USER_ACTION] Admin '{g.user.username}' reset password for user '{user.username}'.")
+            app.logger.info(f"[USER_ACTION] Admin '{g.user.username}' reset password for user '{user.username}'.")
             flash(f"Password for {user.username} has been reset.", 'success')
         else:
             flash("Password cannot be empty.", "danger")
@@ -361,7 +364,7 @@ def admin_delete_user(user_id):
     user = db.session.get(User, user_id)
     if user and not user.is_superuser:
         trade_count = Trade.query.filter_by(user_id=user.id).count()
-        logger.warning(f"[USER_ACTION] Admin '{g.user.username}' is deleting user '{user.username}' and their {trade_count} trades.")
+        app.logger.warning(f"[USER_ACTION] Admin '{g.user.username}' is deleting user '{user.username}' and their {trade_count} trades.")
         Trade.query.filter_by(user_id=user.id).delete()
         db.session.delete(user)
         db.session.commit()
@@ -402,7 +405,7 @@ def api_admin_health_data():
         if os.path.exists(db_path):
             db_size_mb = round(os.path.getsize(db_path) / (1024 * 1024), 2)
     except Exception as e:
-        logger.error(f"[SYSTEM] Could not calculate DB size: {e}")
+        app.logger.error(f"[SYSTEM] Could not calculate DB size: {e}")
 
     return jsonify({
         'bot_status': bot_status, 'last_webhook_utc': last_webhook_utc, 'db_size_mb': db_size_mb,
@@ -427,12 +430,37 @@ def api_admin_dashboard_summary():
                 user_data['open_pl'] = f"${total_pl:,.2f}"
                 user_data['open_trades_count'] = len(positions)
             except Exception as e:
-                logger.warning(f"[API_FAIL] Could not fetch account summary for {user.username}: {e}")
+                app.logger.warning(f"[API_FAIL] Could not fetch account summary for {user.username}: {e}")
                 user_data['equity'] = 'Error'
         else:
             user_data['equity'] = 'No API Keys'
         summary_data.append(user_data)
     return jsonify(summary_data)
+    
+@app.route('/api/admin/performance_leaderboard')
+@superuser_required
+def api_admin_performance_leaderboard():
+    closed_trades = Trade.query.filter(Trade.status == 'closed').all()
+    user_stats = {}
+    for trade in closed_trades:
+        if trade.user_id not in user_stats:
+            user_stats[trade.user_id] = {
+                'username': trade.user.username, 'total_pl': 0, 
+                'wins': 0, 'losses': 0, 'total_trades': 0
+            }
+        stats = user_stats[trade.user_id]
+        stats['total_pl'] += trade.profit_loss or 0
+        stats['total_trades'] += 1
+        if (trade.profit_loss or 0) > 0:
+            stats['wins'] += 1
+        elif (trade.profit_loss or 0) < 0:
+            stats['losses'] += 1
+    leaderboard = []
+    for stats in user_stats.values():
+        total = stats['wins'] + stats['losses']
+        stats['win_rate'] = (stats['wins'] / total * 100) if total > 0 else 0
+        leaderboard.append(stats)
+    return jsonify(leaderboard)
 
 @app.route('/api/open_positions')
 @login_required
@@ -443,7 +471,7 @@ def api_open_positions():
         positions = api.list_positions()
         db_trades = {t.symbol: t.open_time for t in Trade.query.filter_by(status='open', user_id=g.user.id).all()}
     except Exception as e:
-        logger.error(f"[API_FAIL] Error fetching positions for user {g.user.username}: {e}")
+        app.logger.error(f"[API_FAIL] Error fetching positions for user {g.user.username}: {e}")
         return jsonify([])
     out = []
     for p in positions:
@@ -478,7 +506,7 @@ def api_account():
 def proxy_trade_internal():
     payload = request.get_json(force=True)
     payload['user'] = g.user.tradingview_user
-    logger.info(f"[TRADE] Manual trade proxied by '{g.user.username}': {payload}")
+    app.logger.info(f"[TRADE] Manual trade proxied by '{g.user.username}': {payload}")
     try:
         r = requests.post(BOT_WEBHOOK, json=payload, timeout=10)
         r.raise_for_status()
@@ -488,13 +516,13 @@ def proxy_trade_internal():
         if hasattr(e, 'response') and e.response is not None:
             try: detail = e.response.json().get('error', e.response.text)
             except: detail = e.response.text
-        logger.error(f"[BOT_PROXY_FAIL] Proxy to bot failed: {detail}")
+        app.logger.error(f"[BOT_PROXY_FAIL] Proxy to bot failed: {detail}")
         return jsonify({'error': 'proxy_failed', 'detail': detail}), 500
 
 @app.route('/api/internal/record_trade', methods=['POST'])
 def record_trade_internal():
     if request.headers.get('X-Internal-API-Key') != INTERNAL_API_KEY:
-        logger.warning("[SECURITY] Unauthorized attempt to access internal record_trade API.")
+        app.logger.warning("[SECURITY] Unauthorized attempt to access internal record_trade API.")
         return jsonify({'error': 'Unauthorized'}), 401
     data = request.get_json()
     def background_task(data_dict, app_context):
@@ -502,7 +530,7 @@ def record_trade_internal():
             try:
                 user_id = data_dict.get('user_id')
                 payload = data_dict.get('payload')
-                logger.info(f"[DATABASE] Background task recording trade for user_id={user_id}.")
+                app.logger.info(f"[DATABASE] Background task recording trade for user_id={user_id}.")
                 if data_dict.get('result') == 'opened':
                     record_open_trade(data_dict, payload, user_id)
                 elif data_dict.get('result') == 'closed':
@@ -512,39 +540,25 @@ def record_trade_internal():
                     position_obj = MockPosition(**pos_data) if pos_data else None
                     record_closed_trade(data_dict, payload, user_id, position_obj)
             except Exception as e:
-                logger.error(f"[DATABASE] Error in background trade recording: {e}", exc_info=True)
+                app.logger.error(f"[DATABASE] Error in background trade recording: {e}", exc_info=True)
     threading.Thread(target=background_task, args=(data, app.app_context())).start()
     return jsonify({"status": "accepted"}), 202
 
-# --- The init_db function with the robust password sync ---
 def init_db():
     with app.app_context():
         db.create_all()
-        
-        # FIX: Always sync the admin user from .env to the DB on startup
-        if not ADMIN_USER or not ADMIN_PASS:
-            raise ValueError("ADMIN_USERNAME and ADMIN_PASSWORD must be set in the .env file.")
+        if not User.query.filter_by(username=ADMIN_USER).first():
+            if not ADMIN_PASS:
+                raise ValueError("ADMIN_PASSWORD must be set in .env on first run to create superuser")
             
-        hashed_pw = generate_password_hash(ADMIN_PASS)
-        admin = User.query.filter_by(username=ADMIN_USER).first()
-
-        if not admin:
-            # If admin doesn't exist, create it
-            admin = User(
-                username=ADMIN_USER, 
-                email=f"{ADMIN_USER}@example.com",
-                password_hash=hashed_pw,
-                tradingview_user=f"tv_{ADMIN_USER}", 
-                is_superuser=True
+            superuser = User(
+                username=ADMIN_USER, email=f"{ADMIN_USER}@example.com",
+                password_hash=generate_password_hash(ADMIN_PASS),
+                tradingview_user=f"tv_{ADMIN_USER}", is_superuser=True
             )
-            db.session.add(admin)
+            db.session.add(superuser)
+            db.session.commit()
             app.logger.info(f"[SYSTEM] Superuser '{ADMIN_USER}' created.")
-        else:
-            # If admin exists, just update the password to match .env
-            admin.password_hash = hashed_pw
-            app.logger.info(f"[SYSTEM] Superuser '{ADMIN_USER}' password synced from .env file.")
-        
-        db.session.commit()
 
 if __name__ == "__main__":
     with app.app_context():

@@ -2,6 +2,29 @@
 {% block title %}{{ _('Closed Trades') }} - {{ _('TradingBot') }}{% endblock %}
 {% block content %}
 <div class="container-fluid my-4 animate__animated animate__fadeIn">
+
+    {% if g.user.is_superuser %}
+    <div class="card shadow-sm mb-4">
+        <div class="card-header"><i class="fa-solid fa-trophy me-2"></i>Performance Leaderboard</div>
+        <div class="card-body">
+            <table id="leaderboardTable" class="table table-hover" style="width:100%;">
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Username</th>
+                        <th>Total P/L</th>
+                        <th>Win Rate</th>
+                        <th>Wins</th>
+                        <th>Losses</th>
+                        <th>Total Trades</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
     <div class="row mb-3 align-items-end gy-3">
         <div class="col-md-auto">
             <label class="form-label small">{{ _('Filter by Close Date') }}</label>
@@ -23,7 +46,7 @@
                 </div>
             </div>
         </div>
-        {% if current_user.is_superuser and all_users %}
+        {% if g.user.is_superuser and all_users %}
         <div class="col-md-auto">
             <label for="userFilter" class="form-label small">Filter by User</label>
             <select id="userFilter" class="form-select form-select-sm">
@@ -35,8 +58,9 @@
         </div>
         {% endif %}
     </div>
+    
     <div class="row g-4">
-        <div class="col-12 col-lg-8">
+        <div class="col-12 {% if not g.user.is_superuser %}col-lg-8{% endif %}">
             <div class="card shadow-sm">
                 <div class="card-header"><i class="fa fa-check-circle me-2"></i>{{ _('Closed Orders') }}</div>
                 <div class="card-body">
@@ -59,6 +83,7 @@
                 </div>
             </div>
         </div>
+        {% if not g.user.is_superuser %}
         <div class="col-12 col-lg-4">
             <div class="card shadow-sm mb-3">
                 <div class="card-header"><i class="fa-solid fa-calculator me-2"></i>{{ _('Filtered Stats') }}</div>
@@ -73,6 +98,7 @@
                 </div>
             </div>
         </div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}
@@ -81,6 +107,7 @@
 <script>
     let allClosedOrders = [];
     let closedOrdersTable;
+    let leaderboardTable;
 
     function toLocalTime(isoString) {
         if (!isoString) return "-";
@@ -95,8 +122,7 @@
     }
 
     function fetchAndRenderTrades() {
-        const userId = $('#userFilter').length ? $('#userFilter').val() : '{{ current_user.id }}';
-        
+        const userId = $('#userFilter').length ? $('#userFilter').val() : '{{ g.user.id }}';
         $.get('/api/closed_orders', { user_id: userId }, function(data) {
             allClosedOrders = data;
             renderFilteredTrades();
@@ -115,25 +141,22 @@
         closedOrdersTable.clear();
         filtered.forEach(r => {
             closedOrdersTable.row.add([
-                r.symbol.replace('USD', '/USD'),
-                r.side ? r.side.toUpperCase() : '-',
-                r.open_price ? r.open_price.toFixed(4) : '-',
-                r.close_price ? r.close_price.toFixed(4) : '-',
-                colorPL(r.profit_loss, true),
-                r.profit_loss_pct ? r.profit_loss_pct.toFixed(2) + '%' : '-',
-                toLocalTime(r.open_time),
-                toLocalTime(r.close_time),
+                r.symbol.replace('USD', '/USD'), r.side ? r.side.toUpperCase() : '-',
+                r.open_price ? r.open_price.toFixed(4) : '-', r.close_price ? r.close_price.toFixed(4) : '-',
+                colorPL(r.profit_loss, true), r.profit_loss_pct ? r.profit_loss_pct.toFixed(2) + '%' : '-',
+                toLocalTime(r.open_time), toLocalTime(r.close_time),
                 r.action ? `<span class="badge bg-info text-dark">${r.action}</span>` : ''
             ]);
         });
         closedOrdersTable.draw();
-        updateStatsPanel(filtered);
+        
+        if (!$('#leaderboardTable').length) {
+            updateStatsPanel(filtered);
+        }
     }
     
     function updateStatsPanel(filteredTrades) {
-        let totalPL = 0, wins = 0, losses = 0;
-        let bestTrade = null, worstTrade = null;
-
+        let totalPL = 0, wins = 0, losses = 0, bestTrade = null, worstTrade = null;
         filteredTrades.forEach(trade => {
             const pl = trade.profit_loss || 0;
             totalPL += pl;
@@ -141,9 +164,7 @@
             if (!bestTrade || pl > bestTrade.profit_loss) bestTrade = trade;
             if (!worstTrade || pl < worstTrade.profit_loss) worstTrade = trade;
         });
-
         const winrate = wins + losses > 0 ? (100 * wins / (wins + losses)).toFixed(1) : "0";
-        
         $("#ctStatPL").html(`{{ _('Total Net P/L') }}: ${colorPL(totalPL)}`);
         $("#ctStatWinrate").text(`{{ _('Win Rate') }}: ${winrate}%`);
         $("#ctStatWins").text(`{{ _('Wins') }}: ${wins}`);
@@ -157,10 +178,25 @@
             paging: true, pageLength: 10, searching: true, info: true, responsive: true, order: [[7, "desc"]]
         });
         
+        if ($('#leaderboardTable').length) {
+            leaderboardTable = $('#leaderboardTable').DataTable({
+                paging: false, searching: false, info: false, order: [[2, 'desc']]
+            });
+            $.get('/api/admin/performance_leaderboard', function(data) {
+                leaderboardTable.clear();
+                data.forEach((user, index) => {
+                    leaderboardTable.row.add([
+                        index + 1, user.username, colorPL(user.total_pl),
+                        user.win_rate.toFixed(1) + '%', user.wins, user.losses, user.total_trades
+                    ]);
+                });
+                leaderboardTable.draw();
+            });
+        }
+        
         fetchAndRenderTrades();
 
-        $('#dateFrom, #dateTo').on('change', renderFilteredTrades);
-        $('#userFilter').on('change', fetchAndRenderTrades);
+        $('#dateFrom, #dateTo, #userFilter').on('change', fetchAndRenderTrades);
         
         $('[data-preset]').on('click', function() {
             const preset = $(this).data('preset'), now = luxon.DateTime.now();
@@ -171,12 +207,12 @@
             else if (preset === 'year') start = now.startOf('year');
             $('#dateFrom').val(start.toISODate());
             $('#dateTo').val(now.toISODate());
-            renderFilteredTrades();
+            fetchAndRenderTrades();
         });
 
         $('#clearDate').on('click', function() {
             $('#dateFrom, #dateTo').val('');
-            renderFilteredTrades();
+            fetchAndRenderTrades();
         });
     });
 </script>

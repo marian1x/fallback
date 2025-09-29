@@ -16,7 +16,6 @@ from utils import decrypt_data
 load_dotenv()
 
 app = Flask(__name__)
-# Correctly create the instance path if it doesn't exist
 try:
     os.makedirs(app.instance_path)
 except OSError:
@@ -66,7 +65,6 @@ def get_last_price(api_client, symbol):
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    # FIX: Use an absolute path inside the instance folder for reliability
     webhook_log_path = os.path.join(app.instance_path, 'last_webhook.log')
     try:
         with open(webhook_log_path, 'w') as f:
@@ -86,19 +84,19 @@ def webhook():
         user = User.query.filter_by(tradingview_user=tradingview_user).first()
 
     if not user:
-        logger.error(f"[TRADE_REJECTED] No registered user found for tradingview_user='{tradingview_user}'")
+        logger.error(f"[TRADE_REJECTED] No registered user for TV user='{tradingview_user}'")
         return jsonify({"error": f"User '{tradingview_user}' not registered"}), 403
 
     if user.is_trading_restricted:
-        logger.warning(f"[TRADE_REJECTED] User '{user.username}' is restricted from trading by an admin.")
+        logger.warning(f"[TRADE_REJECTED] User '{user.username}' is restricted from trading.")
         return jsonify({"error": "Trading for this user is currently restricted"}), 403
 
     api_key = decrypt_data(user.encrypted_alpaca_key)
     api_secret = decrypt_data(user.encrypted_alpaca_secret)
 
     if not api_key or not api_secret:
-        logger.error(f"[TRADE_REJECTED] User '{user.username}' has not configured Alpaca API credentials.")
-        return jsonify({"error": "Alpaca credentials not configured for this user"}), 500
+        logger.error(f"[TRADE_REJECTED] User '{user.username}' has no API credentials.")
+        return jsonify({"error": "Alpaca credentials not configured"}), 500
 
     api = tradeapi.REST(api_key, api_secret, BASE_URL, api_version='v2')
     symbol = payload.get("symbol")
@@ -110,66 +108,70 @@ def webhook():
 
     api_symbol = symbol.replace('/', '')
 
-    # --- CLOSE LOGIC ---
     if is_close_action(action):
         try:
             position_to_close = api.get_position(api_symbol)
             close_order = api.close_position(api_symbol)
-            logger.info(f"[TRADE_EXECUTED] User '{user.username}' submitted CLOSE order {close_order.id} for {api_symbol}")
-            
+            logger.info(f"[TRADE_EXECUTED] User '{user.username}' CLOSE order {close_order.id} for {api_symbol}")
             notification_payload = { "result": "closed", "symbol": symbol, "close_order_id": close_order.id, "payload": payload, "user_id": user.id,
                                      "position_obj": { 'avg_entry_price': position_to_close.avg_entry_price, 'qty': position_to_close.qty, 'side': position_to_close.side, 'asset_id': position_to_close.asset_id } }
             requests.post(f"{DASHBOARD_INTERNAL_URL}/api/internal/record_trade", json=notification_payload, headers={'X-Internal-API-Key': INTERNAL_API_KEY}, timeout=3)
-            return jsonify({"result": "closed", "symbol": symbol, "close_order_id": close_order.id}), 200
+            return jsonify({"result": "closed", "close_order_id": close_order.id}), 200
         except tradeapi.rest.APIError as e:
             if "position not found" in str(e).lower():
-                logger.warning(f"[TRADE_INFO] User '{user.username}' attempted to close {api_symbol}, but no position exists on Alpaca.")
+                logger.warning(f"[TRADE_INFO] User '{user.username}' tried to close {api_symbol}, but no position exists.")
                 return jsonify({"result": "no_position_to_close", "symbol": symbol}), 200
             else:
-                logger.error(f"[TRADE_FAIL] Error closing {api_symbol} for user '{user.username}': {e}")
+                logger.error(f"[TRADE_FAIL] Error closing {api_symbol} for '{user.username}': {e}")
                 return jsonify({"error": str(e)}), 500
         except Exception as e:
             logger.error(f"[TRADE_FAIL] A general error occurred while closing {api_symbol} for '{user.username}': {e}")
             return jsonify({"error": str(e)}), 500
 
-    # --- OPEN LOGIC ---
     if action.lower() in ["buy", "sell"]:
         try:
             api.get_position(api_symbol)
-            logger.warning(f"[TRADE_REJECTED] User '{user.username}' already has an open position for {api_symbol}.")
+            logger.warning(f"[TRADE_REJECTED] User '{user.username}' already has position for {api_symbol}.")
             return jsonify({"error": f"{api_symbol} position already open."}), 409
         except tradeapi.rest.APIError:
-            pass # Position does not exist, so we can proceed.
+            pass
         except Exception as e:
-            logger.error(f"[TRADE_FAIL] Could not verify existing position for '{user.username}' on {api_symbol}: {e}")
+            logger.error(f"[TRADE_FAIL] Could not verify position for '{user.username}' on {api_symbol}: {e}")
             return jsonify({"error": "Failed to verify existing position"}), 500
 
         try:
             last_price = get_last_price(api, symbol)
-            if last_price == 0: return jsonify({"error": f"Could not fetch a valid price for {symbol}."}), 400
+            if last_price == 0: return jsonify({"error": f"Could not fetch price for {symbol}."}), 400
+
+            qty_to_log = 0.0
 
             if is_crypto(symbol):
                 qty = amount / last_price
+                qty_to_log = qty
                 order_params = {'symbol': api_symbol, 'side': action.lower(), 'type': 'market', 'qty': qty, 'time_in_force': 'gtc'}
             else:
                 if action.lower() == 'buy':
+                    qty_to_log = amount / last_price
                     order_params = {'symbol': api_symbol, 'side': 'buy', 'type': 'market', 'notional': amount, 'time_in_force': 'day'}
                 else: # Sell (Short)
                     qty = math.floor(amount / last_price)
+                    qty_to_log = qty
                     if qty == 0:
-                        logger.warning(f"[TRADE_REJECTED] Amount ${amount} is too small to short 1 share of {api_symbol} at ${last_price}.")
-                        return jsonify({"error": f"Amount ${amount} is too small to short 1 share of {api_symbol} at ${last_price}."}), 400
+                        logger.warning(f"[TRADE_REJECTED] Amount ${amount} too small to short {api_symbol}.")
+                        return jsonify({"error": f"Amount ${amount} too small to short {api_symbol}."}), 400
                     order_params = {'symbol': api_symbol, 'side': 'sell', 'type': 'market', 'qty': qty, 'time_in_force': 'day'}
 
             order = api.submit_order(**order_params)
-            logger.info(f"[TRADE_EXECUTED] User '{user.username}' submitted OPEN order {order.id} for {api_symbol}")
+            logger.info(f"[TRADE_EXECUTED] User '{user.username}' OPEN order {order.id} for {api_symbol}")
             
-            notification_payload = { "result": "opened", "order_id": order.id, "symbol": symbol, "side": action.lower(), "price": last_price, "payload": payload, "user_id": user.id,
-                                     "qty": order_params.get('qty', amount / last_price if 'notional' not in order_params else None) }
+            notification_payload = { 
+                "result": "opened", "order_id": order.id, "symbol": symbol, "side": action.lower(), 
+                "price": last_price, "payload": payload, "user_id": user.id, "qty": qty_to_log
+            }
             requests.post(f"{DASHBOARD_INTERNAL_URL}/api/internal/record_trade", json=notification_payload, headers={'X-Internal-API-Key': INTERNAL_API_KEY}, timeout=3)
             return jsonify({"result": "opened", "order_id": order.id}), 200
         except Exception as e:
-            logger.error(f"[TRADE_FAIL] Error opening {symbol} for user '{user.username}': {e}")
+            logger.error(f"[TRADE_FAIL] Error opening {symbol} for '{user.username}': {e}")
             return jsonify({"error": str(e)}), 500
 
     logger.error(f"[UNKNOWN_ACTION] Received unknown action: {action}")

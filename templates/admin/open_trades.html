@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}All Open Trades - Admin{% endblock %}
+
+{% block content %}
+<div class="container-fluid my-4 animate__animated animate__fadeIn">
+    <h3 class="mb-3">All Open Trades Overview</h3>
+    <p class="text-muted">A real-time view of all open positions across all users.</p>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <table id="allOpenTradesTable" class="table table-hover" style="width:100%;">
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Qty</th>
+                        <th>Open Price</th>
+                        <th>Current Price</th>
+                        <th>P/L</th>
+                        <th>Market Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    function colorPL(val) {
+        if (typeof val !== 'number') return `<span>-</span>`;
+        const sign = val > 0 ? '+' : '';
+        const className = val > 0 ? 'profit' : (val < 0 ? 'loss' : 'text-muted');
+        return `<span class="${className}">${sign}$${val.toFixed(2)}</span>`;
+    }
+
+    function fetchAllOpenPositions() {
+        $.get('/api/admin/all_open_positions', function(data) {
+            const table = $('#allOpenTradesTable').DataTable();
+            table.clear();
+
+            data.forEach(pos => {
+                table.row.add([
+                    pos.username,
+                    pos.symbol.replace('USD', '/USD'),
+                    pos.side.toUpperCase(),
+                    parseFloat(pos.qty).toFixed(4),
+                    `$${parseFloat(pos.open_price).toFixed(2)}`,
+                    `$${parseFloat(pos.current_price).toFixed(2)}`,
+                    colorPL(parseFloat(pos.unrealized_pl)),
+                    `$${parseFloat(pos.market_value).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`
+                ]);
+            });
+
+            table.draw(false); // Use false to maintain current pagination
+        }).fail(function() {
+            console.error("Failed to fetch all open positions.");
+        });
+    }
+
+    $(document).ready(function() {
+        $('#allOpenTradesTable').DataTable({
+            paging: true,
+            pageLength: 25,
+            lengthMenu: [10, 25, 50, 100],
+            searching: true,
+            info: true,
+            order: [[0, 'asc']] // Sort by username
+        });
+
+        fetchAllOpenPositions();
+        setInterval(fetchAllOpenPositions, 10000); // Refresh every 10 seconds
+    });
+</script>
+{% endblock %}
