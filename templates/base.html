@@ -24,6 +24,10 @@
           <ul class="navbar-nav align-items-center">
             <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">{{ _('Dashboard') }}</a></li>
             
+            {% if ENABLE_INVESTOR_VIEW %}
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('investor_payout') }}">Investor Payout</a></li>
+            {% endif %}
+
             {% if g.user and g.user.is_superuser %}
             <li class="nav-item"><a class="nav-link" href="{{ url_for('admin_all_open_trades') }}">All Open Trades</a></li>
             {% endif %}
@@ -38,6 +42,10 @@
               <ul class="dropdown-menu dropdown-menu-dark">
                 <li><a class="dropdown-item" href="{{ url_for('admin_user_management') }}">User Management</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('admin_health_dashboard') }}">System Health</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('user_config') }}">My Config</a></li>
+                {% if ENABLE_INVESTOR_VIEW %}
+                <li><a class="dropdown-item" href="{{ url_for('admin_investor_config') }}">Investor Config</a></li>
+                {% endif %}
                 <li><hr class="dropdown-divider"></li>
                 <li><a class="dropdown-item" href="{{ url_for('admin_logs') }}">View Logs</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('admin_db_management') }}">DB Management</a></li>

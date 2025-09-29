@@ -43,7 +43,7 @@ app.config.update(
     UPLOAD_FOLDER=os.path.join(app.instance_path, 'uploads'),
     BACKUP_FOLDER=os.path.join(app.instance_path, 'backups'),
     BABEL_DEFAULT_LOCALE='en',
-    LANGUAGES={'en': 'English', 'ro': 'Română', 'ro_GUST': 'Gusterească'}
+    LANGUAGES={'en': 'English', 'ro': 'Română'}
 )
 
 # --- Environment Variables ---
@@ -300,7 +300,8 @@ def admin_user_management():
 @app.route('/admin/all_open_trades')
 @superuser_required
 def admin_all_open_trades():
-    return render_template('admin/open_trades.html', current_user=g.user)
+    users = User.query.order_by(User.username).all()
+    return render_template('admin/open_trades.html', current_user=g.user, all_users=users)
 
 @app.route('/admin/health')
 @superuser_required
@@ -374,6 +375,24 @@ def admin_delete_user(user_id):
     return redirect(url_for('admin_user_management'))
 
 # --- API Endpoints ---
+@app.route('/api/tradable_symbols')
+@login_required
+def api_tradable_symbols():
+    symbols_file = os.path.join(app.instance_path, 'tradable_symbols.json')
+    try:
+        if not os.path.exists(symbols_file):
+            app.logger.warning(f"Symbols file not found at '{symbols_file}'. Attempting to generate it now.")
+            update_symbols_task()
+            # Give the task a moment to run
+            time.sleep(2)
+        
+        with open(symbols_file, 'r') as f:
+            symbols = json.load(f)
+        return jsonify(symbols)
+    except Exception as e:
+        app.logger.error(f"Could not read tradable_symbols.json: {e}")
+        return jsonify({'error': 'Could not load symbol list.'}), 500
+
 @app.route('/api/admin/health_data')
 @superuser_required
 def api_admin_health_data():
@@ -462,6 +481,77 @@ def api_admin_performance_leaderboard():
         leaderboard.append(stats)
     return jsonify(leaderboard)
 
+@app.route('/api/admin/all_open_positions')
+@superuser_required
+def api_admin_all_open_positions():
+    user_filter_id = request.args.get('user_id')
+    
+    query = User.query
+    if user_filter_id:
+        query = query.filter(User.id == user_filter_id)
+        
+    users_with_keys = [u for u in query.all() if u.encrypted_alpaca_key]
+    all_positions = []
+
+    for user in users_with_keys:
+        api = get_user_api(user)
+        if not api:
+            continue
+        try:
+            positions = api.list_positions()
+            for p in positions:
+                all_positions.append({
+                    'user_id': user.id,
+                    'username': user.username,
+                    'symbol': p.symbol,
+                    'side': p.side,
+                    'qty': float(p.qty),
+                    'open_price': float(p.avg_entry_price),
+                    'current_price': float(p.current_price),
+                    'unrealized_pl': float(p.unrealized_pl),
+                })
+        except Exception as e:
+            app.logger.error(f"[API_FAIL] Could not fetch positions for {user.username}: {e}")
+
+    return jsonify(all_positions)
+
+@app.route('/api/admin/close_trades', methods=['POST'])
+@superuser_required
+def api_admin_close_trades():
+    data = request.get_json()
+    trades_to_close = data.get('trades', []) # Expect a list of {'user_id': X, 'symbol': 'Y'}
+
+    closed_count = 0
+    errors = []
+
+    for trade_info in trades_to_close:
+        user_id = trade_info.get('user_id')
+        symbol = trade_info.get('symbol')
+        user = db.session.get(User, user_id)
+
+        if not user or not symbol:
+            errors.append(f"Invalid trade data received: {trade_info}")
+            continue
+
+        api = get_user_api(user)
+        if not api:
+            errors.append(f"Could not initialize API for user {user.username}")
+            continue
+        
+        try:
+            api.close_position(symbol.replace('/', ''))
+            app.logger.info(f"[ADMIN_ACTION] Admin '{g.user.username}' closed position {symbol} for user '{user.username}'.")
+            closed_count += 1
+        except Exception as e:
+            error_msg = f"Failed to close {symbol} for {user.username}: {e}"
+            app.logger.error(f"[ADMIN_ACTION] {error_msg}")
+            errors.append(error_msg)
+
+    if errors:
+        return jsonify({'status': 'partial_success', 'closed': closed_count, 'errors': errors}), 207
+    
+    return jsonify({'status': 'success', 'closed': closed_count})
+
 @app.route('/api/open_positions')
 @login_required
 def api_open_positions():
@@ -536,6 +626,7 @@ def record_trade_internal():
                 elif data_dict.get('result') == 'closed':
                     pos_data = data_dict.get('position_obj')
                     class MockPosition:
+                        # FIX: Added self to the __init__ method
                         def __init__(self, **entries): self.__dict__.update(entries)
                     position_obj = MockPosition(**pos_data) if pos_data else None
                     record_closed_trade(data_dict, payload, user_id, position_obj)
@@ -559,6 +650,117 @@ def init_db():
             db.session.add(superuser)
             db.session.commit()
             app.logger.info(f"[SYSTEM] Superuser '{ADMIN_USER}' created.")
+            
+# --- NEW: Investor Payout Feature (File-Based) ---
+
+# Read the toggle from .env file
+ENABLE_INVESTOR_VIEW = os.getenv('ENABLE_INVESTOR_VIEW', 'False').lower() in ('true', '1', 't')
+INVESTORS_FILE = os.path.join(app.instance_path, 'investors.json')
+
+# Add the toggle to the context so templates can see it
+@app.context_processor
+def inject_investor_view_flag():
+    return dict(ENABLE_INVESTOR_VIEW=ENABLE_INVESTOR_VIEW)
+
+def get_investor_data():
+    """Safely reads investor data from the JSON file."""
+    if not os.path.exists(INVESTORS_FILE):
+        return {}
+    try:
+        with open(INVESTORS_FILE, 'r') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+@app.route('/admin/investor_config', methods=['GET', 'POST'])
+@superuser_required
+def admin_investor_config():
+    if not ENABLE_INVESTOR_VIEW:
+        flash('Investor view feature is disabled.', 'warning')
+        return redirect(url_for('dashboard'))
+
+    if request.method == 'POST':
+        investor_data = {}
+        all_users = User.query.order_by(User.username).all()
+        for user in all_users:
+            amount_str = request.form.get(f'investment_{user.username}')
+            if amount_str:
+                try:
+                    amount = float(amount_str)
+                    if amount > 0:
+                        investor_data[user.username] = amount
+                except ValueError:
+                    pass # Ignore invalid numbers
+        
+        try:
+            with open(INVESTORS_FILE, 'w') as f:
+                json.dump(investor_data, f, indent=4)
+            flash('Investment amounts have been updated.', 'success')
+        except IOError as e:
+            flash(f'Error saving investor data: {e}', 'danger')
+
+        return redirect(url_for('admin_investor_config'))
+
+    all_users = User.query.order_by(User.is_superuser.desc(), User.username).all()
+    investor_data = get_investor_data()
+    return render_template('admin/investor_config.html', all_users=all_users, investor_data=investor_data)
+
+@app.route('/investor_payout') # MODIFIED: Now accessible to all logged-in users
+@login_required
+def investor_payout():
+    if not ENABLE_INVESTOR_VIEW:
+        flash('Investor view feature is currently disabled.', 'warning')
+        return redirect(url_for('dashboard'))
+    return render_template('investor_payout.html') # Note: Template is not in 'admin' folder
+
+@app.route('/api/investor_payout_data') # MODIFIED: Now accessible to all logged-in users
+@login_required
+def api_investor_payout_data():
+    if not ENABLE_INVESTOR_VIEW:
+        return jsonify({'error': 'Feature not enabled'}), 403
+
+    # CRITICAL: This API must always use the admin's keys to get the total account value.
+    admin_user = User.query.filter_by(is_superuser=True).first()
+    if not admin_user:
+        return jsonify({'error': 'Admin account not found.'}), 500
+
+    api = get_user_api(admin_user)
+    if not api:
+        return jsonify({'error': 'Admin Alpaca API keys are not configured.'}), 500
+
+    try:
+        account = api.get_account()
+        live_equity = float(account.equity)
+    except Exception as e:
+        app.logger.error(f"Could not fetch admin account data for payout report: {e}")
+        return jsonify({'error': 'Failed to fetch Alpaca account data.'}), 500
+
+    investor_data = get_investor_data()
+    if not investor_data:
+        return jsonify({'error': 'No investors have been configured.'}), 404
+
+    total_investment = sum(investor_data.values())
+    total_pl = live_equity - total_investment
+
+    payout_data = []
+    for username, investment in investor_data.items():
+        ownership_percent = (investment / total_investment * 100) if total_investment > 0 else 0
+        pl_share = total_pl * (ownership_percent / 100)
+        current_equity = investment + pl_share
+        payout_data.append({
+            'username': username,
+            'investment': investment,
+            'ownership_percent': ownership_percent,
+            'pl_share': pl_share,
+            'current_equity': current_equity
+        })
+
+    return jsonify({
+        'total_investment': total_investment,
+        'live_equity': live_equity,
+        'total_pl': total_pl,
+        'investors': sorted(payout_data, key=lambda x: x['investment'], reverse=True)
+    })
 
 if __name__ == "__main__":
     with app.app_context():

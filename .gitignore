@@ -6,4 +6,4 @@ app.db
 *.log
 venv/
 bot_temp.py
-
+dashboard.log*
