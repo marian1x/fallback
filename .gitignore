@@ -7,3 +7,5 @@ app.db
 venv/
 bot_temp.py
 dashboard.log*
+../AI Generator/
+./
