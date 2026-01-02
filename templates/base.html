@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="{{ get_locale() }}">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>{% block title %}{{ _('Trading Dashboard') }}{% endblock %}</title>
@@ -57,21 +57,6 @@
 
             <li class="nav-item"><a class="nav-link" href="{{ url_for('logout') }}" title="Log Out"><i class="fa fa-sign-out-alt"></i></a></li>
             
-            <li class="nav-item dropdown">
-                <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false" title="Change Language">
-                    <i class="fa-solid fa-language"></i>
-                </a>
-                <ul class="dropdown-menu dropdown-menu-dark dropdown-menu-end">
-                    {% for lang_code, lang_name in config['LANGUAGES'].items() %}
-                    <li>
-                        <a class="dropdown-item {% if get_locale() == lang_code %}active{% endif %}" href="{{ url_for('set_language', lang=lang_code) }}">
-                            {{ lang_name }}
-                        </a>
-                    </li>
-                    {% endfor %}
-                </ul>
-            </li>
-
             <li class="nav-item ms-lg-2">
                 <div class="form-check form-switch" title="Toggle Dark/Light Mode">
                     <input class="form-check-input" type="checkbox" id="themeSwitch">

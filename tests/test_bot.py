@@ -26,8 +26,7 @@ def test_get_last_price_stock(monkeypatch):
         def get_latest_trade(self, symbol):
             assert symbol == 'AAPL'
             return MockTrade()
-    monkeypatch.setattr(bot, 'api', MockAPI())
-    assert bot.get_last_price('AAPL') == 150.0
+    assert bot.get_last_price(MockAPI(), 'AAPL') == 150.0
 
 def test_get_last_price_crypto(monkeypatch):
     class MockTrade:
@@ -37,5 +36,4 @@ def test_get_last_price_crypto(monkeypatch):
             assert symbol == 'BTCUSD'
             assert exchange == 'CBSE'
             return MockTrade()
-    monkeypatch.setattr(bot, 'api', MockAPI())
-    assert bot.get_last_price('BTC/USD') == 25000.0
+    assert bot.get_last_price(MockAPI(), 'BTC/USD') == 25000.0

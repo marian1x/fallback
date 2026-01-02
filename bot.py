@@ -13,7 +13,8 @@ from models import db, User
 from utils import decrypt_data
 
 # --- Initialization ---
-load_dotenv()
+ENV_PATH = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(ENV_PATH)
 
 app = Flask(__name__)
 try:

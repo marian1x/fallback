@@ -8,7 +8,8 @@ import time
 import logging
 from utils import decrypt_data
 
-load_dotenv()
+ENV_PATH = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(ENV_PATH)
 BASE_URL = os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
 
 logger = logging.getLogger(__name__)

@@ -6,7 +6,6 @@ from logging.handlers import RotatingFileHandler
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-import shutil
 import json
 from functools import wraps
 
@@ -14,20 +13,18 @@ from flask import (
     Flask, request, render_template, jsonify, session,
     redirect, url_for, flash, g, send_from_directory
 )
-from flask_babel import Babel, gettext
 from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 import alpaca_trade_api as tradeapi
 import requests
-from pytz import utc
 
 from models import db, Trade, User
 from trade_db import record_open_trade, record_closed_trade
 from utils import encrypt_data, decrypt_data
 
 # --- Initialization ---
-load_dotenv()
+ENV_PATH = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(ENV_PATH)
 
 app = Flask(__name__)
 
@@ -43,8 +40,6 @@ app.config.update(
     SECRET_KEY=os.getenv('FLASK_SECRET', 'a_very_strong_and_random_secret_key_please_change'),
     UPLOAD_FOLDER=os.path.join(app.instance_path, 'uploads'),
     BACKUP_FOLDER=os.path.join(app.instance_path, 'backups'),
-    BABEL_DEFAULT_LOCALE='en',
-    LANGUAGES={'en': 'English', 'ro': 'Română'}
 )
 
 # --- Environment Variables ---
@@ -56,7 +51,9 @@ INTERNAL_API_KEY = os.getenv('INTERNAL_API_KEY', 'your-very-secret-internal-key'
 BASE_URL = os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
 BOT_WEBHOOK = os.getenv('TRADING_BOT_URL', 'http://127.0.0.1:5000/webhook')
 RESTART_COMMAND = os.getenv('RESTART_COMMAND', '').strip()
-REPO_PATH = os.getenv('TRADINGBOT_REPO_PATH', os.path.abspath(os.path.dirname(__file__)))
+REPO_PATH = os.getenv('TRADINGBOT_REPO_PATH', '').strip()
+if not REPO_PATH or not os.path.isdir(REPO_PATH):
+    REPO_PATH = os.path.abspath(os.path.dirname(__file__))
 LAST_GOOD_COMMIT_FILE = os.path.join(app.instance_path, 'last_good_commit.txt')
 
 # --- Enhanced Logging Setup ---
@@ -73,14 +70,20 @@ login_logger.addHandler(login_logger_handler)
 
 db.init_app(app)
 
-def get_locale():
-    return session.get('language') or request.accept_languages.best_match(list(app.config['LANGUAGES'].keys()))
+def translate(message, **kwargs):
+    if kwargs:
+        try:
+            return message % kwargs
+        except Exception:
+            return message
+    return message
 
-babel = Babel(app, locale_selector=get_locale)
+gettext = translate
+app.jinja_env.globals.update(_=translate)
 
 @app.context_processor
 def inject_globals():
-    return dict(get_locale=get_locale, config=app.config, g=g)
+    return dict(config=app.config, g=g)
 
 # --- User and Auth Management ---
 @app.before_request
@@ -279,11 +282,6 @@ def user_config():
         return redirect(url_for('user_config'))
     return render_template('user_config.html', user=g.user, decrypt=decrypt_data, current_user=g.user)
 
-@app.route('/language/<lang>')
-def set_language(lang=None):
-    session['language'] = lang
-    return redirect(request.referrer or url_for('dashboard'))
-
 # --- Admin Routes ---
 @app.route('/admin/db_management', methods=['GET', 'POST'])
 @superuser_required
@@ -435,10 +433,11 @@ def api_admin_pull_updates():
 
     after = get_git_commit_info()
     changed = bool(before and after and before["hash"] != after["hash"])
+    before_label = f"{before['short_hash']} {before['subject']}" if before else 'unknown'
+    after_label = f"{after['short_hash']} {after['subject']}" if after else 'unknown'
     app.logger.info(
         f"[UPDATE] Admin '{g.user.username}' pulled updates. "
-        f"Before={before['short_hash'] if before else 'unknown'} After={after['short_hash'] if after else 'unknown'} "
-        f"Output='{pull_out}'"
+        f"Before={before_label} After={after_label} Output='{pull_out}'"
     )
 
     return jsonify({
@@ -800,7 +799,7 @@ def api_open_positions():
         return jsonify([])
     out = []
     for p in positions:
-        open_time_utc = db_trades.get(p.symbol, datetime.now(utc))
+        open_time_utc = db_trades.get(p.symbol, datetime.now(timezone.utc))
         out.append({'symbol': p.symbol, 'side': 'sell' if float(p.qty) < 0 else 'buy', 'qty': abs(float(p.qty)), 'open_price': float(p.avg_entry_price), 'current_price': float(p.current_price or 0), 'market_value': float(p.market_value), 'unrealized_pl': float(p.unrealized_pl), 'open_time_iso': open_time_utc.isoformat() if open_time_utc else None})
     return jsonify(out)
 

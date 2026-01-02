@@ -51,16 +51,16 @@
         <div class="card-header">
           <i class="fa-solid fa-fire-flame-curved me-2"></i> Exposure by Symbol (Market Value)
         </div>
-        <div class="card-body">
-          <canvas id="openExposureChart" height="140"></canvas>
+        <div class="card-body open-analytics-chart">
+          <canvas id="openExposureChart" height="110"></canvas>
         </div>
       </div>
        <div class="card shadow-sm">
         <div class="card-header">
           <i class="fa-solid fa-chart-line me-2"></i> Unrealized P/L by Symbol
         </div>
-        <div class="card-body">
-          <canvas id="openPnlChart" height="140"></canvas>
+        <div class="card-body open-analytics-chart">
+          <canvas id="openPnlChart" height="110"></canvas>
         </div>
       </div>
     </div>
@@ -69,8 +69,8 @@
         <div class="card-header">
           <i class="fa-solid fa-scale-balanced me-2"></i> Side Exposure
         </div>
-        <div class="card-body">
-          <canvas id="openSideChart" height="180"></canvas>
+        <div class="card-body open-analytics-donut">
+          <canvas id="openSideChart" height="160"></canvas>
         </div>
       </div>
       <div class="card shadow-sm">
@@ -238,10 +238,20 @@ function fetchOpenAnalytics() {
                     data: marketValues,
                     backgroundColor: pnlValues.map(pl => pl >= 0 ? 'rgba(100, 255, 218, 0.6)' : 'rgba(255, 139, 139, 0.6)'),
                     borderColor: pnlValues.map(pl => pl >= 0 ? '#64ffda' : '#ff8b8b'),
-                    borderWidth: 1
+                    borderWidth: 1,
+                    maxBarThickness: 26
                 }]
             },
-            options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } } }
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { maxTicksLimit: 6 } },
+                    y: { ticks: { autoSkip: true } }
+                }
+            }
         });
 
         destroyChart('openPnlChart');
@@ -254,10 +264,16 @@ function fetchOpenAnalytics() {
                     data: pnlValues,
                     backgroundColor: pnlValues.map(pl => pl >= 0 ? 'rgba(100, 255, 218, 0.6)' : 'rgba(255, 139, 139, 0.6)'),
                     borderColor: pnlValues.map(pl => pl >= 0 ? '#64ffda' : '#ff8b8b'),
-                    borderWidth: 1
+                    borderWidth: 1,
+                    maxBarThickness: 26
                 }]
             },
-            options: { responsive: true, plugins: { legend: { display: false } } }
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: { x: { ticks: { maxTicksLimit: 6 } } }
+            }
         });
 
         destroyChart('openSideChart');
@@ -272,7 +288,13 @@ function fetchOpenAnalytics() {
                     borderWidth: 1
                 }]
             },
-            options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                cutout: '65%',
+                radius: '85%',
+                plugins: { legend: { position: 'bottom' } }
+            }
         });
     });
 }
@@ -283,4 +305,12 @@ $(document).ready(function(){
     setInterval(fetchOpenAnalytics, 15000); // Refresh every 15 seconds
 });
 </script>
+<style>
+.open-analytics-chart { min-height: 180px; }
+.open-analytics-donut { min-height: 180px; }
+@media (max-width: 991px) {
+    .open-analytics-chart { min-height: 160px; }
+    .open-analytics-donut { min-height: 160px; }
+}
+</style>
 {% endblock %}

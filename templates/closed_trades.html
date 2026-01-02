@@ -124,7 +124,16 @@
     function fetchAndRenderTrades() {
         const userId = $('#userFilter').length ? $('#userFilter').val() : '{{ g.user.id }}';
         $.get('/api/closed_orders', { user_id: userId }, function(data) {
-            allClosedOrders = data;
+            if (!Array.isArray(data)) {
+                console.error('Closed orders API returned non-array response:', data);
+                allClosedOrders = [];
+            } else {
+                allClosedOrders = data;
+            }
+            renderFilteredTrades();
+        }).fail(function(xhr) {
+            console.error('Failed to fetch closed orders:', xhr.responseText || xhr.statusText);
+            allClosedOrders = [];
             renderFilteredTrades();
         });
     }
@@ -133,10 +142,11 @@
         if (!closedOrdersTable) return;
         const dateFrom = $('#dateFrom').val(), dateTo = $('#dateTo').val();
         const filtered = allClosedOrders.filter(r => {
-            if (!r.close_time) return false;
-            const closeDate = r.close_time.slice(0, 10);
+            const closeTime = r.close_time || r.open_time;
+            if (!closeTime) return false;
+            const closeDate = closeTime.slice(0, 10);
             return (!dateFrom || closeDate >= dateFrom) && (!dateTo || closeDate <= dateTo);
-        }).sort((a, b) => new Date(b.close_time) - new Date(a.close_time));
+        });
         
         closedOrdersTable.clear();
         filtered.forEach(r => {
@@ -180,7 +190,13 @@
 
     $(document).ready(function() {
         closedOrdersTable = $('#closedTable').DataTable({
-            paging: true, pageLength: 10, searching: true, info: true, responsive: true, order: []
+            paging: true,
+            pageLength: 10,
+            searching: true,
+            info: true,
+            responsive: true,
+            order: [[7, "desc"]],
+            language: { emptyTable: 'No closed trades found for the selected filters.' }
         });
         
         if ($('#leaderboardTable').length) {

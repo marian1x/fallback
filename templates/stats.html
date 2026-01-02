@@ -95,6 +95,22 @@
           <div class="insight-item"><span class="text-muted">Median Hold</span><span id="aMedianHold">-</span></div>
         </div>
       </div>
+      <div class="card shadow-sm mt-4">
+        <div class="card-header"><i class="fa-solid fa-clock-rotate-left me-2"></i>Recent Trades</div>
+        <div class="card-body p-0">
+          <table id="recentTradesTable" class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>P/L</th>
+                <th>Close Time</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -105,6 +121,7 @@
 let allTrades = [];
 let charts = {};
 let symbolPerformanceTable;
+let recentTradesTable;
 const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const currencyFormatterShort = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
@@ -179,7 +196,12 @@ function fetchAndComputeAnalytics() {
     const userId = $('#userFilter').length ? $('#userFilter').val() : '{{ g.user.id }}';
     
     $.get('/api/closed_orders', { user_id: userId }, function(data) {
-        allTrades = data;
+        if (!Array.isArray(data)) {
+            console.error('Closed orders API returned non-array response:', data);
+            allTrades = [];
+        } else {
+            allTrades = data;
+        }
         
         // Populate symbol filter from the fetched trade history
         const symbolFilterEl = $('#symbolFilter');
@@ -190,8 +212,10 @@ function fetchAndComputeAnalytics() {
         });
 
         computeAnalytics(); // Run computation with the new data
-    }).fail(function() {
-        console.error("Failed to fetch trade data.");
+    }).fail(function(xhr) {
+        console.error("Failed to fetch trade data:", xhr.responseText || xhr.statusText);
+        allTrades = [];
+        computeAnalytics();
     });
 }
 
@@ -312,6 +336,23 @@ function computeAnalytics() {
     });
     symbolPerformanceTable.draw();
 
+    if (recentTradesTable) {
+        const sortedByClose = [...filteredTrades].sort((a, b) => new Date(b.close_time) - new Date(a.close_time));
+        recentTradesTable.clear();
+        sortedByClose.slice(0, 10).forEach(t => {
+            const closeTimeDisplay = t.close_time
+                ? luxon.DateTime.fromISO(t.close_time).toFormat('dd/MM/yyyy, HH:mm')
+                : '-';
+            recentTradesTable.row.add([
+                t.symbol.replace('USD', '/USD'),
+                t.side ? t.side.toUpperCase() : '-',
+                signedCurrencyHtml(t.profit_loss || 0),
+                `<span data-order="${t.close_time || ''}">${closeTimeDisplay}</span>`
+            ]);
+        });
+        recentTradesTable.draw();
+    }
+
     // --- Render Charts ---
     destroyChart('aPLTimeChart');
     charts['aPLTimeChart'] = new Chart(document.getElementById('aPLTimeChart'), {
@@ -359,6 +400,14 @@ function computeAnalytics() {
 $(document).ready(function() {
     symbolPerformanceTable = $('#symbolPerformanceTable').DataTable({
         paging: false, searching: false, info: false, order: [[1, 'desc']]
+    });
+
+    recentTradesTable = $('#recentTradesTable').DataTable({
+        paging: false,
+        searching: false,
+        info: false,
+        order: [[3, 'desc']],
+        language: { emptyTable: 'No trades found for the selected filters.' }
     });
 
     fetchAndComputeAnalytics(); // Initial data load

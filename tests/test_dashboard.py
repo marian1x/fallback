@@ -11,6 +11,9 @@ import dashboard
 importlib.reload(dashboard)
 
 
-def test_dashboard_is_close_action():
-    assert dashboard.is_close_action('close long')
-    assert not dashboard.is_close_action('hold')
+def test_translate_identity():
+    assert dashboard.translate("Hello") == "Hello"
+
+
+def test_translate_format():
+    assert dashboard.translate("Hi %(name)s", name="Ana") == "Hi Ana"

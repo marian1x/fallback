@@ -2,10 +2,10 @@
 *.pyc
 __pycache__/
 instance/
-app.db
 *.log
 venv/
 bot_temp.py
 dashboard.log*
 ../AI Generator/
 ./
+instance/app.db
