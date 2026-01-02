@@ -51,6 +51,8 @@ INTERNAL_API_KEY = os.getenv('INTERNAL_API_KEY', 'your-very-secret-internal-key'
 BASE_URL = os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
 BOT_WEBHOOK = os.getenv('TRADING_BOT_URL', 'http://127.0.0.1:5000/webhook')
 RESTART_COMMAND = os.getenv('RESTART_COMMAND', '').strip()
+if not RESTART_COMMAND and os.name == 'posix':
+    RESTART_COMMAND = 'sudo systemctl restart fallback_dashboard.service'
 REPO_PATH = os.getenv('TRADINGBOT_REPO_PATH', '').strip()
 if not REPO_PATH or not os.path.isdir(REPO_PATH):
     REPO_PATH = os.path.abspath(os.path.dirname(__file__))
@@ -121,10 +123,11 @@ def get_user_api(user):
 
 def run_command(command, cwd=None, timeout=30):
     try:
+        use_shell = isinstance(command, str)
         result = subprocess.run(
             command,
             cwd=cwd,
-            shell=True,
+            shell=use_shell,
             text=True,
             capture_output=True,
             timeout=timeout
@@ -134,18 +137,20 @@ def run_command(command, cwd=None, timeout=30):
         return False, '', str(e)
 
 def is_git_repo():
-    ok, out, _ = run_command("git rev-parse --is-inside-work-tree", cwd=REPO_PATH)
+    ok, out, _ = run_command(["git", "rev-parse", "--is-inside-work-tree"], cwd=REPO_PATH)
     return ok and out.strip().lower() == "true"
 
 def get_git_commit_info(commit_ref="HEAD"):
+    commit_ref = commit_ref or "HEAD"
+    format_token = "%H%x1f%s%x1f%an%x1f%ad"
     ok, out, err = run_command(
-        f"git log -1 --pretty=format:%H|%s|%an|%ad {commit_ref}",
+        ["git", "log", "-1", f"--pretty=format:{format_token}", commit_ref],
         cwd=REPO_PATH
     )
     if not ok or not out:
         app.logger.warning(f"[UPDATE] Failed to read commit info for {commit_ref}: {err}")
         return None
-    parts = out.split("|", 3)
+    parts = out.split("\x1f")
     if len(parts) < 4:
         return None
     commit_hash, subject, author, date = parts
@@ -806,12 +811,16 @@ def api_open_positions():
 @app.route('/api/closed_orders')
 @login_required
 def api_closed_orders():
-    user_filter_id = request.args.get('user_id', str(g.user.id))
-    if not g.user.is_superuser and user_filter_id != str(g.user.id):
-        return jsonify({"error": "Unauthorized"}), 403
     query = Trade.query.filter_by(status='closed')
-    if user_filter_id != '0':
-        query = query.filter_by(user_id=int(user_filter_id))
+    if g.user.is_superuser:
+        user_filter_id = request.args.get('user_id', '0')
+        if user_filter_id != '0':
+            try:
+                query = query.filter_by(user_id=int(user_filter_id))
+            except ValueError:
+                return jsonify({"error": "Invalid user filter"}), 400
+    else:
+        query = query.filter_by(user_id=g.user.id)
     closed_trades = query.order_by(Trade.close_time.desc()).all()
     return jsonify([{'symbol': t.symbol, 'side': t.side, 'open_price': t.open_price, 'close_price': t.close_price, 'profit_loss': t.profit_loss, 'profit_loss_pct': t.profit_loss_pct, 'open_time': t.open_time.isoformat() if t.open_time else None, 'close_time': t.close_time.isoformat() if t.close_time else None, 'action': t.action or ""} for t in closed_trades])
 
