@@ -46,6 +46,8 @@
             <div class="col-6 col-md-3"><div class="small text-muted">Avg. Win / Loss</div><h4 class="fw-bold mb-0"><span id="aAvgWin" class="profit">$0</span>/<span id="aAvgLoss" class="loss">$0</span></h4></div>
             <div class="col-6 col-md-3"><div class="small text-muted">Wins / Losses</div><h4 class="fw-bold mb-0"><span id="aWins">0</span> / <span id="aLosses">0</span></h4></div>
             <div class="col-6 col-md-3"><div class="small text-muted">Max Drawdown</div><h4 id="aMaxDD" class="fw-bold mb-0">$0.00</h4></div>
+            <div class="col-6 col-md-3"><div class="small text-muted">Avg Hold Time</div><h4 id="aAvgHold" class="fw-bold mb-0">-</h4></div>
+            <div class="col-6 col-md-3"><div class="small text-muted">Median P&L</div><h4 id="aMedianPl" class="fw-bold mb-0">$0.00</h4></div>
           </div>
         </div>
       </div>
@@ -63,16 +65,34 @@
             </div>
         </div>
       </div>
+      <div class="row g-4 mt-1">
+        <div class="col-12">
+          <div class="card shadow-sm">
+            <div class="card-header"><i class="fa-solid fa-chart-bar me-2"></i>P/L Distribution</div>
+            <div class="card-body"><canvas id="aPlDistChart" height="120"></canvas></div>
+          </div>
+        </div>
+      </div>
     </div>
     
     <div class="col-lg-4">
-      <div class="card shadow-sm h-100">
+      <div class="card shadow-sm mb-4">
         <div class="card-header"><i class="fa-solid fa-list-check me-2"></i>Symbol Performance</div>
         <div class="card-body p-0">
           <table id="symbolPerformanceTable" class="table table-hover mb-0">
             <thead><tr><th>Symbol</th><th>Net P&L</th><th>Win %</th><th>Trades</th></tr></thead>
             <tbody></tbody>
           </table>
+        </div>
+      </div>
+      <div class="card shadow-sm">
+        <div class="card-header"><i class="fa-solid fa-lightbulb me-2"></i>Trade Insights</div>
+        <div class="card-body">
+          <div class="insight-item"><span class="text-muted">Largest Win</span><span id="aLargestWin">-</span></div>
+          <div class="insight-item"><span class="text-muted">Largest Loss</span><span id="aLargestLoss">-</span></div>
+          <div class="insight-item"><span class="text-muted">Avg P/L %</span><span id="aAvgPlPct">-</span></div>
+          <div class="insight-item"><span class="text-muted">Payoff Ratio</span><span id="aPayoffRatio">-</span></div>
+          <div class="insight-item"><span class="text-muted">Median Hold</span><span id="aMedianHold">-</span></div>
         </div>
       </div>
     </div>
@@ -85,6 +105,71 @@
 let allTrades = [];
 let charts = {};
 let symbolPerformanceTable;
+const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
+const currencyFormatterShort = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+
+function formatCurrency(value) {
+    return currencyFormatter.format(value);
+}
+
+function formatCurrencyShort(value) {
+    return currencyFormatterShort.format(value);
+}
+
+function signedCurrencyHtml(value) {
+    const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+    const className = value > 0 ? 'profit' : value < 0 ? 'loss' : 'text-muted';
+    return `<span class="${className}">${sign}${formatCurrency(Math.abs(value))}</span>`;
+}
+
+function signedPercentHtml(value) {
+    const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+    const className = value > 0 ? 'profit' : value < 0 ? 'loss' : 'text-muted';
+    return `<span class="${className}">${sign}${Math.abs(value).toFixed(2)}%</span>`;
+}
+
+function formatDurationFromHours(hours) {
+    if (!hours || hours <= 0) return '-';
+    const totalMinutes = Math.floor(hours * 60);
+    const days = Math.floor(totalMinutes / (60 * 24));
+    const hoursPart = Math.floor((totalMinutes - (days * 24 * 60)) / 60);
+    const minutesPart = totalMinutes % 60;
+    if (days > 0) return `${days}d ${hoursPart}h`;
+    if (hoursPart > 0) return `${hoursPart}h ${minutesPart}m`;
+    return `${minutesPart}m`;
+}
+
+function median(values) {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function buildPlHistogram(values, binCount = 7) {
+    if (!values.length) return { labels: [], counts: [], centers: [] };
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    if (min === max) {
+        return { labels: [formatCurrencyShort(min)], counts: [values.length], centers: [min] };
+    }
+    const step = (max - min) / binCount;
+    const counts = new Array(binCount).fill(0);
+    values.forEach(value => {
+        let idx = Math.floor((value - min) / step);
+        if (idx >= binCount) idx = binCount - 1;
+        counts[idx] += 1;
+    });
+    const labels = [];
+    const centers = [];
+    for (let i = 0; i < binCount; i++) {
+        const start = min + (step * i);
+        const end = start + step;
+        labels.push(`${formatCurrencyShort(start)} to ${formatCurrencyShort(end)}`);
+        centers.push((start + end) / 2);
+    }
+    return { labels, counts, centers };
+}
 
 function destroyChart(chartId) {
     if (charts[chartId]) charts[chartId].destroy();
@@ -128,13 +213,38 @@ function computeAnalytics() {
     let totalPL = 0, grossProfit = 0, grossLoss = 0, wins = 0, losses = 0;
     let equityCurve = [0];
     let monthlyPL = {};
+    let plValues = [];
+    let plPctValues = [];
+    let holdDurations = [];
+    let largestWinTrade = null;
+    let largestLossTrade = null;
     
     filteredTrades.forEach(t => {
-        const pl = t.profit_loss || 0;
+        const pl = Number(t.profit_loss || 0);
         totalPL += pl;
+        plValues.push(pl);
         equityCurve.push(totalPL);
-        if (pl > 0) { wins++; grossProfit += pl; } 
-        else if (pl < 0) { losses++; grossLoss += Math.abs(pl); }
+        if (pl > 0) {
+            wins++;
+            grossProfit += pl;
+            if (!largestWinTrade || pl > (largestWinTrade.profit_loss || 0)) largestWinTrade = t;
+        } else if (pl < 0) {
+            losses++;
+            grossLoss += Math.abs(pl);
+            if (!largestLossTrade || pl < (largestLossTrade.profit_loss || 0)) largestLossTrade = t;
+        }
+        const plPctValue = Number(t.profit_loss_pct);
+        if (Number.isFinite(plPctValue)) {
+            plPctValues.push(plPctValue);
+        }
+        if (t.open_time && t.close_time) {
+            const openTime = luxon.DateTime.fromISO(t.open_time);
+            const closeTime = luxon.DateTime.fromISO(t.close_time);
+            if (openTime.isValid && closeTime.isValid) {
+                const hoursHeld = closeTime.diff(openTime, 'hours').hours;
+                if (hoursHeld > 0) holdDurations.push(hoursHeld);
+            }
+        }
         const month = luxon.DateTime.fromISO(t.close_time).toFormat('yyyy-MM');
         monthlyPL[month] = (monthlyPL[month] || 0) + pl;
     });
@@ -148,18 +258,38 @@ function computeAnalytics() {
     const avgReturn = tradeCount > 0 ? (totalPL / tradeCount) : 0;
     const avgWin = wins > 0 ? (grossProfit / wins) : 0;
     const avgLoss = losses > 0 ? (grossLoss / losses) : 0;
+    const payoffRatio = avgLoss > 0 ? (avgWin / avgLoss) : 0;
+    const avgHold = holdDurations.length ? (holdDurations.reduce((a, b) => a + b, 0) / holdDurations.length) : 0;
+    const medianHold = median(holdDurations);
+    const medianPl = median(plValues);
+    const avgPlPct = plPctValues.length ? (plPctValues.reduce((a, b) => a + b, 0) / plPctValues.length) : 0;
 
     // --- Update DOM ---
-    $('#aTotalPL').text(`$${totalPL.toFixed(2)}`).toggleClass('profit', totalPL > 0).toggleClass('loss', totalPL < 0);
+    $('#aTotalPL').text(formatCurrency(totalPL)).toggleClass('profit', totalPL > 0).toggleClass('loss', totalPL < 0);
     $('#aTotalTrades').text(tradeCount);
     $('#aWinRate').text(`${winRate.toFixed(1)}%`);
     $('#aProfitFactor').text(profitFactor.toFixed(2));
-    $('#aAvgRet').text(`$${avgReturn.toFixed(2)}`);
-    $('#aMaxDD').text(`$${maxDD.toFixed(2)}`);
+    $('#aAvgRet').text(formatCurrency(avgReturn));
+    $('#aMaxDD').text(formatCurrency(maxDD));
     $('#aWins').text(wins);
     $('#aLosses').text(losses);
-    $('#aAvgWin').text(`$${avgWin.toFixed(2)}`);
-    $('#aAvgLoss').text(`$${avgLoss.toFixed(2)}`);
+    $('#aAvgWin').text(formatCurrency(avgWin));
+    $('#aAvgLoss').text(formatCurrency(avgLoss));
+    $('#aAvgHold').text(formatDurationFromHours(avgHold));
+    $('#aMedianPl').html(signedCurrencyHtml(medianPl));
+
+    const largestWinLabel = largestWinTrade && (largestWinTrade.profit_loss || 0) > 0
+        ? `${largestWinTrade.symbol.replace('USD', '/USD')} (${signedCurrencyHtml(largestWinTrade.profit_loss)})`
+        : '-';
+    const largestLossLabel = largestLossTrade && (largestLossTrade.profit_loss || 0) < 0
+        ? `${largestLossTrade.symbol.replace('USD', '/USD')} (${signedCurrencyHtml(largestLossTrade.profit_loss)})`
+        : '-';
+
+    $('#aLargestWin').html(largestWinLabel);
+    $('#aLargestLoss').html(largestLossLabel);
+    $('#aAvgPlPct').html(plPctValues.length ? signedPercentHtml(avgPlPct) : '-');
+    $('#aPayoffRatio').text(payoffRatio > 0 ? payoffRatio.toFixed(2) : '-');
+    $('#aMedianHold').text(formatDurationFromHours(medianHold));
 
     // --- Symbol Table ---
     const symbolStats = {};
@@ -206,6 +336,24 @@ function computeAnalytics() {
         },
         options: { responsive: true, plugins: { legend: { display: false } } }
     });
+
+    const plHistogram = buildPlHistogram(plValues);
+    destroyChart('aPlDistChart');
+    charts['aPlDistChart'] = new Chart(document.getElementById('aPlDistChart'), {
+        type: 'bar',
+        data: {
+            labels: plHistogram.labels,
+            datasets: [{
+                data: plHistogram.counts,
+                backgroundColor: plHistogram.centers.map(center => center >= 0 ? 'rgba(100, 255, 218, 0.6)' : 'rgba(255, 139, 139, 0.6)')
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true } }
+        }
+    });
 }
 
 $(document).ready(function() {
@@ -224,4 +372,7 @@ $(document).ready(function() {
     });
 });
 </script>
+<style>
+.insight-item { padding: 0.35rem 0; font-size: 0.95rem; display: flex; justify-content: space-between; }
+</style>
 {% endblock %}

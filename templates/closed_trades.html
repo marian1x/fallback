@@ -136,15 +136,20 @@
             if (!r.close_time) return false;
             const closeDate = r.close_time.slice(0, 10);
             return (!dateFrom || closeDate >= dateFrom) && (!dateTo || closeDate <= dateTo);
-        });
+        }).sort((a, b) => new Date(b.close_time) - new Date(a.close_time));
         
         closedOrdersTable.clear();
         filtered.forEach(r => {
+            const openTimeOrder = r.open_time || '';
+            const closeTimeOrder = r.close_time || '';
+            const openTimeDisplay = toLocalTime(r.open_time);
+            const closeTimeDisplay = toLocalTime(r.close_time);
             closedOrdersTable.row.add([
                 r.symbol.replace('USD', '/USD'), r.side ? r.side.toUpperCase() : '-',
                 r.open_price ? r.open_price.toFixed(4) : '-', r.close_price ? r.close_price.toFixed(4) : '-',
                 colorPL(r.profit_loss, true), r.profit_loss_pct ? r.profit_loss_pct.toFixed(2) + '%' : '-',
-                toLocalTime(r.open_time), toLocalTime(r.close_time),
+                `<span data-order="${openTimeOrder}">${openTimeDisplay}</span>`,
+                `<span data-order="${closeTimeOrder}">${closeTimeDisplay}</span>`,
                 r.action ? `<span class="badge bg-info text-dark">${r.action}</span>` : ''
             ]);
         });
@@ -175,7 +180,7 @@
 
     $(document).ready(function() {
         closedOrdersTable = $('#closedTable').DataTable({
-            paging: true, pageLength: 10, searching: true, info: true, responsive: true, order: [[7, "desc"]]
+            paging: true, pageLength: 10, searching: true, info: true, responsive: true, order: []
         });
         
         if ($('#leaderboardTable').length) {

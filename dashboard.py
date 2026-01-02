@@ -4,7 +4,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import shutil
 import json
 from functools import wraps
@@ -396,27 +396,84 @@ def api_tradable_symbols():
 @app.route('/api/admin/health_data')
 @superuser_required
 def api_admin_health_data():
-    def read_filtered_logs(log_file_path, num_lines=100):
-        if not os.path.exists(log_file_path): return ["Log file not found."]
+    def read_log_lines(log_file_path, num_lines=200):
+        if not os.path.exists(log_file_path):
+            return None, "Log file not found."
         try:
             with open(log_file_path, 'r') as f:
                 lines = f.readlines()
-                keywords = ['ERROR', 'FAIL', 'REJECTED', 'DATABASE', 'TRADE', 'USER', 'STATUS', 'BOT', 'ACTION', 'SYSTEM', 'WARNING']
-                events = [line.strip() for line in lines[-num_lines:] if any(f"[{keyword}]" in line.upper() for keyword in keywords)]
-                return events if events else ["No relevant events found in recent log entries."]
-        except Exception as e: return [f"Could not read log file: {e}"]
+            lines = [line.strip() for line in lines[-num_lines:] if line.strip()]
+            return lines, None
+        except Exception as e:
+            return None, f"Could not read log file: {e}"
+
+    def strip_log_suffix(line):
+        return line.rsplit(' [in ', 1)[0] if ' [in ' in line else line
+
+    def get_log_summary_and_details(log_file_path):
+        keywords = ['ERROR', 'FAIL', 'REJECTED', 'DATABASE', 'TRADE', 'USER', 'STATUS', 'BOT', 'ACTION', 'SYSTEM', 'WARNING', 'SECURITY', 'UI_EVENT']
+        lines, error = read_log_lines(log_file_path)
+        if error:
+            return [error], [error]
+        if not lines:
+            return ["No recent log entries."], ["No recent log entries."]
+        summary = [strip_log_suffix(line) for line in lines if any(f"[{keyword}]" in line.upper() for keyword in keywords)]
+        if not summary:
+            summary = ["No recent issues found."]
+        return summary[-100:], lines[-200:]
+
+    def parse_webhook_time(timestamp_str):
+        try:
+            parsed = datetime.fromisoformat(timestamp_str)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            local_tz = datetime.now().astimezone().tzinfo
+            parsed = parsed.replace(tzinfo=local_tz)
+        return parsed.astimezone(timezone.utc)
+
+    def infer_bot_status_from_log(log_file_path):
+        if not os.path.exists(log_file_path):
+            return None
+        last_modified = datetime.fromtimestamp(os.path.getmtime(log_file_path), tz=timezone.utc)
+        seconds_since = (datetime.now(timezone.utc) - last_modified).total_seconds()
+        if seconds_since < 300:
+            return 'Active', 'Recent trades log activity'
+        if seconds_since < 3600:
+            return 'Idle', 'Recent trades log activity'
+        return None
 
     webhook_log_file = os.path.join(app.instance_path, 'last_webhook.log')
     last_webhook_utc, bot_status = None, 'Unknown'
+    bot_status_reason = ''
+    last_webhook_age_sec = None
     if os.path.exists(webhook_log_file):
         try:
-            with open(webhook_log_file, 'r') as f: last_webhook_utc = f.read().strip()
-            seconds_since = (datetime.now() - datetime.fromisoformat(last_webhook_utc)).total_seconds()
-            if seconds_since < 300: bot_status = 'Active'
-            elif seconds_since < 3600: bot_status = 'Idle'
-            else: bot_status = 'Offline'
-        except: bot_status = 'Error Reading Status'
-    else: bot_status = 'No Webhooks Received'
+            with open(webhook_log_file, 'r') as f:
+                last_webhook_utc = f.read().strip()
+            last_webhook_dt = parse_webhook_time(last_webhook_utc)
+            if last_webhook_dt:
+                last_webhook_age_sec = (datetime.now(timezone.utc) - last_webhook_dt).total_seconds()
+                if last_webhook_age_sec < 300:
+                    bot_status = 'Active'
+                elif last_webhook_age_sec < 3600:
+                    bot_status = 'Idle'
+                else:
+                    bot_status = 'Offline'
+                bot_status_reason = f"Last webhook {int(last_webhook_age_sec)}s ago"
+            else:
+                bot_status = 'Error Reading Status'
+                bot_status_reason = 'Invalid timestamp in last_webhook.log'
+        except Exception:
+            bot_status = 'Error Reading Status'
+            bot_status_reason = 'Unable to read last_webhook.log'
+    else:
+        bot_status = 'No Webhooks Received'
+        bot_status_reason = 'last_webhook.log not found'
+
+    fallback_status = infer_bot_status_from_log('trades.log')
+    if fallback_status and bot_status in ['Offline', 'No Webhooks Received', 'Error Reading Status']:
+        bot_status, bot_status_reason = fallback_status
 
     db_size_mb = 0
     try:
@@ -426,10 +483,19 @@ def api_admin_health_data():
     except Exception as e:
         app.logger.error(f"[SYSTEM] Could not calculate DB size: {e}")
 
+    dashboard_summary, dashboard_details = get_log_summary_and_details('dashboard.log')
+    trades_summary, trades_details = get_log_summary_and_details('trades.log')
+
     return jsonify({
-        'bot_status': bot_status, 'last_webhook_utc': last_webhook_utc, 'db_size_mb': db_size_mb,
-        'dashboard_log_events': read_filtered_logs('dashboard.log'),
-        'trades_log_events': read_filtered_logs('trades.log')
+        'bot_status': bot_status,
+        'bot_status_reason': bot_status_reason,
+        'last_webhook_utc': last_webhook_utc,
+        'last_webhook_age_sec': last_webhook_age_sec,
+        'db_size_mb': db_size_mb,
+        'dashboard_log_summary': dashboard_summary,
+        'dashboard_log_details': dashboard_details,
+        'trades_log_summary': trades_summary,
+        'trades_log_details': trades_details
     })
 
 @app.route('/api/admin/dashboard_summary')
@@ -594,20 +660,72 @@ def api_account():
 @app.route('/api/internal/proxy_trade', methods=['POST'])
 @login_required
 def proxy_trade_internal():
-    payload = request.get_json(force=True)
+    payload = request.get_json(silent=True) or {}
     payload['user'] = g.user.tradingview_user
-    app.logger.info(f"[TRADE] Manual trade proxied by '{g.user.username}': {payload}")
+    symbol = payload.get('symbol')
+    action = payload.get('action')
+    amount = payload.get('amount')
+    app.logger.info(
+        f"[TRADE_MANUAL_REQUEST] user='{g.user.username}' symbol='{symbol}' action='{action}' amount='{amount}'"
+    )
+    if not symbol or not action:
+        app.logger.warning(f"[TRADE_MANUAL_REJECTED] Missing symbol/action from user='{g.user.username}'.")
+        return jsonify({'error': 'invalid_request', 'detail': 'symbol and action are required'}), 400
     try:
         r = requests.post(BOT_WEBHOOK, json=payload, timeout=10)
-        r.raise_for_status()
-        return jsonify(r.json()), r.status_code
+        if not r.ok:
+            detail = r.text
+            try:
+                detail = r.json().get('error', detail)
+            except ValueError:
+                pass
+            app.logger.warning(
+                f"[TRADE_MANUAL_REJECTED] user='{g.user.username}' symbol='{symbol}' action='{action}' status={r.status_code} detail='{detail}'"
+            )
+            return jsonify({'error': 'proxy_failed', 'detail': detail}), r.status_code
+        try:
+            response_payload = r.json()
+        except ValueError:
+            response_payload = {'detail': r.text}
+        app.logger.info(
+            f"[TRADE_MANUAL_SUCCESS] user='{g.user.username}' symbol='{symbol}' action='{action}' status={r.status_code}"
+        )
+        return jsonify(response_payload), r.status_code
     except Exception as e:
         detail = str(e)
         if hasattr(e, 'response') and e.response is not None:
-            try: detail = e.response.json().get('error', e.response.text)
-            except: detail = e.response.text
-        app.logger.error(f"[BOT_PROXY_FAIL] Proxy to bot failed: {detail}")
+            try:
+                detail = e.response.json().get('error', e.response.text)
+            except ValueError:
+                detail = e.response.text
+        app.logger.error(
+            f"[BOT_PROXY_FAIL] user='{g.user.username}' symbol='{symbol}' action='{action}' detail='{detail}'",
+            exc_info=True
+        )
         return jsonify({'error': 'proxy_failed', 'detail': detail}), 500
+
+@app.route('/api/internal/log_client_event', methods=['POST'])
+@login_required
+def log_client_event():
+    payload = request.get_json(silent=True) or {}
+    event_type = str(payload.get('event_type', 'ui_event'))[:80]
+    message = str(payload.get('message', '')).replace('\n', ' ')[:500]
+    detail = payload.get('detail')
+    if isinstance(detail, (dict, list)):
+        detail_str = json.dumps(detail)[:1000]
+    elif detail is None:
+        detail_str = ''
+    else:
+        detail_str = str(detail)[:1000]
+    app.logger.warning(
+        f"[UI_EVENT] user='{g.user.username}' event='{event_type}' message='{message}' detail='{detail_str}'"
+    )
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/proxy_trade', methods=['POST'])
+@login_required
+def proxy_trade_alias():
+    return proxy_trade_internal()
 
 @app.route('/api/internal/record_trade', methods=['POST'])
 def record_trade_internal():

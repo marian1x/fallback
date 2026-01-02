@@ -3,26 +3,76 @@
 {% block content %}
 <div class="container-fluid my-4 animate__animated animate__fadeIn">
   <h3 class="mb-3">Open Trades Analytics</h3>
+  <div class="row row-cols-2 row-cols-lg-5 g-3 mb-4">
+    <div class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="small text-muted">Open P/L</div>
+          <div id="oaTotalPl" class="fs-5 fw-bold">$0.00</div>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="small text-muted">Gross Exposure</div>
+          <div id="oaGrossExposure" class="fs-5 fw-bold">$0.00</div>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="small text-muted">Net Exposure</div>
+          <div id="oaNetExposure" class="fs-5 fw-bold">$0.00</div>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="small text-muted">Avg Hold Time</div>
+          <div id="oaAvgHold" class="fs-5 fw-bold">-</div>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <div class="small text-muted">Largest Position</div>
+          <div id="oaTopPosition" class="fs-6 fw-bold">-</div>
+        </div>
+      </div>
+    </div>
+  </div>
   <div class="row g-4">
-    <div class="col-lg-7">
+    <div class="col-lg-8">
       <div class="card shadow-sm mb-4">
         <div class="card-header">
-          <i class="fa-solid fa-fire-flame-curved me-2"></i> Open Positions Heatmap (by Market Value)
+          <i class="fa-solid fa-fire-flame-curved me-2"></i> Exposure by Symbol (Market Value)
         </div>
         <div class="card-body">
-          <canvas id="openHeatmapChart" height="120"></canvas>
+          <canvas id="openExposureChart" height="140"></canvas>
         </div>
       </div>
        <div class="card shadow-sm">
         <div class="card-header">
-          <i class="fa-solid fa-hourglass-half me-2"></i> Open Trade Durations (Hours)
+          <i class="fa-solid fa-chart-line me-2"></i> Unrealized P/L by Symbol
         </div>
         <div class="card-body">
-          <canvas id="openDurationsChart" height="120"></canvas>
+          <canvas id="openPnlChart" height="140"></canvas>
         </div>
       </div>
     </div>
-    <div class="col-lg-5">
+    <div class="col-lg-4">
+      <div class="card shadow-sm mb-4">
+        <div class="card-header">
+          <i class="fa-solid fa-scale-balanced me-2"></i> Side Exposure
+        </div>
+        <div class="card-body">
+          <canvas id="openSideChart" height="180"></canvas>
+        </div>
+      </div>
       <div class="card shadow-sm">
         <div class="card-header">
           <i class="fa-solid fa-table-list me-2"></i> Open Trades Snapshot
@@ -33,7 +83,9 @@
               <tr>
                 <th>Symbol</th>
                 <th>Side</th>
+                <th>Market Value</th>
                 <th>Live P/L</th>
+                <th>P/L %</th>
                 <th>Since Open</th>
               </tr>
             </thead>
@@ -56,46 +108,128 @@ function destroyChart(chartId) {
     }
 }
 
+function formatCurrency(value) {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(value);
+}
+
+function signedCurrencyHtml(value) {
+    const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+    const className = value > 0 ? 'profit' : value < 0 ? 'loss' : 'text-muted';
+    return `<span class="${className}">${sign}${formatCurrency(Math.abs(value))}</span>`;
+}
+
+function signedPercentHtml(value) {
+    const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+    const className = value > 0 ? 'profit' : value < 0 ? 'loss' : 'text-muted';
+    return `<span class="${className}">${sign}${Math.abs(value).toFixed(2)}%</span>`;
+}
+
+function durationData(isoString) {
+    if (!isoString) return { hours: 0, display: '-' };
+    const openTime = luxon.DateTime.fromISO(isoString);
+    if (!openTime.isValid) return { hours: 0, display: '-' };
+    const now = luxon.DateTime.now();
+    const duration = now.diff(openTime, ['days', 'hours', 'minutes']).toObject();
+    const days = Math.floor(duration.days || 0);
+    const hours = Math.floor(duration.hours || 0);
+    const minutes = Math.floor(duration.minutes || 0);
+    let display = '-';
+    if (days > 0) {
+        display = `${days}d ${hours}h`;
+    } else if (hours > 0) {
+        display = `${hours}h ${minutes}m`;
+    } else {
+        display = `${minutes}m`;
+    }
+    const totalHours = now.diff(openTime, 'hours').hours;
+    return { hours: totalHours > 0 ? totalHours : 0, display };
+}
+
+function formatDurationFromHours(hours) {
+    if (!hours || hours <= 0) return '-';
+    const totalMinutes = Math.floor(hours * 60);
+    const days = Math.floor(totalMinutes / (60 * 24));
+    const hoursPart = Math.floor((totalMinutes - (days * 24 * 60)) / 60);
+    const minutesPart = totalMinutes % 60;
+    if (days > 0) return `${days}d ${hoursPart}h`;
+    if (hoursPart > 0) return `${hoursPart}h ${minutesPart}m`;
+    return `${minutesPart}m`;
+}
+
 function fetchOpenAnalytics() {
     $.get('/api/open_positions', function(data){
-        // --- Table ---
-        let table = $('#openTradesTable').DataTable();
+        const table = $('#openTradesTable').DataTable();
         table.clear();
-        data.sort((a,b) => b.market_value - a.market_value); // Sort by largest position
+        const enriched = data.map(r => {
+            const displaySymbol = r.symbol.replace('USD', '/USD');
+            const marketValueSigned = Number(r.market_value || 0);
+            const marketValueAbs = Math.abs(marketValueSigned);
+            const unrealizedPl = Number(r.unrealized_pl || 0);
+            const costBasis = (Number(r.open_price || 0) * Number(r.qty || 0));
+            const plPct = costBasis > 0 ? (unrealizedPl / costBasis) * 100 : 0;
+            const duration = durationData(r.open_time_iso);
+            return {
+                symbol: displaySymbol,
+                side: (r.side || '').toUpperCase(),
+                marketValueSigned,
+                marketValueAbs,
+                unrealizedPl,
+                plPct,
+                durationHours: duration.hours,
+                durationDisplay: duration.display
+            };
+        }).sort((a, b) => b.marketValueAbs - a.marketValueAbs);
 
-        data.forEach(r => {
-            let durationStr = "-";
-            if (r.open_time_iso) {
-                const openTime = luxon.DateTime.fromISO(r.open_time_iso);
-                const duration = luxon.DateTime.now().diff(openTime, ['days', 'hours', 'minutes']);
-                if (duration.days > 0) {
-                    durationStr = `${duration.days}d ${Math.round(duration.hours)}h`;
-                } else {
-                    durationStr = `${Math.round(duration.hours)}h ${Math.round(duration.minutes)}m`;
-                }
+        let totalPl = 0;
+        let grossExposure = 0;
+        let netExposure = 0;
+        let totalHoldHours = 0;
+        let holdCount = 0;
+        let longExposure = 0;
+        let shortExposure = 0;
+        let topPosition = null;
+
+        enriched.forEach(p => {
+            totalPl += p.unrealizedPl;
+            grossExposure += p.marketValueAbs;
+            netExposure += p.marketValueSigned;
+            if (p.durationHours > 0) {
+                totalHoldHours += p.durationHours;
+                holdCount += 1;
             }
+            if (p.side === 'BUY') longExposure += p.marketValueAbs;
+            if (p.side === 'SELL') shortExposure += p.marketValueAbs;
+            if (!topPosition || p.marketValueAbs > topPosition.marketValueAbs) {
+                topPosition = p;
+            }
+        });
+
+        const avgHoldHours = holdCount > 0 ? (totalHoldHours / holdCount) : 0;
+
+        $('#oaTotalPl').html(signedCurrencyHtml(totalPl));
+        $('#oaGrossExposure').text(formatCurrency(grossExposure));
+        $('#oaNetExposure').html(signedCurrencyHtml(netExposure));
+        $('#oaAvgHold').text(formatDurationFromHours(avgHoldHours));
+        $('#oaTopPosition').text(topPosition ? `${topPosition.symbol} (${formatCurrency(topPosition.marketValueAbs)})` : '-');
+
+        enriched.forEach(p => {
             table.row.add([
-                r.symbol.replace('USD', '/USD'),
-                r.side.toUpperCase(),
-                `<span class="${r.unrealized_pl > 0 ? 'profit' : 'loss'}">${r.unrealized_pl.toFixed(2)}</span>`,
-                durationStr
+                p.symbol,
+                p.side,
+                `<span data-order="${p.marketValueAbs}">${formatCurrency(p.marketValueAbs)}</span>`,
+                `<span data-order="${p.unrealizedPl}">${signedCurrencyHtml(p.unrealizedPl)}</span>`,
+                `<span data-order="${p.plPct}">${signedPercentHtml(p.plPct)}</span>`,
+                p.durationDisplay
             ]);
         });
         table.draw();
 
-        // --- Charts ---
-        const labels = data.map(p => p.symbol.replace('USD', '/USD'));
-        const marketValues = data.map(p => p.market_value);
-        const pnlValues = data.map(p => p.unrealized_pl);
-        const durations = data.map(p => {
-            if (!p.open_time_iso) return 0;
-            const openTime = luxon.DateTime.fromISO(p.open_time_iso);
-            return luxon.DateTime.now().diff(openTime, 'hours').hours;
-        });
+        const labels = enriched.map(p => p.symbol);
+        const marketValues = enriched.map(p => p.marketValueAbs);
+        const pnlValues = enriched.map(p => p.unrealizedPl);
 
-        // Heatmap Chart
-        destroyChart('openHeatmapChart');
-        openAnalyticsCharts['openHeatmapChart'] = new Chart(document.getElementById('openHeatmapChart'), {
+        destroyChart('openExposureChart');
+        openAnalyticsCharts['openExposureChart'] = new Chart(document.getElementById('openExposureChart'), {
             type: 'bar',
             data: {
                 labels: labels,
@@ -110,21 +244,35 @@ function fetchOpenAnalytics() {
             options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } } }
         });
 
-        // Durations Chart
-        destroyChart('openDurationsChart');
-        openAnalyticsCharts['openDurationsChart'] = new Chart(document.getElementById('openDurationsChart'), {
+        destroyChart('openPnlChart');
+        openAnalyticsCharts['openPnlChart'] = new Chart(document.getElementById('openPnlChart'), {
             type: 'bar',
             data: {
                 labels: labels,
                 datasets: [{
-                    label: 'Duration (hours)',
-                    data: durations,
-                    backgroundColor: 'rgba(88, 166, 255, 0.6)',
-                    borderColor: '#58a6ff',
+                    label: 'Unrealized P/L ($)',
+                    data: pnlValues,
+                    backgroundColor: pnlValues.map(pl => pl >= 0 ? 'rgba(100, 255, 218, 0.6)' : 'rgba(255, 139, 139, 0.6)'),
+                    borderColor: pnlValues.map(pl => pl >= 0 ? '#64ffda' : '#ff8b8b'),
                     borderWidth: 1
                 }]
             },
-            options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } } }
+            options: { responsive: true, plugins: { legend: { display: false } } }
+        });
+
+        destroyChart('openSideChart');
+        openAnalyticsCharts['openSideChart'] = new Chart(document.getElementById('openSideChart'), {
+            type: 'doughnut',
+            data: {
+                labels: ['Long Exposure', 'Short Exposure'],
+                datasets: [{
+                    data: [longExposure, shortExposure],
+                    backgroundColor: ['rgba(100, 255, 218, 0.7)', 'rgba(255, 139, 139, 0.7)'],
+                    borderColor: ['#64ffda', '#ff8b8b'],
+                    borderWidth: 1
+                }]
+            },
+            options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
         });
     });
 }

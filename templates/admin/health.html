@@ -12,6 +12,7 @@
                     <h4 id="bot-status" class="fw-bold mb-0">
                         <span class="spinner-border spinner-border-sm" role="status"></span> Loading...
                     </h4>
+                    <div id="bot-status-reason" class="small text-muted mt-1"></div>
                 </div>
             </div>
         </div>
@@ -38,7 +39,12 @@
             <div class="card shadow-sm">
                 <div class="card-header"><i class="fa-solid fa-file-waveform me-2"></i>Recent Dashboard Log Issues</div>
                 <div class="card-body">
-                    <pre id="dashboard-log-errors" class="log-box">Loading...</pre>
+                    <div class="small text-muted mb-2">Summary</div>
+                    <pre id="dashboard-log-summary" class="log-box log-box-summary">Loading...</pre>
+                    <details class="mt-2">
+                        <summary class="small text-muted">Show advanced log details</summary>
+                        <pre id="dashboard-log-details" class="log-box mt-2">Loading...</pre>
+                    </details>
                 </div>
             </div>
         </div>
@@ -46,7 +52,12 @@
             <div class="card shadow-sm">
                 <div class="card-header"><i class="fa-solid fa-file-invoice-dollar me-2"></i>Recent Trades Log Issues</div>
                 <div class="card-body">
-                    <pre id="trades-log-errors" class="log-box">Loading...</pre>
+                    <div class="small text-muted mb-2">Summary</div>
+                    <pre id="trades-log-summary" class="log-box log-box-summary">Loading...</pre>
+                    <details class="mt-2">
+                        <summary class="small text-muted">Show advanced log details</summary>
+                        <pre id="trades-log-details" class="log-box mt-2">Loading...</pre>
+                    </details>
                 </div>
             </div>
         </div>
@@ -69,11 +80,12 @@
                 statusHtml = `<span class="text-danger"><i class="fa-solid fa-circle me-2"></i>Offline / Check Status</span>`;
             }
             $('#bot-status').html(statusHtml);
+            $('#bot-status-reason').text(data.bot_status_reason || '');
 
             // Last Webhook
             if (data.last_webhook_utc) {
                 const webhookTime = luxon.DateTime.fromISO(data.last_webhook_utc);
-                $('#last-webhook').text(webhookTime.toRelative() || 'Never');
+                $('#last-webhook').text(webhookTime.isValid ? (webhookTime.toRelative() || 'Never') : 'Unknown');
             } else {
                  $('#last-webhook').text('Never');
             }
@@ -83,8 +95,14 @@
             $('#db-size').text(data.db_size_mb + ' MB');
 
             // Log Errors
-            $('#dashboard-log-errors').text(data.dashboard_log_errors.join('\\n') || 'No issues found.');
-            $('#trades-log-errors').text(data.trades_log_errors.join('\\n') || 'No issues found.');
+            const summaryDashboard = Array.isArray(data.dashboard_log_summary) ? data.dashboard_log_summary : ['No data'];
+            const detailsDashboard = Array.isArray(data.dashboard_log_details) ? data.dashboard_log_details : ['No data'];
+            const summaryTrades = Array.isArray(data.trades_log_summary) ? data.trades_log_summary : ['No data'];
+            const detailsTrades = Array.isArray(data.trades_log_details) ? data.trades_log_details : ['No data'];
+            $('#dashboard-log-summary').text(summaryDashboard.join('\\n'));
+            $('#dashboard-log-details').text(detailsDashboard.join('\\n'));
+            $('#trades-log-summary').text(summaryTrades.join('\\n'));
+            $('#trades-log-details').text(detailsTrades.join('\\n'));
 
         }).fail(function() {
             $('#bot-status').html('<span class="text-danger">Error fetching data</span>');
@@ -109,5 +127,7 @@
         word-break: break-all;
         font-size: 0.8rem;
     }
+    .log-box-summary { min-height: 120px; max-height: 180px; }
+    details > summary { cursor: pointer; }
 </style>
 {% endblock %}

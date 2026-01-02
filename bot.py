@@ -7,7 +7,7 @@ from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import alpaca_trade_api as tradeapi
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 
 from models import db, User
 from utils import decrypt_data
@@ -68,7 +68,7 @@ def webhook():
     webhook_log_path = os.path.join(app.instance_path, 'last_webhook.log')
     try:
         with open(webhook_log_path, 'w') as f:
-            f.write(datetime.now().isoformat())
+            f.write(datetime.now(timezone.utc).isoformat())
     except Exception as e:
         logger.error(f"[BOT_STATUS] Could not write to last_webhook.log: {e}")
 
