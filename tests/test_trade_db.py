@@ -77,3 +77,50 @@ def test_record_closed_trade(app, monkeypatch):
         assert t.close_price == 110
         assert t.profit_loss == (110 - 100) * 10
         assert Trade.query.count() == 1
+
+
+def test_record_closed_trade_fallback_on_unfilled_order(app, monkeypatch):
+    open_payload = {'symbol': 'AAPL', 'action': 'buy'}
+    open_data = {'order_id': '1', 'side': 'buy', 'qty': 10, 'price': 100}
+    with app.app_context():
+        user = User(username='tester2', email='tester2@example.com', password_hash='hashed')
+        db.session.add(user)
+        db.session.commit()
+        trade_db.record_open_trade(open_data, open_payload, user.id)
+
+        position_obj = SimpleNamespace(
+            avg_entry_price=100,
+            qty=10,
+            side='long',
+            asset_id='asset123'
+        )
+
+        class FakeAPIError(Exception):
+            pass
+
+        monkeypatch.setattr(trade_db.tradeapi.rest, "APIError", FakeAPIError, raising=False)
+
+        class MockOrder:
+            status = 'accepted'
+            filled_avg_price = None
+            filled_at = None
+
+        class MockTrade:
+            price = 105
+
+        class MockAPI(SimpleNamespace):
+            def get_order(self, order_id):
+                assert order_id == 'close123'
+                return MockOrder()
+            def get_position(self, symbol):
+                raise FakeAPIError("position not found")
+            def get_latest_trade(self, symbol):
+                return MockTrade()
+
+        monkeypatch.setattr(trade_db, 'get_api_for_user', lambda user_id: MockAPI())
+        monkeypatch.setattr(trade_db.time, 'sleep', lambda s: None)
+
+        close_data = {'close_order_id': 'close123'}
+        t = trade_db.record_closed_trade(close_data, {'symbol': 'AAPL', 'action': 'sell'}, user.id, position_obj)
+        assert t.status == 'closed'
+        assert t.close_price == 105

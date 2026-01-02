@@ -14,6 +14,21 @@ BASE_URL = os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
 
 logger = logging.getLogger(__name__)
 
+def is_crypto(symbol):
+    return symbol and (symbol.upper().endswith('USD') or '/' in symbol)
+
+def get_latest_price(api, symbol):
+    try:
+        api_symbol = symbol.replace('/', '')
+        if is_crypto(symbol):
+            trade = api.get_latest_crypto_trade(api_symbol, "CBSE")
+            return float(trade.p)
+        trade = api.get_latest_trade(api_symbol)
+        return float(trade.price)
+    except Exception as e:
+        logger.error(f"[PRICE_FETCH_FAIL] Failed to get price for {symbol}: {e}")
+        return None
+
 def get_api_for_user(user_id):
     """Initializes and returns an Alpaca API client for a specific user."""
     user = db.session.get(User, user_id)
@@ -96,26 +111,53 @@ def record_closed_trade(data, payload, user_id, position_obj):
     avg_entry_price = float(position_obj.avg_entry_price)
     total_qty = abs(float(position_obj.qty))
     position_side = position_obj.side
+    api_symbol = symbol.replace('/', '')
 
     exit_order = None
-    for i in range(15):
+    terminal_statuses = {'filled', 'partially_filled', 'canceled', 'rejected', 'expired'}
+    for i in range(30):
         try:
             exit_order = api.get_order(close_order_id)
-            if exit_order.status in ['filled', 'partially_filled']:
+            status = (exit_order.status or '').lower()
+            if status in terminal_statuses:
                 logger.info(f"Close order {close_order_id} for {symbol} confirmed as '{exit_order.status}'.")
                 break
-            logger.warning(f"Waiting for close order {close_order_id} to fill... Status: '{exit_order.status}'. Attempt {i+1}/15")
+            logger.warning(f"Waiting for close order {close_order_id} to fill... Status: '{exit_order.status}'. Attempt {i+1}/30")
             time.sleep(1)
         except Exception as e:
             logger.error(f"Error fetching close order {close_order_id}: {e}")
             time.sleep(1)
 
-    if not exit_order or exit_order.status not in ['filled', 'partially_filled']:
-        logger.error(f"[DATABASE] Could not confirm fill for close order {close_order_id} for {symbol}. Aborting DB update.")
-        return None
+    exit_status = (exit_order.status if exit_order else 'unknown')
+    if exit_order and exit_order.status in ['filled', 'partially_filled']:
+        close_price = float(exit_order.filled_avg_price) if exit_order.filled_avg_price else None
+        close_time = exit_order.filled_at
+    else:
+        logger.warning(
+            f"[DATABASE] Close order {close_order_id} for {symbol} not filled (status='{exit_status}'). "
+            "Checking position status."
+        )
+        try:
+            api.get_position(api_symbol)
+            logger.warning(f"[DATABASE] Position still open for {symbol}, user_id={user_id}. Skipping close record.")
+            return None
+        except tradeapi.rest.APIError as e:
+            if "position not found" not in str(e).lower():
+                logger.error(f"[DATABASE] Error checking position status for {symbol}, user_id={user_id}: {e}")
+                return None
+        except Exception as e:
+            logger.error(f"[DATABASE] Error checking position status for {symbol}, user_id={user_id}: {e}")
+            return None
+        close_price = get_latest_price(api, symbol)
+        close_time = datetime.now(timezone.utc)
+        if close_price is None:
+            logger.warning(f"[DATABASE] Using entry price as fallback close price for {symbol}, user_id={user_id}.")
+            close_price = avg_entry_price
 
-    close_price = float(exit_order.filled_avg_price)
-    close_time = exit_order.filled_at
+    if close_time is None:
+        close_time = datetime.now(timezone.utc)
+    if close_price is None:
+        close_price = avg_entry_price
 
     trade_to_update = Trade.query.filter_by(symbol=symbol, status='open', user_id=user_id).order_by(Trade.open_time.desc()).first()
     

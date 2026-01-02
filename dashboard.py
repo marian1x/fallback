@@ -823,9 +823,17 @@ def api_admin_close_trades():
             continue
         
         try:
-            api.close_position(symbol.replace('/', ''))
+            api_symbol = symbol.replace('/', '')
+            position_to_close = api.get_position(api_symbol)
+            close_order = api.close_position(api_symbol)
             app.logger.info(f"[ADMIN_ACTION] Admin '{g.user.username}' closed position {symbol} for user '{user.username}'.")
             closed_count += 1
+            def record_close():
+                with app.app_context():
+                    payload = {'symbol': symbol, 'action': 'close'}
+                    data_dict = {'close_order_id': close_order.id}
+                    record_closed_trade(data_dict, payload, user.id, position_to_close)
+            threading.Thread(target=record_close, daemon=True).start()
         except Exception as e:
             error_msg = f"Failed to close {symbol} for {user.username}: {e}"
             app.logger.error(f"[ADMIN_ACTION] {error_msg}")

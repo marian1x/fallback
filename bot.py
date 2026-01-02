@@ -197,14 +197,14 @@ def webhook():
 
     payload = request.get_json(force=True)
     logger.info(f"[WEBHOOK_RECEIVED] Payload: {payload}")
-    tradingview_user = payload.get("user")
+    tradingview_user = (payload.get("user") or "").strip()
     
     if not tradingview_user:
         logger.error("[TRADE_REJECTED] 'user' field is missing from webhook.")
         return jsonify({"error": "Webhook missing 'user' identifier"}), 400
 
     with app.app_context():
-        if ENABLE_TV_BROADCAST and TV_BROADCAST_USER and tradingview_user == TV_BROADCAST_USER:
+        if ENABLE_TV_BROADCAST and TV_BROADCAST_USER and tradingview_user.lower() == TV_BROADCAST_USER.lower():
             query = User.query
             if not TV_BROADCAST_INCLUDE_SUPERUSER:
                 query = query.filter_by(is_superuser=False)
