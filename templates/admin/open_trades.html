@@ -84,7 +84,10 @@ document.addEventListener('DOMContentLoaded', function() {
             tableBody.insertAdjacentHTML('beforeend', row);
         });
 
-        dataTable = new DataTable('#adminOpenTradesTable');
+        dataTable = $('#adminOpenTradesTable').DataTable({
+            responsive: true,
+            autoWidth: false
+        });
     }
 
     function fetchAndRenderTable(userId = '') {

@@ -31,6 +31,17 @@ body {
     --link-hover-color: #0056b3;
     --table-striped-bg: #f8f9fa;
     --table-hover-bg: #e9ecef;
+    --log-bg: #f8fafc;
+    --log-border: #e0e6f0;
+    --log-error: #b02a37;
+    --log-error-bg: rgba(176, 42, 55, 0.12);
+    --log-warning: #b58100;
+    --log-warning-bg: rgba(181, 129, 0, 0.15);
+    --log-info: #0b7285;
+    --log-info-bg: rgba(11, 114, 133, 0.12);
+    --log-debug: #5c6b7a;
+    --log-debug-bg: rgba(92, 107, 122, 0.12);
+    --log-default: var(--text-color);
 }
 
 /* --- Dark Mode --- */
@@ -53,6 +64,17 @@ body.dark-mode {
     --link-hover-color: #a7ffeb;
     --table-striped-bg: #112a4c;
     --table-hover-bg: #1d3b66;
+    --log-bg: #0e2342;
+    --log-border: #1b3352;
+    --log-error: #ff8b8b;
+    --log-error-bg: rgba(255, 139, 139, 0.18);
+    --log-warning: #ffd166;
+    --log-warning-bg: rgba(255, 209, 102, 0.18);
+    --log-info: #63c5da;
+    --log-info-bg: rgba(99, 197, 218, 0.18);
+    --log-debug: #9aa5b1;
+    --log-debug-bg: rgba(154, 165, 177, 0.15);
+    --log-default: var(--text-color);
 }
 
 /* --- Apply Theme Colors --- */
@@ -87,6 +109,7 @@ h1, h2, h3, h4, h5, h6 {
     --bs-table-striped-bg: var(--table-striped-bg);
     --bs-table-hover-bg: var(--table-hover-bg);
 }
+table.dataTable { width: 100% !important; }
 .card-header, .card-body div, .card-body p {
     color: var(--text-color) !important;
 }
@@ -118,3 +141,30 @@ body.dark-mode .navbar-toggler-icon {
 .form-check-input { border-color: #444; background-color: #333; }
 .form-check-input:checked { background-color: var(--accent-color); border-color: var(--accent-color); }
 #themeSwitch + label i { color: var(--text-color); }
+
+/* --- DataTables Mobile/Responsive --- */
+.dataTables_wrapper { width: 100%; max-width: 100%; }
+.dataTables_wrapper .dataTables_length,
+.dataTables_wrapper .dataTables_filter,
+.dataTables_wrapper .dataTables_info,
+.dataTables_wrapper .dataTables_paginate {
+    color: var(--text-color);
+}
+@media (max-width: 768px) {
+    .dataTables_wrapper { overflow-x: auto; }
+    .dataTables_wrapper .dataTables_length,
+    .dataTables_wrapper .dataTables_filter,
+    .dataTables_wrapper .dataTables_info,
+    .dataTables_wrapper .dataTables_paginate {
+        float: none;
+        text-align: left;
+    }
+    .dataTables_wrapper .dataTables_filter,
+    .dataTables_wrapper .dataTables_length {
+        margin-bottom: 0.5rem;
+    }
+    table.dataTable th,
+    table.dataTable td {
+        white-space: normal;
+    }
+}

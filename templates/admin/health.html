@@ -72,10 +72,10 @@
                 <div class="card-header"><i class="fa-solid fa-file-waveform me-2"></i>Recent Dashboard Log Issues</div>
                 <div class="card-body">
                     <div class="small text-muted mb-2">Summary</div>
-                    <pre id="dashboard-log-summary" class="log-box log-box-summary">Loading...</pre>
+                    <div id="dashboard-log-summary" class="log-box log-box-summary">Loading...</div>
                     <details class="mt-2">
                         <summary class="small text-muted">Show advanced log details</summary>
-                        <pre id="dashboard-log-details" class="log-box mt-2">Loading...</pre>
+                        <div id="dashboard-log-details" class="log-box mt-2">Loading...</div>
                     </details>
                 </div>
             </div>
@@ -85,10 +85,10 @@
                 <div class="card-header"><i class="fa-solid fa-file-invoice-dollar me-2"></i>Recent Trades Log Issues</div>
                 <div class="card-body">
                     <div class="small text-muted mb-2">Summary</div>
-                    <pre id="trades-log-summary" class="log-box log-box-summary">Loading...</pre>
+                    <div id="trades-log-summary" class="log-box log-box-summary">Loading...</div>
                     <details class="mt-2">
                         <summary class="small text-muted">Show advanced log details</summary>
-                        <pre id="trades-log-details" class="log-box mt-2">Loading...</pre>
+                        <div id="trades-log-details" class="log-box mt-2">Loading...</div>
                     </details>
                 </div>
             </div>
@@ -100,6 +100,37 @@
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
 <script>
+    function classifyLogLine(line) {
+        const upper = line.toUpperCase();
+        const isError = upper.includes(' ERROR') || upper.includes('ERROR:') || upper.includes('[ERROR]') ||
+            upper.includes('[TRADE_FAIL]') || upper.includes('[API_FAIL]') || upper.includes('[SECURITY]');
+        if (isError) return 'error';
+        const isWarning = upper.includes(' WARNING') || upper.includes('WARNING:') || upper.includes('[WARNING]') ||
+            upper.includes('[TRADE_REJECTED]') || upper.includes('[TRADE_INFO]');
+        if (isWarning) return 'warning';
+        const isInfo = upper.includes(' INFO') || upper.includes('INFO:') || upper.includes('[INFO]') ||
+            upper.includes('[SYSTEM]') || upper.includes('[UPDATE]') || upper.includes('[DATABASE]');
+        if (isInfo) return 'info';
+        const isDebug = upper.includes(' DEBUG') || upper.includes('DEBUG:') || upper.includes('[DEBUG]');
+        if (isDebug) return 'debug';
+        return 'default';
+    }
+
+    function renderLogLines(targetId, lines) {
+        const container = $('#' + targetId);
+        container.empty();
+        if (!Array.isArray(lines) || lines.length === 0) {
+            container.append($('<div class="log-line log-muted"></div>').text('No data'));
+            return;
+        }
+        lines.forEach(line => {
+            const level = classifyLogLine(line);
+            const lineEl = $('<div class="log-line"></div>').addClass('log-' + level);
+            lineEl.text(line);
+            container.append(lineEl);
+        });
+    }
+
     function fetchHealthData() {
         $.get('/api/admin/health_data', function(data) {
             // Bot Status
@@ -131,10 +162,10 @@
             const detailsDashboard = Array.isArray(data.dashboard_log_details) ? data.dashboard_log_details : ['No data'];
             const summaryTrades = Array.isArray(data.trades_log_summary) ? data.trades_log_summary : ['No data'];
             const detailsTrades = Array.isArray(data.trades_log_details) ? data.trades_log_details : ['No data'];
-            $('#dashboard-log-summary').text(summaryDashboard.join('\\n'));
-            $('#dashboard-log-details').text(detailsDashboard.join('\\n'));
-            $('#trades-log-summary').text(summaryTrades.join('\\n'));
-            $('#trades-log-details').text(detailsTrades.join('\\n'));
+            renderLogLines('dashboard-log-summary', summaryDashboard);
+            renderLogLines('dashboard-log-details', detailsDashboard);
+            renderLogLines('trades-log-summary', summaryTrades);
+            renderLogLines('trades-log-details', detailsTrades);
 
         }).fail(function() {
             $('#bot-status').html('<span class="text-danger">Error fetching data</span>');
@@ -234,18 +265,30 @@
 </script>
 <style>
     .log-box {
-        background-color: var(--bs-table-striped-bg);
-        border: 1px solid var(--card-border);
-        border-radius: 5px;
-        padding: 10px;
+        background-color: var(--log-bg);
+        border: 1px solid var(--log-border);
+        border-radius: 6px;
+        padding: 8px;
         min-height: 200px;
         max-height: 400px;
         overflow-y: auto;
-        white-space: pre-wrap;
-        word-break: break-all;
         font-size: 0.8rem;
+        color: var(--text-color);
     }
     .log-box-summary { min-height: 120px; max-height: 180px; }
+    .log-line {
+        padding: 4px 6px;
+        border-bottom: 1px dashed var(--log-border);
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    .log-line:last-child { border-bottom: 0; }
+    .log-line.log-error { color: var(--log-error); background-color: var(--log-error-bg); }
+    .log-line.log-warning { color: var(--log-warning); background-color: var(--log-warning-bg); }
+    .log-line.log-info { color: var(--log-info); background-color: var(--log-info-bg); }
+    .log-line.log-debug { color: var(--log-debug); background-color: var(--log-debug-bg); }
+    .log-line.log-default { color: var(--log-default); }
+    .log-line.log-muted { color: var(--text-color-muted); }
     details > summary { cursor: pointer; }
 </style>
 {% endblock %}

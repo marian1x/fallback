@@ -300,7 +300,14 @@ function fetchOpenAnalytics() {
 }
 
 $(document).ready(function(){
-    $('#openTradesTable').DataTable({paging: false, searching: false, info: false, order: []});
+    $('#openTradesTable').DataTable({
+        paging: false,
+        searching: false,
+        info: false,
+        responsive: true,
+        autoWidth: false,
+        order: []
+    });
     fetchOpenAnalytics();
     setInterval(fetchOpenAnalytics, 15000); // Refresh every 15 seconds
 });

@@ -195,13 +195,14 @@
             searching: true,
             info: true,
             responsive: true,
+            autoWidth: false,
             order: [[7, "desc"]],
             language: { emptyTable: 'No closed trades found for the selected filters.' }
         });
         
         if ($('#leaderboardTable').length) {
             leaderboardTable = $('#leaderboardTable').DataTable({
-                paging: false, searching: false, info: false, order: [[2, 'desc']]
+                paging: false, searching: false, info: false, responsive: true, autoWidth: false, order: [[2, 'desc']]
             });
             $.get('/api/admin/performance_leaderboard', function(data) {
                 leaderboardTable.clear();

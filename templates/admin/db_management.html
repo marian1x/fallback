@@ -25,6 +25,18 @@
                     <a href="{{ url_for('admin_backup_db') }}" class="btn btn-primary"><i class="fa-solid fa-database me-2"></i>Download Manual Backup</a>
                 </div>
             </div>
+
+            <div class="card shadow-sm mb-4">
+                <div class="card-header">
+                    <i class="fa-solid fa-clone me-2"></i>Backfill Shared Trades
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">Copies admin trade history to users that share the same Alpaca API keys.</p>
+                    <form action="{{ url_for('admin_backfill_trades') }}" method="post" onsubmit="return confirm('Backfill admin trades to users sharing the same Alpaca keys? This is safe to run multiple times.');">
+                        <button type="submit" class="btn btn-secondary"><i class="fa-solid fa-clone me-2"></i>Run Backfill</button>
+                    </form>
+                </div>
+            </div>
             
             <div class="card shadow-sm">
                 <div class="card-header text-danger">

@@ -399,13 +399,20 @@ function computeAnalytics() {
 
 $(document).ready(function() {
     symbolPerformanceTable = $('#symbolPerformanceTable').DataTable({
-        paging: false, searching: false, info: false, order: [[1, 'desc']]
+        paging: false,
+        searching: false,
+        info: false,
+        responsive: true,
+        autoWidth: false,
+        order: [[1, 'desc']]
     });
 
     recentTradesTable = $('#recentTradesTable').DataTable({
         paging: false,
         searching: false,
         info: false,
+        responsive: true,
+        autoWidth: false,
         order: [[3, 'desc']],
         language: { emptyTable: 'No trades found for the selected filters.' }
     });

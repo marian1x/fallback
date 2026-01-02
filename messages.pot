@@ -1,0 +1,916 @@
+# Translations template for PROJECT.
+# Copyright (C) 2025 ORGANIZATION
+# This file is distributed under the same license as the PROJECT project.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2025.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: PROJECT VERSION\n"
+"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
+"POT-Creation-Date: 2025-10-12 16:01+0300\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.17.0\n"
+
+#: dashboard.py:105
+msgid "Please log in first."
+msgstr ""
+
+#: dashboard.py:114
+msgid "Admin access required."
+msgstr ""
+
+#: dashboard.py:144
+msgid "Logged in."
+msgstr ""
+
+#: dashboard.py:147
+msgid "Invalid credentials."
+msgstr ""
+
+#: dashboard.py:178
+msgid "Logged out."
+msgstr ""
+
+#: templates/base.html:5
+msgid "Trading Dashboard"
+msgstr ""
+
+#: templates/base.html:25 templates/dashboard.html:2
+msgid "Dashboard"
+msgstr ""
+
+#: templates/base.html:35 templates/closed_trades.html:2
+msgid "Closed Trades"
+msgstr ""
+
+#: templates/base.html:36
+msgid "Open Analytics"
+msgstr ""
+
+#: templates/base.html:37
+msgid "Advanced Analytics"
+msgstr ""
+
+#: templates/base.html:55 templates/config.html:2
+msgid "Configuration"
+msgstr ""
+
+#: templates/closed_trades.html:2 templates/config.html:2
+#: templates/dashboard.html:2
+msgid "TradingBot"
+msgstr ""
+
+#: templates/closed_trades.html:30
+msgid "Filter by Close Date"
+msgstr ""
+
+#: templates/closed_trades.html:45
+msgid "Clear"
+msgstr ""
+
+#: templates/closed_trades.html:65
+msgid "Closed Orders"
+msgstr ""
+
+#: templates/closed_trades.html:71
+msgid "User"
+msgstr ""
+
+#: templates/closed_trades.html:72 templates/dashboard.html:39
+#: templates/dashboard.html:72
+msgid "Symbol"
+msgstr ""
+
+#: templates/closed_trades.html:73 templates/dashboard.html:50
+#: templates/dashboard.html:73
+msgid "Side"
+msgstr ""
+
+#: templates/closed_trades.html:74 templates/dashboard.html:75
+msgid "Open Price"
+msgstr ""
+
+#: templates/closed_trades.html:75
+msgid "Close Price"
+msgstr ""
+
+#: templates/closed_trades.html:76 templates/dashboard.html:77
+msgid "P/L"
+msgstr ""
+
+#: templates/closed_trades.html:77
+#, python-format
+msgid "P/L %%"
+msgstr ""
+
+#: templates/closed_trades.html:78 templates/dashboard.html:78
+msgid "Open Time"
+msgstr ""
+
+#: templates/closed_trades.html:79
+msgid "Close Time"
+msgstr ""
+
+#: templates/closed_trades.html:80
+msgid "Exit Reason"
+msgstr ""
+
+#: templates/closed_trades.html:91
+msgid "Filtered Stats"
+msgstr ""
+
+#: templates/closed_trades.html:93 templates/closed_trades.html:169
+msgid "Total Net P/L"
+msgstr ""
+
+#: templates/closed_trades.html:94 templates/closed_trades.html:170
+msgid "Win Rate"
+msgstr ""
+
+#: templates/closed_trades.html:95 templates/closed_trades.html:171
+msgid "Wins"
+msgstr ""
+
+#: templates/closed_trades.html:96 templates/closed_trades.html:172
+msgid "Losses"
+msgstr ""
+
+#: templates/closed_trades.html:98 templates/closed_trades.html:173
+msgid "Best Trade"
+msgstr ""
+
+#: templates/closed_trades.html:99 templates/closed_trades.html:174
+msgid "Worst Trade"
+msgstr ""
+
+#: templates/config.html:9
+msgid "Application Configuration"
+msgstr ""
+
+#: templates/config.html:12
+msgid ""
+"Edit the values for your .env file. Changes may require an application "
+"restart to take effect."
+msgstr ""
+
+#: templates/config.html:20 templates/user_config.html:32
+msgid "Save Configuration"
+msgstr ""
+
+#: templates/dashboard.html:9
+msgid "Account Summary"
+msgstr ""
+
+#: templates/dashboard.html:13
+msgid "Total profit or loss from all open positions"
+msgstr ""
+
+#: templates/dashboard.html:13
+msgid "Live Open P/L"
+msgstr ""
+
+#: templates/dashboard.html:17
+msgid "The number of currently open trades"
+msgstr ""
+
+#: templates/dashboard.html:17
+msgid "# Open Trades"
+msgstr ""
+
+#: templates/dashboard.html:21
+msgid "The total value of your account (Cash + Positions)"
+msgstr ""
+
+#: templates/dashboard.html:21
+msgid "Equity"
+msgstr ""
+
+#: templates/dashboard.html:25
+msgid "The funds available for trading"
+msgstr ""
+
+#: templates/dashboard.html:25
+msgid "Cash"
+msgstr ""
+
+#: templates/dashboard.html:34
+msgid "Manual Trade"
+msgstr ""
+
+#: templates/dashboard.html:40
+msgid "e.g., AAPL, BTC/USD"
+msgstr ""
+
+#: templates/dashboard.html:40
+msgid "Enter the stock or crypto symbol to trade"
+msgstr ""
+
+#: templates/dashboard.html:46
+msgid "Amount ($)"
+msgstr ""
+
+#: templates/dashboard.html:47
+msgid "The notional value of the trade in USD"
+msgstr ""
+
+#: templates/dashboard.html:51
+msgid "Choose to buy (long) or sell (short)"
+msgstr ""
+
+#: templates/dashboard.html:52
+msgid "Buy (Long)"
+msgstr ""
+
+#: templates/dashboard.html:53
+msgid "Sell (Short)"
+msgstr ""
+
+#: templates/dashboard.html:57
+msgid "Submit the trade to the bot"
+msgstr ""
+
+#: templates/dashboard.html:57
+msgid "Send"
+msgstr ""
+
+#: templates/dashboard.html:65
+msgid "Open Positions"
+msgstr ""
+
+#: templates/dashboard.html:72
+msgid "The asset being traded"
+msgstr ""
+
+#: templates/dashboard.html:73
+msgid "The direction of the trade"
+msgstr ""
+
+#: templates/dashboard.html:74
+msgid "The quantity of the asset held"
+msgstr ""
+
+#: templates/dashboard.html:74
+msgid "Qty"
+msgstr ""
+
+#: templates/dashboard.html:75
+msgid "The average price at which the position was opened"
+msgstr ""
+
+#: templates/dashboard.html:76
+msgid "The current market price of the asset"
+msgstr ""
+
+#: templates/dashboard.html:76
+msgid "Current Price"
+msgstr ""
+
+#: templates/dashboard.html:77
+msgid "Unrealized Profit or Loss"
+msgstr ""
+
+#: templates/dashboard.html:78
+msgid "The date and time the position was opened"
+msgstr ""
+
+#: templates/dashboard.html:79
+msgid "Manually close this position"
+msgstr ""
+
+#: templates/dashboard.html:79
+msgid "Action"
+msgstr ""
+
+#: templates/dashboard.html:94
+msgid "Set Take Profit / Stop Loss for"
+msgstr ""
+
+#: templates/dashboard.html:103
+msgid "Take Profit Price"
+msgstr ""
+
+#: templates/dashboard.html:104
+msgid "e.g., 150.25"
+msgstr ""
+
+#: templates/dashboard.html:107
+msgid "Take Profit P/L ($)"
+msgstr ""
+
+#: templates/dashboard.html:108
+msgid "e.g., 20"
+msgstr ""
+
+#: templates/dashboard.html:113
+msgid "Stop Loss Price"
+msgstr ""
+
+#: templates/dashboard.html:114
+msgid "e.g., 140.50"
+msgstr ""
+
+#: templates/dashboard.html:117
+msgid "Stop Loss P/L ($)"
+msgstr ""
+
+#: templates/dashboard.html:118
+msgid "e.g., -10"
+msgstr ""
+
+#: templates/dashboard.html:123
+msgid "Clear & Deactivate"
+msgstr ""
+
+#: templates/dashboard.html:124 templates/dashboard.html:254
+msgid "Cancel"
+msgstr ""
+
+#: templates/dashboard.html:125
+msgid "Save & Activate"
+msgstr ""
+
+#: templates/dashboard.html:170
+msgid "BUY"
+msgstr ""
+
+#: templates/dashboard.html:171
+msgid "SELL"
+msgstr ""
+
+#: templates/dashboard.html:193
+msgid "Set Take Profit / Stop Loss"
+msgstr ""
+
+#: templates/dashboard.html:196
+msgid "Close Position Immediately"
+msgstr ""
+
+#: templates/dashboard.html:253
+msgid "Close"
+msgstr ""
+
+#: templates/dashboard.html:254
+msgid "Yes, close it!"
+msgstr ""
+
+#: templates/dashboard.html:263 templates/dashboard.html:393
+msgid "Success!"
+msgstr ""
+
+#: templates/dashboard.html:263
+#, python-format
+msgid "Close order for %(symbol)s sent."
+msgstr ""
+
+#: templates/dashboard.html:270 templates/dashboard.html:400
+msgid "An unknown error occurred."
+msgstr ""
+
+#: templates/dashboard.html:272
+msgid "Close Failed"
+msgstr ""
+
+#: templates/dashboard.html:372
+msgid "Invalid Input"
+msgstr ""
+
+#: templates/dashboard.html:372
+msgid "Please fill all fields correctly."
+msgstr ""
+
+#: templates/dashboard.html:377
+msgid "Invalid Symbol"
+msgstr ""
+
+#: templates/dashboard.html:377
+#, python-format
+msgid "The symbol \"%(symbol)s\" is not tradable or does not exist."
+msgstr ""
+
+#: templates/dashboard.html:383
+msgid "Amount Too Low"
+msgstr ""
+
+#: templates/dashboard.html:384
+#, python-format
+msgid ""
+"The minimum order size for crypto is $%(amount)s. Please increase your "
+"trade amount."
+msgstr ""
+
+#: templates/dashboard.html:393
+#, python-format
+msgid "Trade order for %(symbol)s sent."
+msgstr ""
+
+#: templates/dashboard.html:402
+msgid "Trade Failed"
+msgstr ""
+
+#: templates/user_config.html:9
+msgid "My Configuration"
+msgstr ""
+
+#: templates/user_config.html:12
+msgid "Manage your personal settings and API credentials."
+msgstr ""
+
+#: templates/user_config.html:24
+msgid "Default Per-Trade Amount ($)"
+msgstr ""
+
+#: templates/user_config.html:28
+msgid "TradingView \"user\" Value"
+msgstr ""
+
+#: templates/user_config.html:30
+msgid ""
+"This must exactly match the \"user\" value in your webhook JSON for "
+"trades to be processed."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/_termui_impl.py:600
+#, python-brace-format
+msgid "{editor}: Editing failed"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/_termui_impl.py:604
+#, python-brace-format
+msgid "{editor}: Editing failed: {e}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:1084
+#: venv/lib/python3.11/site-packages/click/core.py:1121
+#, python-brace-format
+msgid "{text} {deprecated_message}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:1140
+msgid "Options"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:1202
+#, python-brace-format
+msgid "Got unexpected extra argument ({args})"
+msgid_plural "Got unexpected extra arguments ({args})"
+msgstr[0] ""
+msgstr[1] ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:1221
+#, python-brace-format
+msgid "DeprecationWarning: The command {name!r} is deprecated.{extra_message}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:1405
+msgid "Aborted!"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:1779
+msgid "Commands"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:1810
+msgid "Missing command."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:1888
+#, python-brace-format
+msgid "No such command {name!r}."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:2303
+msgid "Value must be an iterable."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:2324
+#, python-brace-format
+msgid "Takes {nargs} values but 1 was given."
+msgid_plural "Takes {nargs} values but {len} were given."
+msgstr[0] ""
+msgstr[1] ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:2404
+#, python-brace-format
+msgid ""
+"DeprecationWarning: The {param_type} {name!r} is "
+"deprecated.{extra_message}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:2807
+#, python-brace-format
+msgid "env var: {var}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:2810
+#, python-brace-format
+msgid "default: {default}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:2814
+msgid "required"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/core.py:2870
+msgid "(dynamic)"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/decorators.py:465
+#, python-format
+msgid "%(prog)s, version %(version)s"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/decorators.py:522
+msgid "Show the version and exit."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/decorators.py:548
+msgid "Show this message and exit."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/exceptions.py:50
+#: venv/lib/python3.11/site-packages/click/exceptions.py:89
+#, python-brace-format
+msgid "Error: {message}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/exceptions.py:81
+#, python-brace-format
+msgid "Try '{command} {option}' for help."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/exceptions.py:130
+#, python-brace-format
+msgid "Invalid value: {message}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/exceptions.py:132
+#, python-brace-format
+msgid "Invalid value for {param_hint}: {message}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/exceptions.py:190
+msgid "Missing argument"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/exceptions.py:192
+msgid "Missing option"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/exceptions.py:194
+msgid "Missing parameter"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/exceptions.py:196
+#, python-brace-format
+msgid "Missing {param_type}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/exceptions.py:203
+#, python-brace-format
+msgid "Missing parameter: {param_name}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/exceptions.py:223
+#, python-brace-format
+msgid "No such option: {name}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/exceptions.py:235
+#, python-brace-format
+msgid "Did you mean {possibility}?"
+msgid_plural "(Possible options: {possibilities})"
+msgstr[0] ""
+msgstr[1] ""
+
+#: venv/lib/python3.11/site-packages/click/exceptions.py:282
+msgid "unknown error"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/exceptions.py:289
+#, python-brace-format
+msgid "Could not open file {filename!r}: {message}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/parser.py:200
+#, python-brace-format
+msgid "Argument {name!r} takes {nargs} values."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/parser.py:383
+#, python-brace-format
+msgid "Option {name!r} does not take a value."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/parser.py:444
+#, python-brace-format
+msgid "Option {name!r} requires an argument."
+msgid_plural "Option {name!r} requires {nargs} arguments."
+msgstr[0] ""
+msgstr[1] ""
+
+#: venv/lib/python3.11/site-packages/click/shell_completion.py:326
+msgid "Shell completion is not supported for Bash versions older than 4.4."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/shell_completion.py:333
+msgid "Couldn't detect Bash version, shell completion is not supported."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/termui.py:162
+msgid "Repeat for confirmation"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/termui.py:178
+msgid "Error: The value you entered was invalid."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/termui.py:180
+#, python-brace-format
+msgid "Error: {e.message}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/termui.py:191
+msgid "Error: The two entered values do not match."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/termui.py:247
+msgid "Error: invalid input"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/termui.py:866
+msgid "Press any key to continue..."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:332
+#, python-brace-format
+msgid ""
+"Choose from:\n"
+"\t{choices}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:369
+#, python-brace-format
+msgid "{value!r} is not {choice}."
+msgid_plural "{value!r} is not one of {choices}."
+msgstr[0] ""
+msgstr[1] ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:460
+#, python-brace-format
+msgid "{value!r} does not match the format {format}."
+msgid_plural "{value!r} does not match the formats {formats}."
+msgstr[0] ""
+msgstr[1] ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:482
+#, python-brace-format
+msgid "{value!r} is not a valid {number_type}."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:538
+#, python-brace-format
+msgid "{value} is not in the range {range}."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:679
+#, python-brace-format
+msgid "{value!r} is not a valid boolean."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:703
+#, python-brace-format
+msgid "{value!r} is not a valid UUID."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:893
+msgid "file"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:895
+msgid "directory"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:897
+msgid "path"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:944
+#, python-brace-format
+msgid "{name} {filename!r} does not exist."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:953
+#, python-brace-format
+msgid "{name} {filename!r} is a file."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:961
+#, python-brace-format
+msgid "{name} {filename!r} is a directory."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:970
+#, python-brace-format
+msgid "{name} {filename!r} is not readable."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:979
+#, python-brace-format
+msgid "{name} {filename!r} is not writable."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:988
+#, python-brace-format
+msgid "{name} {filename!r} is not executable."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/click/types.py:1055
+#, python-brace-format
+msgid "{len_type} values are required, but {len_value} was given."
+msgid_plural "{len_type} values are required, but {len_value} were given."
+msgstr[0] ""
+msgstr[1] ""
+
+#: venv/lib/python3.11/site-packages/flask_wtf/file.py:55
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:293
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:323
+msgid "This field is required."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/flask_wtf/file.py:94
+#, python-brace-format
+msgid "File does not have an approved extension: {extensions}"
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/flask_wtf/file.py:101
+msgid "File does not have an approved extension."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:86
+#, python-format
+msgid "Invalid field name '%s'."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:99
+#, python-format
+msgid "Field must be equal to %(other_name)s."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:146
+#, python-format
+msgid "Field must be at least %(min)d character long."
+msgid_plural "Field must be at least %(min)d characters long."
+msgstr[0] ""
+msgstr[1] ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:152
+#, python-format
+msgid "Field cannot be longer than %(max)d character."
+msgid_plural "Field cannot be longer than %(max)d characters."
+msgstr[0] ""
+msgstr[1] ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:158
+#, python-format
+msgid "Field must be exactly %(max)d character long."
+msgid_plural "Field must be exactly %(max)d characters long."
+msgstr[0] ""
+msgstr[1] ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:164
+#, python-format
+msgid "Field must be between %(min)d and %(max)d characters long."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:216
+#, python-format
+msgid "Number must be at least %(min)s."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:219
+#, python-format
+msgid "Number must be at most %(max)s."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:222
+#, python-format
+msgid "Number must be between %(min)s and %(max)s."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:358
+msgid "Invalid input."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:422
+msgid "Invalid email address."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:460
+msgid "Invalid IP address."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:503
+msgid "Invalid Mac address."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:540
+msgid "Invalid URL."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:561
+msgid "Invalid UUID."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:595
+#, python-format
+msgid "Invalid value, must be one of: %(values)s."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:631
+#, python-format
+msgid "Invalid value, can't be any of: %(values)s."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:700
+msgid "This field cannot be edited."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/validators.py:716
+msgid "This field is disabled and cannot have a value."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/csrf/core.py:96
+msgid "Invalid CSRF Token."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/csrf/session.py:64
+msgid "CSRF token missing."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/csrf/session.py:72
+msgid "CSRF failed."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/csrf/session.py:77
+msgid "CSRF token expired."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/fields/choices.py:142
+msgid "Invalid Choice: could not coerce."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/fields/choices.py:149
+#: venv/lib/python3.11/site-packages/wtforms/fields/choices.py:203
+msgid "Choices cannot be None."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/fields/choices.py:155
+msgid "Not a valid choice."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/fields/choices.py:194
+msgid "Invalid choice(s): one or more data inputs could not be coerced."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/fields/choices.py:212
+#, python-format
+msgid "'%(value)s' is not a valid choice for this field."
+msgid_plural "'%(value)s' are not valid choices for this field."
+msgstr[0] ""
+msgstr[1] ""
+
+#: venv/lib/python3.11/site-packages/wtforms/fields/datetime.py:52
+msgid "Not a valid datetime value."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/fields/datetime.py:78
+msgid "Not a valid date value."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/fields/datetime.py:104
+msgid "Not a valid time value."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/fields/datetime.py:149
+msgid "Not a valid week value."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/fields/numeric.py:82
+#: venv/lib/python3.11/site-packages/wtforms/fields/numeric.py:92
+msgid "Not a valid integer value."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/fields/numeric.py:168
+msgid "Not a valid decimal value."
+msgstr ""
+
+#: venv/lib/python3.11/site-packages/wtforms/fields/numeric.py:197
+msgid "Not a valid float value."
+msgstr ""
+

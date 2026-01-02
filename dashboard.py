@@ -53,6 +53,7 @@ BOT_WEBHOOK = os.getenv('TRADING_BOT_URL', 'http://127.0.0.1:5000/webhook')
 RESTART_COMMAND = os.getenv('RESTART_COMMAND', '').strip()
 if not RESTART_COMMAND and os.name == 'posix':
     RESTART_COMMAND = 'sudo systemctl restart fallback_dashboard.service'
+BOT_SERVICE_NAME = os.getenv('BOT_SERVICE_NAME', 'fallback.service').strip()
 REPO_PATH = os.getenv('TRADINGBOT_REPO_PATH', '').strip()
 if not REPO_PATH or not os.path.isdir(REPO_PATH):
     REPO_PATH = os.path.abspath(os.path.dirname(__file__))
@@ -121,6 +122,13 @@ def get_user_api(user):
     except Exception as e:
         app.logger.error(f"[API_FAIL] Failed to initialize Alpaca API for {user.username}: {e}")
         return None
+
+def get_user_keypair(user):
+    key = decrypt_data(user.encrypted_alpaca_key)
+    secret = decrypt_data(user.encrypted_alpaca_secret)
+    if not key or not secret:
+        return None
+    return key, secret
 
 def run_command(command, cwd=None, timeout=30):
     try:
@@ -343,6 +351,93 @@ def admin_db_management():
             flash(f"Error reinitializing database: {e}", "danger")
         return redirect(url_for('admin_db_management'))
     return render_template('admin/db_management.html', current_user=g.user)
+
+def backfill_admin_trades_for_shared_keys():
+    admin_user = User.query.filter_by(is_superuser=True).first()
+    if not admin_user:
+        return {'error': 'admin_missing'}
+    admin_keys = get_user_keypair(admin_user)
+    if not admin_keys:
+        return {'error': 'admin_keys_missing'}
+
+    shared_users = []
+    for user in User.query.filter(User.id != admin_user.id).all():
+        if get_user_keypair(user) == admin_keys:
+            shared_users.append(user)
+
+    if not shared_users:
+        return {'shared_users': 0, 'created': 0, 'skipped': 0}
+
+    admin_trades = Trade.query.filter_by(user_id=admin_user.id).order_by(Trade.id).all()
+    if not admin_trades:
+        return {'shared_users': len(shared_users), 'created': 0, 'skipped': 0}
+
+    created = 0
+    skipped = 0
+    for user in shared_users:
+        for trade in admin_trades:
+            copy_trade_id = f"copy_{trade.id}_u{user.id}"
+            if Trade.query.filter_by(user_id=user.id, trade_id=copy_trade_id).first():
+                skipped += 1
+                continue
+            if trade.status == 'open':
+                if Trade.query.filter_by(user_id=user.id, status='open', symbol=trade.symbol).first():
+                    skipped += 1
+                    continue
+            else:
+                existing_match = Trade.query.filter_by(
+                    user_id=user.id,
+                    symbol=trade.symbol,
+                    status=trade.status,
+                    open_time=trade.open_time,
+                    close_time=trade.close_time
+                ).first()
+                if existing_match:
+                    skipped += 1
+                    continue
+
+            cloned_trade = Trade(
+                user_id=user.id,
+                trade_id=copy_trade_id,
+                symbol=trade.symbol,
+                side=trade.side,
+                qty=trade.qty,
+                open_price=trade.open_price,
+                open_time=trade.open_time,
+                status=trade.status,
+                close_price=trade.close_price,
+                close_time=trade.close_time,
+                profit_loss=trade.profit_loss,
+                profit_loss_pct=trade.profit_loss_pct,
+                action=trade.action
+            )
+            db.session.add(cloned_trade)
+            created += 1
+
+    db.session.commit()
+    return {'shared_users': len(shared_users), 'created': created, 'skipped': skipped}
+
+@app.route('/admin/backfill_trades', methods=['POST'])
+@superuser_required
+def admin_backfill_trades():
+    summary = backfill_admin_trades_for_shared_keys()
+    if summary.get('error') == 'admin_missing':
+        flash('Backfill failed: no admin user found.', 'danger')
+    elif summary.get('error') == 'admin_keys_missing':
+        flash('Backfill failed: admin Alpaca keys are missing or invalid.', 'danger')
+    else:
+        app.logger.info(
+            "[ADMIN_ACTION] Backfill complete: created=%s skipped=%s shared_users=%s",
+            summary.get('created', 0),
+            summary.get('skipped', 0),
+            summary.get('shared_users', 0)
+        )
+        flash(
+            f"Backfill complete: {summary.get('created', 0)} trades copied, "
+            f"{summary.get('skipped', 0)} skipped across {summary.get('shared_users', 0)} users.",
+            'success'
+        )
+    return redirect(url_for('admin_db_management'))
 
 def update_symbols_task():
     with app.app_context():
@@ -643,13 +738,21 @@ def api_admin_health_data():
         return line.rsplit(' [in ', 1)[0] if ' [in ' in line else line
 
     def get_log_summary_and_details(log_file_path):
-        keywords = ['ERROR', 'FAIL', 'REJECTED', 'DATABASE', 'TRADE', 'USER', 'STATUS', 'BOT', 'ACTION', 'SYSTEM', 'WARNING', 'SECURITY', 'UI_EVENT']
+        keywords = [
+            'ERROR', 'WARNING', 'FAIL', 'REJECTED', 'SECURITY', 'DATABASE',
+            'API_FAIL', 'TRADE_FAIL', 'TRADE_REJECTED', 'BOT_STATUS', 'SYSTEM',
+            'UPDATE', 'UI_EVENT'
+        ]
         lines, error = read_log_lines(log_file_path)
         if error:
             return [error], [error]
         if not lines:
             return ["No recent log entries."], ["No recent log entries."]
-        summary = [strip_log_suffix(line) for line in lines if any(f"[{keyword}]" in line.upper() for keyword in keywords)]
+        summary = []
+        for line in lines:
+            line_upper = line.upper()
+            if any(keyword in line_upper for keyword in keywords):
+                summary.append(strip_log_suffix(line))
         if not summary:
             summary = ["No recent issues found."]
         return summary[-100:], lines[-200:]
@@ -674,6 +777,14 @@ def api_admin_health_data():
         if seconds_since < 3600:
             return 'Idle', 'Recent trades log activity'
         return None
+
+    def get_systemd_status(service_name):
+        if not service_name or os.name != 'posix':
+            return None
+        ok, out, _ = run_command(["systemctl", "is-active", service_name], timeout=5)
+        if not ok:
+            return None
+        return out.strip()
 
     webhook_log_file = os.path.join(app.instance_path, 'last_webhook.log')
     last_webhook_utc, bot_status = None, 'Unknown'
@@ -706,6 +817,14 @@ def api_admin_health_data():
     fallback_status = infer_bot_status_from_log('trades.log')
     if fallback_status and bot_status in ['Offline', 'No Webhooks Received', 'Error Reading Status']:
         bot_status, bot_status_reason = fallback_status
+
+    service_state = get_systemd_status(BOT_SERVICE_NAME)
+    if service_state == 'active' and bot_status in ['Offline', 'No Webhooks Received', 'Error Reading Status', 'Unknown']:
+        bot_status = 'Active'
+        if bot_status_reason:
+            bot_status_reason = f"Service active; {bot_status_reason}"
+        else:
+            bot_status_reason = "Service active (no recent webhooks)"
 
     db_size_mb = 0
     try:
@@ -846,7 +965,15 @@ def api_admin_close_trades():
                 with app.app_context():
                     payload = {'symbol': symbol, 'action': 'close'}
                     data_dict = {'close_order_id': close_order.id}
-                    record_closed_trade(data_dict, payload, user.id, position_to_close)
+                    result = record_closed_trade(data_dict, payload, user.id, position_to_close)
+                    if result is None:
+                        fallback_price = getattr(position_to_close, 'current_price', None) or getattr(position_to_close, 'avg_entry_price', None)
+                        if fallback_price is not None:
+                            fallback_data = {
+                                'close_price': fallback_price,
+                                'close_time': datetime.now(timezone.utc).isoformat()
+                            }
+                            record_closed_trade(fallback_data, payload, user.id, position_to_close)
             threading.Thread(target=record_close, daemon=True).start()
         except Exception as e:
             error_msg = f"Failed to close {symbol} for {user.username}: {e}"
@@ -906,6 +1033,9 @@ def api_account():
 def proxy_trade_internal():
     payload = request.get_json(silent=True) or {}
     payload['user'] = g.user.tradingview_user
+    payload['dashboard_user_id'] = g.user.id
+    payload['dashboard_username'] = g.user.username
+    payload['dashboard_request'] = True
     symbol = payload.get('symbol')
     action = payload.get('action')
     amount = payload.get('amount')

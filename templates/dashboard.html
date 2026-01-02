@@ -65,6 +65,7 @@
                     <span><i class="fa fa-folder-open me-2"></i>{{ _('Open Positions') }}</span>
                 </div>
                 <div class="card-body">
+                    <div id="tradeActionStatus" class="small text-muted mb-2"></div>
                     <table id="openTable" class="table table-hover" style="width:100%;">
                         <thead>
                             <tr>
@@ -73,6 +74,8 @@
                                 <th data-bs-toggle="tooltip" title="{{ _('The quantity of the asset held') }}">{{ _('Qty') }}</th>
                                 <th data-bs-toggle="tooltip" title="{{ _('The average price at which the position was opened') }}">{{ _('Open Price') }}</th>
                                 <th data-bs-toggle="tooltip" title="{{ _('The current market price of the asset') }}">{{ _('Current Price') }}</th>
+                                <th data-bs-toggle="tooltip" title="{{ _('Amount invested at entry price') }}">{{ _('Invested') }}</th>
+                                <th data-bs-toggle="tooltip" title="{{ _('Current value including P/L') }}">{{ _('Available') }}</th>
                                 <th data-priority="1" data-bs-toggle="tooltip" title="{{ _('Unrealized Profit or Loss') }}">{{ _('P/L') }}</th>
                                 <th data-bs-toggle="tooltip" title="{{ _('The date and time the position was opened') }}">{{ _('Open Time') }}</th>
                                 <th data-priority="2" data-bs-toggle="tooltip" title="{{ _('Manually close this position') }}">{{ _('Action') }}</th>
@@ -164,6 +167,22 @@
         return d.toLocaleString();
     }
 
+    const currencyFormatter = new Intl.NumberFormat(undefined, {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    });
+
+    function formatCurrency(value) {
+        return currencyFormatter.format(Number(value || 0));
+    }
+
+    function colorValue(value, pl) {
+        const className = pl > 0 ? 'profit' : (pl < 0 ? 'loss' : 'text-muted');
+        return `<span class="${className}">${formatCurrency(value)}</span>`;
+    }
+
     function normalizeSymbolInput(rawSymbol) {
         if (!rawSymbol) return '';
         return rawSymbol.toUpperCase().replace(/\s+/g, '').replace(/\//g, '');
@@ -179,6 +198,39 @@
         });
     }
 
+    function setTradeActionStatus(message, level = 'info') {
+        const statusEl = $('#tradeActionStatus');
+        statusEl.removeClass('text-success text-warning text-danger text-info text-muted');
+        if (!message) {
+            statusEl.addClass('text-muted').text('');
+            return;
+        }
+        const classMap = {
+            success: 'text-success',
+            warning: 'text-warning',
+            error: 'text-danger',
+            info: 'text-info'
+        };
+        statusEl.addClass(classMap[level] || 'text-muted').text(message);
+    }
+
+    function extractProxyResult(response) {
+        if (response && Array.isArray(response.results) && response.results.length) {
+            return response.results[0];
+        }
+        return response || null;
+    }
+
+    function extractErrorMessage(xhr) {
+        if (!xhr || !xhr.responseText) return '';
+        try {
+            const parsed = JSON.parse(xhr.responseText);
+            return parsed.detail || parsed.error || xhr.responseText;
+        } catch (e) {
+            return xhr.responseText;
+        }
+    }
+
     function fetchOpenPositions() {
         const bracketOrders = JSON.parse(localStorage.getItem('bracketOrders')) || {};
         $.get('/api/open_positions', function(data){
@@ -190,6 +242,10 @@
                 let side_text = r.side ? r.side.toUpperCase() : '-';
                 if (side_text === 'BUY') { side_text = `{{ _('BUY') }}` }
                 if (side_text === 'SELL') { side_text = `{{ _('SELL') }}` }
+                const qty = Number(r.qty || 0);
+                const openPrice = Number(r.open_price || 0);
+                const invested = qty * openPrice;
+                const available = invested + Number(r.unrealized_pl || 0);
                 const bracket = bracketOrders[r.symbol];
                 if (bracket) {
                     const price = r.current_price;
@@ -207,8 +263,11 @@
                     }
                 }
                 openTable.row.add([
-                    r.symbol.replace('USD', '/USD'), side_text, r.qty.toFixed(4), (r.open_price || 0).toFixed(4),
-                    (r.current_price || 0).toFixed(4), colorPL(r.unrealized_pl || 0, false, bracket?.tp, bracket?.sl),
+                    r.symbol.replace('USD', '/USD'), side_text, qty.toFixed(4), openPrice.toFixed(4),
+                    (r.current_price || 0).toFixed(4),
+                    formatCurrency(invested),
+                    colorValue(available, r.unrealized_pl || 0),
+                    colorPL(r.unrealized_pl || 0, false, bracket?.tp, bracket?.sl),
                     formatLocalTime(r.open_time_iso),
                     `<div class="btn-group" role="group">
                         <button class="btn btn-sm btn-outline-info tpsl-btn" data-symbol="${r.symbol}" data-side="${r.side}" data-qty="${r.qty}" data-open-price="${r.open_price}" data-bs-toggle="tooltip" title="{{_('Set Take Profit / Stop Loss')}}">
@@ -279,19 +338,42 @@
             $.ajax({
                 url: '/api/internal/proxy_trade', method: 'POST', contentType: 'application/json',
                 data: JSON.stringify({symbol: symbol, action: "close", user: "Dashboard"}),
-                success: function(){ 
-                    Swal.fire({
-                        title: `{{ _('Success!') }}`, text: `{{ _('Close order for %(symbol)s sent.', symbol=symbol) }}`, icon: 'success',
-                        timer: 1500, showConfirmButton: false,
-                        customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
-                    });
-                    setTimeout(fetchOpenPositions, 1500); 
+                success: function(response){
+                    const result = extractProxyResult(response);
+                    const resultCode = result?.result || result;
+                    if (resultCode === 'closed') {
+                        setTradeActionStatus(`Close order for ${symbol} sent.`, 'success');
+                        Swal.fire({
+                            title: `{{ _('Success!') }}`, text: `{{ _('Close order for %(symbol)s sent.', symbol=symbol) }}`, icon: 'success',
+                            timer: 1500, showConfirmButton: false,
+                            customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
+                        });
+                    } else if (resultCode === 'no_position_to_close') {
+                        setTradeActionStatus(`Close skipped for ${symbol}: no position found.`, 'warning');
+                        Swal.fire({
+                            title: `{{ _('Warning') }}`, text: `{{ _('No position found for %(symbol)s.', symbol=symbol) }}`, icon: 'warning',
+                            customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
+                        });
+                    } else if (resultCode === 'mirrored_close') {
+                        setTradeActionStatus(`Close recorded for ${symbol}, but position was missing.`, 'warning');
+                        Swal.fire({
+                            title: `{{ _('Notice') }}`, text: `{{ _('Close recorded for %(symbol)s (no position found).', symbol=symbol) }}`, icon: 'info',
+                            customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
+                        });
+                    } else {
+                        setTradeActionStatus(`Close result: ${String(resultCode)}`, 'warning');
+                        Swal.fire({
+                            title: `{{ _('Notice') }}`, text: String(resultCode), icon: 'info',
+                            customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
+                        });
+                    }
+                    setTimeout(fetchOpenPositions, 1500);
                 },
                 error: function(xhr){ 
-                    let msg = `{{ _('An unknown error occurred.') }}`;
-                    try { msg = JSON.parse(xhr.responseText).detail || xhr.responseText; } catch(e) { msg = xhr.responseText; }
+                    const msg = extractErrorMessage(xhr) || `{{ _('An unknown error occurred.') }}`;
                     logClientEvent('close_failed', `Close failed for ${symbol}`, { status: xhr.status, detail: msg });
-                     Swal.fire({ title: `{{ _('Close Failed') }}`, text: msg, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
+                    setTradeActionStatus(`Close failed for ${symbol}: ${msg}`, 'error');
+                    Swal.fire({ title: `{{ _('Close Failed') }}`, text: msg, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
                 }
             });
         };
@@ -303,8 +385,17 @@
         const MIN_CRYPTO_AMOUNT = 10.0;
         const tpSlModal = new bootstrap.Modal(document.getElementById('tpSlModal'));
         openTable = $('#openTable').DataTable({
-            paging: false, searching: false, info: false, responsive: true, order: [[0, 'asc']],
-            columnDefs: [ { responsivePriority: 1, targets: 0 }, { responsivePriority: 3, targets: 5 }, { responsivePriority: 2, targets: 7 } ]
+            paging: false,
+            searching: false,
+            info: false,
+            responsive: true,
+            autoWidth: false,
+            order: [[0, 'asc']],
+            columnDefs: [
+                { responsivePriority: 1, targets: 0 },
+                { responsivePriority: 3, targets: 7 },
+                { responsivePriority: 2, targets: 9 }
+            ]
         });
         
         setupSymbolAutocomplete(); // MODIFIED: Call new function
@@ -413,17 +504,23 @@
                 url: '/api/internal/proxy_trade', method: 'POST', contentType: 'application/json',
                 data: JSON.stringify({symbol: sym, action: side, user: "Dashboard", amount: amount}),
                 success: function(response){
+                    const result = extractProxyResult(response);
+                    const resultCode = result?.result || result;
                     Swal.fire({
                         title: `{{ _('Success!') }}`, text: `{{ _('Trade order for %(symbol)s sent.', symbol=displaySymbol) }}`, icon: 'success',
                         timer: 1500, showConfirmButton: false,
                         customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
                     });
+                    setTradeActionStatus(`Trade request sent for ${displaySymbol}.`, 'success');
+                    if (resultCode && resultCode !== 'opened') {
+                        setTradeActionStatus(`Trade result for ${displaySymbol}: ${String(resultCode)}`, 'warning');
+                    }
                     setTimeout(fetchOpenPositions, 1500);
                 },
                 error: function(xhr){
-                    let msg = `{{ _('An unknown error occurred.') }}`;
-                    try { msg = JSON.parse(xhr.responseText).detail || JSON.parse(xhr.responseText).error || xhr.responseText; } catch(e) { msg = xhr.responseText; }
+                    const msg = extractErrorMessage(xhr) || `{{ _('An unknown error occurred.') }}`;
                     logClientEvent('manual_trade_failed', `Manual trade failed for ${displaySymbol}`, { side: side, amount: amount, status: xhr.status, detail: msg });
+                    setTradeActionStatus(`Trade failed for ${displaySymbol}: ${msg}`, 'error');
                     Swal.fire({ title: `{{ _('Trade Failed') }}`, text: msg, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
                 }
             });

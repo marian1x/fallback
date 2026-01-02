@@ -44,7 +44,7 @@ Follow these steps to get your trading bot up and running:
 
     ```bash
     python3 -m venv venv
-    source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
+    source venv/bin/activate  # On Windows, use `.\venv\Scripts\Activate.ps1`
     ```
 
 3.  **Install Dependencies**
