@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import logging
+import subprocess
 from logging.handlers import RotatingFileHandler
 import threading
 import time
@@ -54,6 +55,9 @@ ADMIN_PASS = os.getenv('ADMIN_PASSWORD', 'admin')
 INTERNAL_API_KEY = os.getenv('INTERNAL_API_KEY', 'your-very-secret-internal-key')
 BASE_URL = os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
 BOT_WEBHOOK = os.getenv('TRADING_BOT_URL', 'http://127.0.0.1:5000/webhook')
+RESTART_COMMAND = os.getenv('RESTART_COMMAND', '').strip()
+REPO_PATH = os.getenv('TRADINGBOT_REPO_PATH', os.path.abspath(os.path.dirname(__file__)))
+LAST_GOOD_COMMIT_FILE = os.path.join(app.instance_path, 'last_good_commit.txt')
 
 # --- Enhanced Logging Setup ---
 log_handler = RotatingFileHandler('dashboard.log', maxBytes=100000, backupCount=5)
@@ -111,6 +115,72 @@ def get_user_api(user):
     except Exception as e:
         app.logger.error(f"[API_FAIL] Failed to initialize Alpaca API for {user.username}: {e}")
         return None
+
+def run_command(command, cwd=None, timeout=30):
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            shell=True,
+            text=True,
+            capture_output=True,
+            timeout=timeout
+        )
+        return result.returncode == 0, result.stdout.strip(), result.stderr.strip()
+    except Exception as e:
+        return False, '', str(e)
+
+def is_git_repo():
+    ok, out, _ = run_command("git rev-parse --is-inside-work-tree", cwd=REPO_PATH)
+    return ok and out.strip().lower() == "true"
+
+def get_git_commit_info(commit_ref="HEAD"):
+    ok, out, err = run_command(
+        f"git log -1 --pretty=format:%H|%s|%an|%ad {commit_ref}",
+        cwd=REPO_PATH
+    )
+    if not ok or not out:
+        app.logger.warning(f"[UPDATE] Failed to read commit info for {commit_ref}: {err}")
+        return None
+    parts = out.split("|", 3)
+    if len(parts) < 4:
+        return None
+    commit_hash, subject, author, date = parts
+    return {
+        "hash": commit_hash,
+        "short_hash": commit_hash[:8],
+        "subject": subject,
+        "author": author,
+        "date": date
+    }
+
+def read_last_good_commit():
+    if not os.path.exists(LAST_GOOD_COMMIT_FILE):
+        return None
+    try:
+        with open(LAST_GOOD_COMMIT_FILE, "r") as f:
+            value = f.read().strip()
+            return value or None
+    except Exception as e:
+        app.logger.error(f"[UPDATE] Failed to read last good commit: {e}")
+        return None
+
+def write_last_good_commit(commit_hash):
+    if not commit_hash:
+        return
+    try:
+        os.makedirs(os.path.dirname(LAST_GOOD_COMMIT_FILE), exist_ok=True)
+        with open(LAST_GOOD_COMMIT_FILE, "w") as f:
+            f.write(commit_hash)
+    except Exception as e:
+        app.logger.error(f"[UPDATE] Failed to write last good commit: {e}")
+
+def ensure_last_good_commit():
+    current = get_git_commit_info()
+    if not current:
+        return
+    if not read_last_good_commit():
+        write_last_good_commit(current["hash"])
 
 # --- Core Routes ---
 @app.route('/login', methods=['GET', 'POST'])
@@ -307,6 +377,105 @@ def admin_all_open_trades():
 @superuser_required
 def admin_health_dashboard():
     return render_template('admin/health.html', current_user=g.user)
+
+@app.route('/api/admin/server/version')
+@superuser_required
+def api_admin_server_version():
+    if not is_git_repo():
+        return jsonify({'error': 'not_git_repo'}), 500
+    ensure_last_good_commit()
+    current = get_git_commit_info()
+    last_good_hash = read_last_good_commit()
+    last_good = get_git_commit_info(last_good_hash) if last_good_hash else None
+    return jsonify({'current': current, 'last_good': last_good})
+
+def restart_server_async(requested_by):
+    if not RESTART_COMMAND:
+        app.logger.error("[SYSTEM] Restart command is not configured (RESTART_COMMAND is empty).")
+        return False, "restart_not_configured"
+
+    def task():
+        app.logger.warning(f"[SYSTEM] Restart requested by admin '{requested_by}'.")
+        ok, out, err = run_command(RESTART_COMMAND, cwd=REPO_PATH, timeout=60)
+        if ok:
+            app.logger.info(f"[SYSTEM] Restart command executed successfully. Output: {out}")
+        else:
+            app.logger.error(f"[SYSTEM] Restart command failed. Error: {err}")
+
+    threading.Thread(target=task, daemon=True).start()
+    return True, "restarting"
+
+@app.route('/api/admin/server/restart', methods=['POST'])
+@superuser_required
+def api_admin_server_restart():
+    success, status = restart_server_async(g.user.username)
+    if not success:
+        return jsonify({'error': status}), 500
+    return jsonify({'status': status})
+
+@app.route('/api/admin/server/pull_updates', methods=['POST'])
+@superuser_required
+def api_admin_pull_updates():
+    if not is_git_repo():
+        return jsonify({'error': 'not_git_repo'}), 500
+    ensure_last_good_commit()
+    before = get_git_commit_info()
+    if before:
+        write_last_good_commit(before["hash"])
+
+    ok_fetch, fetch_out, fetch_err = run_command("git fetch --all", cwd=REPO_PATH, timeout=60)
+    if not ok_fetch:
+        app.logger.error(f"[UPDATE] Git fetch failed: {fetch_err}")
+        return jsonify({'error': 'fetch_failed', 'detail': fetch_err}), 500
+
+    ok_pull, pull_out, pull_err = run_command("git pull --ff-only", cwd=REPO_PATH, timeout=60)
+    if not ok_pull:
+        app.logger.error(f"[UPDATE] Git pull failed: {pull_err}")
+        return jsonify({'error': 'pull_failed', 'detail': pull_err}), 500
+
+    after = get_git_commit_info()
+    changed = bool(before and after and before["hash"] != after["hash"])
+    app.logger.info(
+        f"[UPDATE] Admin '{g.user.username}' pulled updates. "
+        f"Before={before['short_hash'] if before else 'unknown'} After={after['short_hash'] if after else 'unknown'} "
+        f"Output='{pull_out}'"
+    )
+
+    return jsonify({
+        'status': 'success',
+        'changed': changed,
+        'before': before,
+        'after': after,
+        'restart_recommended': changed,
+        'output': pull_out or fetch_out or ''
+    })
+
+@app.route('/api/admin/server/rollback', methods=['POST'])
+@superuser_required
+def api_admin_rollback():
+    if not is_git_repo():
+        return jsonify({'error': 'not_git_repo'}), 500
+    payload = request.get_json(silent=True) or {}
+    commit_ref = payload.get('commit') or read_last_good_commit()
+    if not commit_ref:
+        return jsonify({'error': 'no_last_good_commit'}), 400
+
+    ok_reset, reset_out, reset_err = run_command(f"git reset --hard {commit_ref}", cwd=REPO_PATH, timeout=60)
+    if not ok_reset:
+        app.logger.error(f"[UPDATE] Rollback failed: {reset_err}")
+        return jsonify({'error': 'rollback_failed', 'detail': reset_err}), 500
+
+    after = get_git_commit_info()
+    app.logger.warning(
+        f"[UPDATE] Admin '{g.user.username}' rolled back to {commit_ref}. "
+        f"Current={after['short_hash'] if after else 'unknown'} Output='{reset_out}'"
+    )
+
+    return jsonify({
+        'status': 'rolled_back',
+        'after': after,
+        'restart_recommended': True
+    })
 
 @app.route('/admin/users/create', methods=['POST'])
 @superuser_required

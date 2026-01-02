@@ -34,6 +34,38 @@
         </div>
     </div>
 
+    <div class="row g-4 mb-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header"><i class="fa-solid fa-server me-2"></i>Server Control</div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <div class="small text-muted">Current Commit</div>
+                            <div id="server-current-commit" class="fw-bold">Loading...</div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="small text-muted">Last Known Good</div>
+                            <div id="server-last-good-commit" class="fw-bold">Loading...</div>
+                        </div>
+                    </div>
+                    <div class="mt-3 d-flex flex-wrap gap-2">
+                        <button id="restartServerBtn" class="btn btn-warning btn-sm">
+                            <i class="fa-solid fa-rotate-right me-1"></i>Restart Server
+                        </button>
+                        <button id="pullUpdatesBtn" class="btn btn-primary btn-sm">
+                            <i class="fa-solid fa-download me-1"></i>Pull Updates
+                        </button>
+                        <button id="rollbackBtn" class="btn btn-danger btn-sm">
+                            <i class="fa-solid fa-clock-rotate-left me-1"></i>Rollback to Last Good
+                        </button>
+                    </div>
+                    <div id="server-action-status" class="small text-muted mt-2"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="row g-4">
         <div class="col-lg-6">
             <div class="card shadow-sm">
@@ -109,9 +141,95 @@
         });
     }
 
+    function renderCommitInfo(commit) {
+        if (!commit) return '<span class="text-muted">Unavailable</span>';
+        return `${commit.short_hash} - ${commit.subject}`;
+    }
+
+    function setServerStatus(message, isError = false) {
+        const el = $('#server-action-status');
+        el.text(message || '');
+        el.toggleClass('text-danger', isError);
+        el.toggleClass('text-muted', !isError);
+    }
+
+    function refreshServerVersion() {
+        $.get('/api/admin/server/version', function(data) {
+            $('#server-current-commit').html(renderCommitInfo(data.current));
+            $('#server-last-good-commit').html(renderCommitInfo(data.last_good));
+        }).fail(function() {
+            $('#server-current-commit').html('<span class="text-danger">Failed to load</span>');
+            $('#server-last-good-commit').html('<span class="text-danger">Failed to load</span>');
+        });
+    }
+
+    function postServerAction(url, payload, onSuccess) {
+        setServerStatus('Working...');
+        $.ajax({
+            url: url,
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(payload || {}),
+            success: function(response) {
+                setServerStatus('');
+                if (onSuccess) onSuccess(response);
+            },
+            error: function(xhr) {
+                let msg = 'Action failed.';
+                try {
+                    const body = JSON.parse(xhr.responseText);
+                    msg = body.detail || body.error || msg;
+                } catch (e) {}
+                setServerStatus(msg, true);
+            }
+        });
+    }
+
     $(document).ready(function() {
         fetchHealthData();
         setInterval(fetchHealthData, 10000); // Refresh every 10 seconds
+        refreshServerVersion();
+
+        $('#restartServerBtn').on('click', function() {
+            if (!confirm('Restart the server now?')) return;
+            postServerAction('/api/admin/server/restart', {}, function() {
+                setServerStatus('Restart initiated. The page may refresh once the service is back online.');
+            });
+        });
+
+        $('#pullUpdatesBtn').on('click', function() {
+            postServerAction('/api/admin/server/pull_updates', {}, function(data) {
+                if (!data.changed) {
+                    setServerStatus('Already up to date.');
+                    refreshServerVersion();
+                    return;
+                }
+                const after = data.after ? `${data.after.short_hash} - ${data.after.subject}` : 'unknown';
+                setServerStatus(`Updates pulled: ${after}`);
+                refreshServerVersion();
+                const confirmRestart = confirm(`Updates pulled:\n${after}\n\nRestart the server now?`);
+                if (confirmRestart) {
+                    postServerAction('/api/admin/server/restart', {}, function() {
+                        setServerStatus('Restart initiated after update.');
+                    });
+                }
+            });
+        });
+
+        $('#rollbackBtn').on('click', function() {
+            if (!confirm('Rollback to the last known good commit?')) return;
+            postServerAction('/api/admin/server/rollback', {}, function(data) {
+                const after = data.after ? `${data.after.short_hash} - ${data.after.subject}` : 'unknown';
+                setServerStatus(`Rolled back to: ${after}`);
+                refreshServerVersion();
+                const confirmRestart = confirm(`Rollback completed:\n${after}\n\nRestart the server now?`);
+                if (confirmRestart) {
+                    postServerAction('/api/admin/server/restart', {}, function() {
+                        setServerStatus('Restart initiated after rollback.');
+                    });
+                }
+            });
+        });
     });
 </script>
 <style>
