@@ -57,6 +57,7 @@ REPO_PATH = os.getenv('TRADINGBOT_REPO_PATH', '').strip()
 if not REPO_PATH or not os.path.isdir(REPO_PATH):
     REPO_PATH = os.path.abspath(os.path.dirname(__file__))
 LAST_GOOD_COMMIT_FILE = os.path.join(app.instance_path, 'last_good_commit.txt')
+VERSION_COUNTER_FILE = os.path.join(app.instance_path, 'version_counter.txt')
 
 # --- Enhanced Logging Setup ---
 log_handler = RotatingFileHandler('dashboard.log', maxBytes=100000, backupCount=5)
@@ -85,7 +86,7 @@ app.jinja_env.globals.update(_=translate)
 
 @app.context_processor
 def inject_globals():
-    return dict(config=app.config, g=g)
+    return dict(config=app.config, g=g, app_version=get_version_display())
 
 # --- User and Auth Management ---
 @app.before_request
@@ -161,6 +162,45 @@ def get_git_commit_info(commit_ref="HEAD"):
         "author": author,
         "date": date
     }
+
+def read_version_counter():
+    if not os.path.exists(VERSION_COUNTER_FILE):
+        return None
+    try:
+        with open(VERSION_COUNTER_FILE, "r") as f:
+            value = f.read().strip()
+            return int(value)
+    except Exception as e:
+        app.logger.error(f"[UPDATE] Failed to read version counter: {e}")
+        return None
+
+def write_version_counter(value):
+    try:
+        os.makedirs(os.path.dirname(VERSION_COUNTER_FILE), exist_ok=True)
+        with open(VERSION_COUNTER_FILE, "w") as f:
+            f.write(str(int(value)))
+    except Exception as e:
+        app.logger.error(f"[UPDATE] Failed to write version counter: {e}")
+
+def ensure_version_counter():
+    if read_version_counter() is None:
+        write_version_counter(1)
+
+def increment_version_counter():
+    current = read_version_counter()
+    if current is None:
+        write_version_counter(1)
+        return 1
+    new_value = current + 1
+    write_version_counter(new_value)
+    return new_value
+
+def get_version_display():
+    ensure_version_counter()
+    counter = read_version_counter() or 1
+    commit = get_git_commit_info()
+    short_hash = commit["short_hash"] if commit else "unknown"
+    return f"v{counter} ({short_hash})"
 
 def read_last_good_commit():
     if not os.path.exists(LAST_GOOD_COMMIT_FILE):
@@ -390,7 +430,7 @@ def api_admin_server_version():
     current = get_git_commit_info()
     last_good_hash = read_last_good_commit()
     last_good = get_git_commit_info(last_good_hash) if last_good_hash else None
-    return jsonify({'current': current, 'last_good': last_good})
+    return jsonify({'current': current, 'last_good': last_good, 'version': get_version_display()})
 
 def restart_server_async(requested_by):
     if not RESTART_COMMAND:
@@ -426,12 +466,12 @@ def api_admin_pull_updates():
     if before:
         write_last_good_commit(before["hash"])
 
-    ok_fetch, fetch_out, fetch_err = run_command("git fetch --all", cwd=REPO_PATH, timeout=60)
+    ok_fetch, fetch_out, fetch_err = run_command(["git", "fetch", "--all"], cwd=REPO_PATH, timeout=60)
     if not ok_fetch:
         app.logger.error(f"[UPDATE] Git fetch failed: {fetch_err}")
         return jsonify({'error': 'fetch_failed', 'detail': fetch_err}), 500
 
-    ok_pull, pull_out, pull_err = run_command("git pull --ff-only", cwd=REPO_PATH, timeout=60)
+    ok_pull, pull_out, pull_err = run_command(["git", "pull", "--ff-only"], cwd=REPO_PATH, timeout=60)
     if not ok_pull:
         app.logger.error(f"[UPDATE] Git pull failed: {pull_err}")
         return jsonify({'error': 'pull_failed', 'detail': pull_err}), 500
@@ -445,13 +485,16 @@ def api_admin_pull_updates():
         f"Before={before_label} After={after_label} Output='{pull_out}'"
     )
 
+    if changed:
+        increment_version_counter()
     return jsonify({
         'status': 'success',
         'changed': changed,
         'before': before,
         'after': after,
         'restart_recommended': changed,
-        'output': pull_out or fetch_out or ''
+        'output': pull_out or fetch_out or '',
+        'version': get_version_display()
     })
 
 @app.route('/api/admin/server/rollback', methods=['POST'])
@@ -464,7 +507,7 @@ def api_admin_rollback():
     if not commit_ref:
         return jsonify({'error': 'no_last_good_commit'}), 400
 
-    ok_reset, reset_out, reset_err = run_command(f"git reset --hard {commit_ref}", cwd=REPO_PATH, timeout=60)
+    ok_reset, reset_out, reset_err = run_command(["git", "reset", "--hard", commit_ref], cwd=REPO_PATH, timeout=60)
     if not ok_reset:
         app.logger.error(f"[UPDATE] Rollback failed: {reset_err}")
         return jsonify({'error': 'rollback_failed', 'detail': reset_err}), 500
@@ -475,10 +518,12 @@ def api_admin_rollback():
         f"Current={after['short_hash'] if after else 'unknown'} Output='{reset_out}'"
     )
 
+    increment_version_counter()
     return jsonify({
         'status': 'rolled_back',
         'after': after,
-        'restart_recommended': True
+        'restart_recommended': True,
+        'version': get_version_display()
     })
 
 @app.route('/admin/users/create', methods=['POST'])

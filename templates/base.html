@@ -16,7 +16,12 @@
 <body>
     <nav class="navbar navbar-expand-lg fixed-top">
       <div class="container-fluid">
-        <a class="navbar-brand fw-bold fs-4" href="{{ url_for('dashboard') }}"><i class="fa-solid fa-rocket me-2"></i>TradingBot</a>
+        <a class="navbar-brand fw-bold fs-4" href="{{ url_for('dashboard') }}">
+            <i class="fa-solid fa-rocket me-2"></i>TradingBot
+            {% if app_version %}
+            <span class="app-version ms-2">{{ app_version }}</span>
+            {% endif %}
+        </a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu">
             <span class="navbar-toggler-icon"></span>
         </button>
