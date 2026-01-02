@@ -97,11 +97,6 @@ def record_closed_trade(data, payload, user_id, position_obj):
         logger.info(f"[DATABASE] Cleaned up orphaned open trades for {symbol}, user_id={user_id}.")
         return None
 
-    close_order_id = data.get('close_order_id')
-    if not close_order_id:
-        logger.error(f"[DATABASE] Cannot record closed trade for {symbol}: No close_order_id was provided.")
-        return None
-
     try:
         api = get_api_for_user(user_id)
     except ValueError as e:
@@ -110,54 +105,96 @@ def record_closed_trade(data, payload, user_id, position_obj):
         
     avg_entry_price = float(position_obj.avg_entry_price)
     total_qty = abs(float(position_obj.qty))
-    position_side = position_obj.side
+    side_raw = str(position_obj.side).lower() if position_obj.side is not None else ""
+    if side_raw in ("long", "buy"):
+        position_side = "long"
+    elif side_raw in ("short", "sell"):
+        position_side = "short"
+    else:
+        position_side = "long"
     api_symbol = symbol.replace('/', '')
 
-    exit_order = None
-    terminal_statuses = {'filled', 'partially_filled', 'canceled', 'rejected', 'expired'}
-    for i in range(30):
-        try:
-            exit_order = api.get_order(close_order_id)
-            status = (exit_order.status or '').lower()
-            if status in terminal_statuses:
-                logger.info(f"Close order {close_order_id} for {symbol} confirmed as '{exit_order.status}'.")
-                break
-            logger.warning(f"Waiting for close order {close_order_id} to fill... Status: '{exit_order.status}'. Attempt {i+1}/30")
-            time.sleep(1)
-        except Exception as e:
-            logger.error(f"Error fetching close order {close_order_id}: {e}")
-            time.sleep(1)
+    close_price = None
+    close_time = None
+    close_price_override = data.get('close_price')
+    close_time_override = data.get('close_time')
 
-    exit_status = (exit_order.status if exit_order else 'unknown')
-    if exit_order and exit_order.status in ['filled', 'partially_filled']:
-        close_price = float(exit_order.filled_avg_price) if exit_order.filled_avg_price else None
-        close_time = exit_order.filled_at
-    else:
-        logger.warning(
-            f"[DATABASE] Close order {close_order_id} for {symbol} not filled (status='{exit_status}'). "
-            "Checking position status."
-        )
+    def parse_close_time(value):
+        if isinstance(value, datetime):
+            dt = value
+        elif isinstance(value, str) and value:
+            try:
+                dt = datetime.fromisoformat(value)
+            except ValueError:
+                dt = None
+        else:
+            dt = None
+        if dt and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    if close_price_override is not None:
         try:
-            api.get_position(api_symbol)
-            logger.warning(f"[DATABASE] Position still open for {symbol}, user_id={user_id}. Skipping close record.")
-            return None
-        except tradeapi.rest.APIError as e:
-            if "position not found" not in str(e).lower():
-                logger.error(f"[DATABASE] Error checking position status for {symbol}, user_id={user_id}: {e}")
-                return None
-        except Exception as e:
-            logger.error(f"[DATABASE] Error checking position status for {symbol}, user_id={user_id}: {e}")
-            return None
-        close_price = get_latest_price(api, symbol)
-        close_time = datetime.now(timezone.utc)
+            close_price = float(close_price_override)
+        except (TypeError, ValueError):
+            close_price = None
+        close_time = parse_close_time(close_time_override) or datetime.now(timezone.utc)
+        if close_price is None:
+            close_price = get_latest_price(api, symbol)
         if close_price is None:
             logger.warning(f"[DATABASE] Using entry price as fallback close price for {symbol}, user_id={user_id}.")
             close_price = avg_entry_price
+    else:
+        close_order_id = data.get('close_order_id')
+        if not close_order_id:
+            logger.error(f"[DATABASE] Cannot record closed trade for {symbol}: No close_order_id was provided.")
+            return None
 
-    if close_time is None:
-        close_time = datetime.now(timezone.utc)
-    if close_price is None:
-        close_price = avg_entry_price
+        exit_order = None
+        terminal_statuses = {'filled', 'partially_filled', 'canceled', 'rejected', 'expired'}
+        for i in range(30):
+            try:
+                exit_order = api.get_order(close_order_id)
+                status = (exit_order.status or '').lower()
+                if status in terminal_statuses:
+                    logger.info(f"Close order {close_order_id} for {symbol} confirmed as '{exit_order.status}'.")
+                    break
+                logger.warning(f"Waiting for close order {close_order_id} to fill... Status: '{exit_order.status}'. Attempt {i+1}/30")
+                time.sleep(1)
+            except Exception as e:
+                logger.error(f"Error fetching close order {close_order_id}: {e}")
+                time.sleep(1)
+
+        exit_status = (exit_order.status if exit_order else 'unknown')
+        if exit_order and exit_order.status in ['filled', 'partially_filled']:
+            close_price = float(exit_order.filled_avg_price) if exit_order.filled_avg_price else None
+            close_time = exit_order.filled_at
+        else:
+            logger.warning(
+                f"[DATABASE] Close order {close_order_id} for {symbol} not filled (status='{exit_status}'). "
+                "Checking position status."
+            )
+            try:
+                api.get_position(api_symbol)
+                logger.warning(f"[DATABASE] Position still open for {symbol}, user_id={user_id}. Skipping close record.")
+                return None
+            except tradeapi.rest.APIError as e:
+                if "position not found" not in str(e).lower():
+                    logger.error(f"[DATABASE] Error checking position status for {symbol}, user_id={user_id}: {e}")
+                    return None
+            except Exception as e:
+                logger.error(f"[DATABASE] Error checking position status for {symbol}, user_id={user_id}: {e}")
+                return None
+            close_price = get_latest_price(api, symbol)
+            close_time = datetime.now(timezone.utc)
+            if close_price is None:
+                logger.warning(f"[DATABASE] Using entry price as fallback close price for {symbol}, user_id={user_id}.")
+                close_price = avg_entry_price
+
+        if close_time is None:
+            close_time = datetime.now(timezone.utc)
+        if close_price is None:
+            close_price = avg_entry_price
 
     trade_to_update = Trade.query.filter_by(symbol=symbol, status='open', user_id=user_id).order_by(Trade.open_time.desc()).first()
     

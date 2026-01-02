@@ -9,7 +9,7 @@ import alpaca_trade_api as tradeapi
 import math
 from datetime import datetime, timezone
 
-from models import db, User
+from models import db, User, Trade
 from utils import decrypt_data
 
 # --- Initialization ---
@@ -67,6 +67,123 @@ def get_last_price(api_client, symbol):
         logger.error(f"[PRICE_FETCH_FAIL] Failed to get price for {symbol}: {e}")
         return 0.0
 
+def record_trade_notification(payload):
+    try:
+        r = requests.post(
+            f"{DASHBOARD_INTERNAL_URL}/api/internal/record_trade",
+            json=payload,
+            headers={'X-Internal-API-Key': INTERNAL_API_KEY},
+            timeout=3
+        )
+        if not r.ok:
+            logger.warning(f"[DASHBOARD_NOTIFY_FAIL] Status={r.status_code} Body={r.text}")
+    except Exception as e:
+        logger.error(f"[DASHBOARD_NOTIFY_FAIL] {e}")
+
+def mirror_open_trade(user, payload, api_client, position_obj, amount):
+    symbol = payload.get("symbol")
+    if not symbol:
+        return False
+    api_symbol = symbol.replace('/', '')
+    existing = Trade.query.filter_by(symbol=api_symbol, status='open', user_id=user.id).first()
+    if existing:
+        return True
+
+    open_price = None
+    qty = None
+    side = (payload.get("action") or "").lower()
+    if position_obj is not None:
+        try:
+            open_price = float(position_obj.avg_entry_price)
+        except (TypeError, ValueError):
+            open_price = None
+        try:
+            qty = abs(float(position_obj.qty))
+        except (TypeError, ValueError):
+            qty = None
+        position_side = getattr(position_obj, "side", "").lower()
+        if position_side == "long":
+            side = "buy"
+        elif position_side == "short":
+            side = "sell"
+
+    if not open_price or not qty:
+        last_price = get_last_price(api_client, symbol)
+        if last_price:
+            if not open_price:
+                open_price = last_price
+            if amount is None:
+                amount = user.per_trade_amount
+            if is_crypto(symbol):
+                qty = amount / last_price
+            else:
+                if side == "buy":
+                    qty = amount / last_price
+                else:
+                    qty = math.floor(amount / last_price)
+
+    if not open_price or not qty:
+        return False
+
+    order_id = f"mirror_{api_symbol}_{int(datetime.now(timezone.utc).timestamp())}"
+    record_trade_notification({
+        "result": "opened",
+        "order_id": order_id,
+        "symbol": symbol,
+        "side": side or "buy",
+        "price": open_price,
+        "payload": payload,
+        "user_id": user.id,
+        "qty": qty
+    })
+    logger.info(f"[TRADE_MIRROR] Recorded mirrored open for '{user.username}' {api_symbol}")
+    return True
+
+def mirror_close_trade(user, payload, api_client):
+    symbol = payload.get("symbol")
+    if not symbol:
+        return False
+    api_symbol = symbol.replace('/', '')
+    trade = Trade.query.filter_by(symbol=api_symbol, status='open', user_id=user.id).order_by(Trade.open_time.desc()).first()
+
+    close_price = get_last_price(api_client, symbol)
+    if close_price == 0:
+        close_price = trade.open_price if trade else None
+    if close_price is None:
+        return False
+
+    if trade:
+        qty = trade.qty
+        avg_entry_price = trade.open_price
+        side_raw = (trade.side or "").lower()
+    else:
+        side_raw = (payload.get("action") or "").lower()
+        amount = user.per_trade_amount
+        if is_crypto(symbol):
+            qty = amount / close_price
+        else:
+            qty = amount / close_price
+        avg_entry_price = close_price
+
+    position_side = "short" if "short" in side_raw or side_raw == "sell" else "long"
+    position_obj = {
+        "avg_entry_price": avg_entry_price,
+        "qty": qty,
+        "side": position_side,
+        "asset_id": f"mirror_{api_symbol}"
+    }
+    record_trade_notification({
+        "result": "closed",
+        "symbol": symbol,
+        "close_price": close_price,
+        "close_time": datetime.now(timezone.utc).isoformat(),
+        "payload": payload,
+        "user_id": user.id,
+        "position_obj": position_obj
+    })
+    logger.info(f"[TRADE_MIRROR] Recorded mirrored close for '{user.username}' {api_symbol}")
+    return True
+
 def process_trade_for_user(user, payload):
     if user.is_trading_restricted:
         logger.warning(f"[TRADE_REJECTED] User '{user.username}' is restricted from trading.")
@@ -118,8 +235,11 @@ def process_trade_for_user(user, payload):
             return True, 200, {"result": "closed", "close_order_id": close_order.id}
         except tradeapi.rest.APIError as e:
             if "position not found" in str(e).lower():
+                mirrored = False
+                if ENABLE_TV_BROADCAST:
+                    mirrored = mirror_close_trade(user, payload, api)
                 logger.warning(f"[TRADE_INFO] User '{user.username}' tried to close {api_symbol}, but no position exists.")
-                return True, 200, {"result": "no_position_to_close", "symbol": symbol}
+                return True, 200, {"result": "mirrored_close" if mirrored else "no_position_to_close", "symbol": symbol}
             logger.error(f"[TRADE_FAIL] Error closing {api_symbol} for '{user.username}': {e}")
             return False, 500, {"error": str(e)}
         except Exception as e:
@@ -128,8 +248,11 @@ def process_trade_for_user(user, payload):
 
     if action.lower() in ["buy", "sell"]:
         try:
-            api.get_position(api_symbol)
+            position_existing = api.get_position(api_symbol)
             logger.warning(f"[TRADE_REJECTED] User '{user.username}' already has position for {api_symbol}.")
+            if ENABLE_TV_BROADCAST:
+                mirrored = mirror_open_trade(user, payload, api, position_existing, amount)
+                return True, 200, {"result": "mirrored_open" if mirrored else "position_exists", "symbol": symbol}
             return False, 409, {"error": f"{api_symbol} position already open."}
         except tradeapi.rest.APIError:
             pass

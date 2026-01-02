@@ -124,3 +124,33 @@ def test_record_closed_trade_fallback_on_unfilled_order(app, monkeypatch):
         t = trade_db.record_closed_trade(close_data, {'symbol': 'AAPL', 'action': 'sell'}, user.id, position_obj)
         assert t.status == 'closed'
         assert t.close_price == 105
+
+
+def test_record_closed_trade_with_override_price(app, monkeypatch):
+    open_payload = {'symbol': 'AAPL', 'action': 'buy'}
+    open_data = {'order_id': '1', 'side': 'buy', 'qty': 5, 'price': 100}
+    with app.app_context():
+        user = User(username='tester3', email='tester3@example.com', password_hash='hashed')
+        db.session.add(user)
+        db.session.commit()
+        trade_db.record_open_trade(open_data, open_payload, user.id)
+
+        position_obj = SimpleNamespace(
+            avg_entry_price=100,
+            qty=5,
+            side='long',
+            asset_id='asset123'
+        )
+
+        class MockAPI(SimpleNamespace):
+            pass
+
+        monkeypatch.setattr(trade_db, 'get_api_for_user', lambda user_id: MockAPI())
+
+        close_data = {
+            'close_price': 111,
+            'close_time': '2023-01-02T12:00:00+00:00'
+        }
+        t = trade_db.record_closed_trade(close_data, {'symbol': 'AAPL', 'action': 'sell'}, user.id, position_obj)
+        assert t.status == 'closed'
+        assert t.close_price == 111

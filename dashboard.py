@@ -615,12 +615,26 @@ def api_tradable_symbols():
 @superuser_required
 def api_admin_health_data():
     def read_log_lines(log_file_path, num_lines=200):
-        if not os.path.exists(log_file_path):
+        candidates = [log_file_path] + [f"{log_file_path}.{i}" for i in range(1, 6)]
+        combined_lines = []
+        for path in reversed(candidates):
+            if not os.path.exists(path):
+                continue
+            try:
+                if os.path.getsize(path) == 0:
+                    continue
+            except OSError:
+                continue
+            try:
+                with open(path, 'r') as f:
+                    combined_lines.extend(f.readlines())
+            except Exception as e:
+                return None, f"Could not read log file: {e}"
+        if not combined_lines:
             return None, "Log file not found."
         try:
-            with open(log_file_path, 'r') as f:
-                lines = f.readlines()
-            lines = [line.strip() for line in lines[-num_lines:] if line.strip()]
+            lines = [line.strip() for line in combined_lines if line.strip()]
+            lines = lines[-num_lines:]
             return lines, None
         except Exception as e:
             return None, f"Could not read log file: {e}"
