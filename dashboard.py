@@ -45,6 +45,7 @@ app.config.update(
 # --- Environment Variables ---
 HOST = os.getenv('HOST', '0.0.0.0')
 PORT = int(os.getenv('DASHBOARD_PORT', 5050))
+DEBUG = os.getenv('FLASK_DEBUG', 'false').lower() in ('1', 'true', 'yes', 'y')
 ADMIN_USER = os.getenv('ADMIN_USERNAME', 'admin')
 ADMIN_PASS = os.getenv('ADMIN_PASSWORD', 'admin')
 INTERNAL_API_KEY = os.getenv('INTERNAL_API_KEY', 'your-very-secret-internal-key')
@@ -1257,4 +1258,4 @@ def api_investor_payout_data():
 if __name__ == "__main__":
     with app.app_context():
         init_db()
-    app.run(host=HOST, port=PORT, debug=True)
+    app.run(host=HOST, port=PORT, debug=DEBUG)
