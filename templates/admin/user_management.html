@@ -96,7 +96,7 @@
         </div>
         <div class="modal-body">
           <p>Enter a new password for the user.</p>
-          <input type="password" name="new_password" class="form-control" required>
+          <input type="password" name="new_password" class="form-control" minlength="{{ password_min_length }}" required>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -140,7 +140,7 @@
           <div class="mb-2"><label>Username</label><input type="text" name="username" class="form-control" required></div>
           <div class="mb-2"><label>Email</label><input type="email" name="email" class="form-control" required></div>
           <div class="mb-2"><label>TradingView User</label><input type="text" name="tradingview_user" class="form-control" required></div>
-          <div class="mb-2"><label>Password</label><input type="password" name="password" class="form-control" required></div>
+          <div class="mb-2"><label>Password</label><input type="password" name="password" class="form-control" minlength="{{ password_min_length }}" required></div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>

@@ -2,8 +2,8 @@
 {% block title %}Configuration - TradingBot{% endblock %}
 {% block content %}
 <div class="container my-4">
-    <div class="row justify-content-center">
-        <div class="col-12 col-md-8 col-lg-6">
+    <div class="row g-4 justify-content-center">
+        <div class="col-12 col-lg-7">
             <div class="card shadow-sm">
                 <div class="card-header">
                     <i class="fa-solid fa-gears me-2"></i>{{ _('My Configuration') }}
@@ -30,6 +30,33 @@
                              <div class="form-text">{{ _('This must exactly match the "user" value in your webhook JSON for trades to be processed.') }}</div>
                         </div>
                         <button type="submit" class="btn btn-primary w-100"><i class="fa-solid fa-save me-2"></i>{{ _('Save Configuration') }}</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-lg-5">
+            <div class="card shadow-sm">
+                <div class="card-header">
+                    <i class="fa-solid fa-key me-2"></i>{{ _('Change Password') }}
+                </div>
+                <div class="card-body">
+                    <p class="text-muted mb-3">{{ _('Use a strong password with at least %(min_chars)s characters.', min_chars=password_min_length) }}</p>
+                    <form method="post" action="{{ url_for('user_change_password') }}">
+                        <div class="mb-3">
+                            <label for="current_password" class="form-label">{{ _('Current Password') }}</label>
+                            <input type="password" class="form-control" id="current_password" name="current_password" autocomplete="current-password" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="new_password" class="form-label">{{ _('New Password') }}</label>
+                            <input type="password" class="form-control" id="new_password" name="new_password" autocomplete="new-password" minlength="{{ password_min_length }}" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="confirm_password" class="form-label">{{ _('Confirm New Password') }}</label>
+                            <input type="password" class="form-control" id="confirm_password" name="confirm_password" autocomplete="new-password" minlength="{{ password_min_length }}" required>
+                        </div>
+                        <button type="submit" class="btn btn-warning w-100">
+                            <i class="fa-solid fa-shield-halved me-2"></i>{{ _('Update Password') }}
+                        </button>
                     </form>
                 </div>
             </div>

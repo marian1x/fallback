@@ -230,6 +230,38 @@
         return response || null;
     }
 
+    function parseProxyResult(response) {
+        const item = extractProxyResult(response);
+        const nested = (item && typeof item === 'object' && item.result !== undefined) ? item.result : item;
+        let code = '';
+        let message = '';
+
+        if (typeof nested === 'string') {
+            code = nested;
+        } else if (nested && typeof nested === 'object') {
+            if (typeof nested.result === 'string') {
+                code = nested.result;
+            } else if (typeof nested.error === 'string') {
+                code = 'error';
+            }
+            message = nested.detail || nested.error || '';
+        }
+
+        if (!message && item && typeof item === 'object') {
+            message = item.detail || item.error || '';
+        }
+
+        if (!message && nested && typeof nested === 'object') {
+            try {
+                message = JSON.stringify(nested);
+            } catch (e) {
+                message = String(nested);
+            }
+        }
+
+        return { code: code || '', message: message || '', raw: item };
+    }
+
     function extractErrorMessage(xhr) {
         if (!xhr || !xhr.responseText) return '';
         try {
@@ -348,8 +380,8 @@
                 url: '/api/internal/proxy_trade', method: 'POST', contentType: 'application/json',
                 data: JSON.stringify({symbol: symbol, action: "close", user: "Dashboard"}),
                 success: function(response){
-                    const result = extractProxyResult(response);
-                    const resultCode = result?.result || result;
+                    const parsed = parseProxyResult(response);
+                    const resultCode = parsed.code;
                     if (resultCode === 'closed') {
                         setTradeActionStatus(`Close order for ${symbol} sent.`, 'success');
                         Swal.fire({
@@ -370,9 +402,10 @@
                             customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
                         });
                     } else {
-                        setTradeActionStatus(`Close result: ${String(resultCode)}`, 'warning');
+                        const notice = parsed.message || resultCode || '{{ _("Operation completed.") }}';
+                        setTradeActionStatus(`Close result: ${notice}`, 'warning');
                         Swal.fire({
-                            title: `{{ _('Notice') }}`, text: String(resultCode), icon: 'info',
+                            title: `{{ _('Notice') }}`, text: notice, icon: 'info',
                             customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
                         });
                     }
@@ -513,8 +546,8 @@
                 url: '/api/internal/proxy_trade', method: 'POST', contentType: 'application/json',
                 data: JSON.stringify({symbol: sym, action: side, user: "Dashboard", amount: amount}),
                 success: function(response){
-                    const result = extractProxyResult(response);
-                    const resultCode = result?.result || result;
+                    const parsed = parseProxyResult(response);
+                    const resultCode = parsed.code;
                     Swal.fire({
                         title: `{{ _('Success!') }}`, text: `{{ _('Trade order for %(symbol)s sent.', symbol=displaySymbol) }}`, icon: 'success',
                         timer: 1500, showConfirmButton: false,
@@ -522,7 +555,7 @@
                     });
                     setTradeActionStatus(`Trade request sent for ${displaySymbol}.`, 'success');
                     if (resultCode && resultCode !== 'opened') {
-                        setTradeActionStatus(`Trade result for ${displaySymbol}: ${String(resultCode)}`, 'warning');
+                        setTradeActionStatus(`Trade result for ${displaySymbol}: ${parsed.message || resultCode}`, 'warning');
                     }
                     setTimeout(fetchOpenPositions, 1500);
                 },

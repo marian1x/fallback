@@ -473,7 +473,46 @@ def user_config():
             app.logger.info(f"[USER_ACTION] User '{g.user.username}' updated their configuration.")
             flash("Configuration saved successfully!", "success")
         return redirect(url_for('user_config'))
-    return render_template('user_config.html', user=g.user, decrypt=decrypt_data, current_user=g.user)
+    return render_template(
+        'user_config.html',
+        user=g.user,
+        decrypt=decrypt_data,
+        current_user=g.user,
+        password_min_length=PASSWORD_MIN_LENGTH
+    )
+
+@app.route('/config/password', methods=['POST'])
+@login_required
+def user_change_password():
+    current_password = request.form.get('current_password', '')
+    new_password = request.form.get('new_password', '')
+    confirm_password = request.form.get('confirm_password', '')
+
+    if not current_password or not new_password or not confirm_password:
+        flash("All password fields are required.", "danger")
+        return redirect(url_for('user_config'))
+
+    if not check_password_hash(g.user.password_hash, current_password):
+        flash("Current password is incorrect.", "danger")
+        return redirect(url_for('user_config'))
+
+    if new_password != confirm_password:
+        flash("New passwords do not match.", "danger")
+        return redirect(url_for('user_config'))
+
+    if len(new_password) < PASSWORD_MIN_LENGTH:
+        flash(f"Password must be at least {PASSWORD_MIN_LENGTH} characters.", "danger")
+        return redirect(url_for('user_config'))
+
+    if check_password_hash(g.user.password_hash, new_password):
+        flash("New password must be different from current password.", "danger")
+        return redirect(url_for('user_config'))
+
+    g.user.password_hash = generate_password_hash(new_password)
+    db.session.commit()
+    app.logger.info(f"[USER_ACTION] User '{g.user.username}' changed their password.")
+    flash("Password changed successfully.", "success")
+    return redirect(url_for('user_config'))
 
 # --- Admin Routes ---
 @app.route('/admin/db_management', methods=['GET', 'POST'])
@@ -643,7 +682,12 @@ def admin_backup_db():
 @superuser_required
 def admin_user_management():
     users = User.query.order_by(User.id).all()
-    return render_template('admin/user_management.html', users=users, current_user=g.user)
+    return render_template(
+        'admin/user_management.html',
+        users=users,
+        current_user=g.user,
+        password_min_length=PASSWORD_MIN_LENGTH
+    )
     
 @app.route('/admin/all_open_trades')
 @superuser_required

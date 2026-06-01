@@ -1,5 +1,20 @@
 # Release Notes
 
+## Version 2.0.1 - 2026-06-01
+
+### Deployment / Runtime
+- Migrated both services from Flask dev server to Gunicorn under `systemd`:
+  - `fallback.service` -> `bot:app` on `127.0.0.1:5000`
+  - `fallback_dashboard.service` -> `dashboard:app` on `127.0.0.1:5050`
+- Added `gunicorn` to `requirements.txt`.
+
+### Security / User Management
+- Added self-service password change for any logged-in user from **Configuration** page.
+- Kept admin password reset flow and added frontend `minlength` validation in admin user management forms.
+
+### UI / Trading UX
+- Fixed close-trade notice rendering (`[object Object]`) by parsing nested webhook/proxy responses correctly before display.
+
 ## Version 2.0.0 - 2026-06-01
 
 ### Security
