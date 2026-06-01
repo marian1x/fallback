@@ -293,8 +293,8 @@ def fetch_bars_alpaca(
     load_dotenv(PROJECT_ROOT / ".env")
 
     from flask import Flask
-    import alpaca_trade_api as tradeapi
 
+    from alpaca_api import LegacyCompatibleAlpacaClient
     from models import User, db
     from utils import decrypt_data
 
@@ -317,7 +317,7 @@ def fetch_bars_alpaca(
             raise RuntimeError(f"User '{user.username}' has no usable Alpaca credentials.")
 
         base_url = __import__("os").getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
-        api = tradeapi.REST(key, secret, base_url, api_version="v2")
+        api = LegacyCompatibleAlpacaClient(key, secret, base_url)
 
         bars = api.get_bars(
             symbol,
@@ -558,9 +558,35 @@ def backtest(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, star
 
     for i in range(1, len(df)):
         ts = idx[i]
+        entered_this_bar = False
 
-        # Exit logic for existing position.
-        if position != 0:
+        # Entry logic first, because Pine evaluates entries before exit blocks.
+        if position == 0:
+            long_allowed = params.trade_direction in ("Both", "Long Only")
+            short_allowed = params.trade_direction in ("Both", "Short Only")
+
+            long_cond = c[i - 1] <= lin[i - 1] and c[i] > lin[i] and c[i] < mid[i]
+            short_cond = c[i - 1] >= uin[i - 1] and c[i] < uin[i] and c[i] > mid[i]
+
+            entry_side = 0
+            if long_allowed and long_cond:
+                entry_side = 1
+            elif short_allowed and short_cond:
+                entry_side = -1
+
+            if entry_side != 0:
+                q = math.floor(cfg.order_size_usd / c[i])
+                if q > 0:
+                    position = entry_side
+                    entry_price = c[i]
+                    qty = q
+                    entry_index = i
+                    trail_active = False
+                    trail_stop = None
+                    entered_this_bar = True
+
+        # Exit logic for positions that were already open before this bar.
+        if position != 0 and not entered_this_bar:
             exit_price: Optional[float] = None
             exit_reason: Optional[str] = None
 
@@ -655,30 +681,6 @@ def backtest(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, star
                 entry_index = -1
                 trail_active = False
                 trail_stop = None
-
-        # Entry logic (one trade at a time), executed on bar close.
-        if position == 0:
-            long_allowed = params.trade_direction in ("Both", "Long Only")
-            short_allowed = params.trade_direction in ("Both", "Short Only")
-
-            long_cond = c[i - 1] <= lin[i - 1] and c[i] > lin[i] and c[i] < mid[i]
-            short_cond = c[i - 1] >= uin[i - 1] and c[i] < uin[i] and c[i] > mid[i]
-
-            entry_side = 0
-            if long_allowed and long_cond:
-                entry_side = 1
-            elif short_allowed and short_cond:
-                entry_side = -1
-
-            if entry_side != 0:
-                q = math.floor(cfg.order_size_usd / c[i])
-                if q > 0:
-                    position = entry_side
-                    entry_price = c[i]
-                    qty = q
-                    entry_index = i
-                    trail_active = False
-                    trail_stop = None
 
     # Close open position at final close for metric completeness.
     if position != 0 and qty > 0:
@@ -816,12 +818,14 @@ def main() -> None:
     parser.add_argument("--inner-len-range", type=str, default="8:40:1")
     parser.add_argument("--inner-mult-range", type=str, default="0.6:1.8:0.1")
     parser.add_argument("--outer-len-range", type=str, default="8:40:1")
-    parser.add_argument("--outer-mult-range", type=str, default="1.2:3.0:0.1")
+    # Outer multiplier is integer in the current Pine input definition (`input(2, ...)`).
+    parser.add_argument("--outer-mult-range", type=str, default="1:4:1")
     parser.add_argument("--fixed-sl-range", type=str, default="1.0:5.0:0.1")
     parser.add_argument("--fixed-tp-range", type=str, default="0.8:4.0:0.1")
     parser.add_argument("--forced-sl-range", type=str, default="3.0:10.0:0.2")
     parser.add_argument("--forced-tp-range", type=str, default="3.0:10.0:0.2")
-    parser.add_argument("--trail-offset-range", type=str, default="2:20:1")
+    # Trailing offset is currently hardcoded in Pine (`trail_offset = 4`), so keep fixed by default.
+    parser.add_argument("--trail-offset-range", type=str, default="4:4:1")
 
     parser.add_argument("--report-json", type=Path, default=DEFAULT_REPORT)
     parser.add_argument("--top-csv", type=Path, default=DEFAULT_TOP_CSV)

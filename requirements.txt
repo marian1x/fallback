@@ -1,6 +1,6 @@
 Flask
 Flask-SQLAlchemy
-alpaca-trade-api
+alpaca-py
 python-dotenv
 cryptography
 requests

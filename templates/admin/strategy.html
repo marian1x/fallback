@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% block title %}Strategy Lab{% endblock %}
+
+{% block content %}
+<div class="container-fluid my-4 animate__animated animate__fadeIn">
+    <div class="d-flex flex-column flex-md-row align-items-md-end justify-content-between mb-3">
+        <div>
+            <h3 class="mb-1">Strategy Lab</h3>
+            <div class="small text-muted">Configure local Pine-based strategy runs and review backtest metrics without TradingView.</div>
+        </div>
+    </div>
+
+    <form method="post" class="card shadow-sm mb-4">
+        <div class="card-header">
+            <i class="fa-solid fa-sliders me-2"></i>Strategy Configuration
+        </div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-12 col-md-3">
+                    <label class="form-label small">Alpaca User</label>
+                    <select name="alpaca_user" class="form-select">
+                        <option value="">Auto (superuser/first user)</option>
+                        {% for user in users %}
+                        <option value="{{ user.username }}" {% if config.alpaca_user == user.username %}selected{% endif %}>
+                            {{ user.username }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label small">Symbol</label>
+                    <input type="text" name="symbol" class="form-control" value="{{ config.symbol }}" required>
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label small">Timeframe</label>
+                    <select name="timeframe" class="form-select">
+                        {% for tf in ['5Min', '15Min', '30Min', '1Hour'] %}
+                        <option value="{{ tf }}" {% if config.timeframe == tf %}selected{% endif %}>{{ tf }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label small">Session</label>
+                    <select name="session" class="form-select">
+                        {% for s in ['regular', 'extended', 'all'] %}
+                        <option value="{{ s }}" {% if config.session == s %}selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-6 col-md-1">
+                    <label class="form-label small">Feed</label>
+                    <select name="feed" class="form-select">
+                        {% for s in ['sip', 'iex'] %}
+                        <option value="{{ s }}" {% if config.feed == s %}selected{% endif %}>{{ s }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-6 col-md-1">
+                    <label class="form-label small">Trials</label>
+                    <input type="number" min="1" name="trials" class="form-control" value="{{ config.trials }}">
+                </div>
+                <div class="col-6 col-md-1">
+                    <label class="form-label small">Top K</label>
+                    <input type="number" min="1" name="top_k" class="form-control" value="{{ config.top_k }}">
+                </div>
+            </div>
+
+            <div class="row g-3 mt-1">
+                <div class="col-6 col-md-2">
+                    <label class="form-label small">Trade Direction</label>
+                    <select name="trade_direction" class="form-select">
+                        {% for d in ['Both', 'Long Only', 'Short Only'] %}
+                        <option value="{{ d }}" {% if config.trade_direction == d %}selected{% endif %}>{{ d }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label small">Inner Len Range</label>
+                    <input type="text" name="inner_len_range" class="form-control" value="{{ config.inner_len_range }}">
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label small">Inner Mult Range</label>
+                    <input type="text" name="inner_mult_range" class="form-control" value="{{ config.inner_mult_range }}">
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label small">Outer Len Range</label>
+                    <input type="text" name="outer_len_range" class="form-control" value="{{ config.outer_len_range }}">
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label small">Outer Mult Range</label>
+                    <input type="text" name="outer_mult_range" class="form-control" value="{{ config.outer_mult_range }}">
+                </div>
+                <div class="col-6 col-md-2">
+                    <label class="form-label small">Trail Offset Range</label>
+                    <input type="text" name="trail_offset_range" class="form-control" value="{{ config.trail_offset_range }}">
+                </div>
+            </div>
+
+            <div class="row g-3 mt-1">
+                <div class="col-6 col-md-3">
+                    <label class="form-label small">Fixed SL Range</label>
+                    <input type="text" name="fixed_sl_range" class="form-control" value="{{ config.fixed_sl_range }}">
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label small">Fixed TP Range</label>
+                    <input type="text" name="fixed_tp_range" class="form-control" value="{{ config.fixed_tp_range }}">
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label small">Forced SL Range</label>
+                    <input type="text" name="forced_sl_range" class="form-control" value="{{ config.forced_sl_range }}">
+                </div>
+                <div class="col-6 col-md-3">
+                    <label class="form-label small">Forced TP Range</label>
+                    <input type="text" name="forced_tp_range" class="form-control" value="{{ config.forced_tp_range }}">
+                </div>
+            </div>
+
+            <div class="form-check mt-3">
+                <input class="form-check-input" type="checkbox" name="enabled" id="strategyEnabled" {% if config.enabled %}checked{% endif %}>
+                <label class="form-check-label" for="strategyEnabled">
+                    Enable local strategy mode (configuration is saved for future live automation)
+                </label>
+            </div>
+        </div>
+        <div class="card-footer d-flex gap-2">
+            <button type="submit" name="action" value="save" class="btn btn-outline-primary">Save Config</button>
+            <button type="submit" name="action" value="run" class="btn btn-primary">Run Backtest + Optimize</button>
+        </div>
+    </form>
+
+    {% if report %}
+    <div class="row g-3 mb-3">
+        <div class="col-12 col-md-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-header">Reference Result</div>
+                <div class="card-body small">
+                    <div>Net Profit: <strong>{{ report.reference_result.net_profit }}</strong></div>
+                    <div>Return %: <strong>{{ report.reference_result.return_pct }}</strong></div>
+                    <div>Trades: <strong>{{ report.reference_result.total_trades }}</strong></div>
+                    <div>Win Rate %: <strong>{{ report.reference_result.win_rate_pct }}</strong></div>
+                    <div>Profit Factor: <strong>{{ report.reference_result.profit_factor }}</strong></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-md-6">
+            <div class="card shadow-sm h-100">
+                <div class="card-header">Best Result</div>
+                <div class="card-body small">
+                    <div>Net Profit: <strong>{{ report.best_result.net_profit }}</strong></div>
+                    <div>Return %: <strong>{{ report.best_result.return_pct }}</strong></div>
+                    <div>Trades: <strong>{{ report.best_result.total_trades }}</strong></div>
+                    <div>Win Rate %: <strong>{{ report.best_result.win_rate_pct }}</strong></div>
+                    <div>Profit Factor: <strong>{{ report.best_result.profit_factor }}</strong></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-header">Top Configurations</div>
+        <div class="card-body table-responsive">
+            <table id="strategyTopTable" class="table table-sm table-striped">
+                <thead>
+                    <tr>
+                        {% if top_rows %}
+                        {% for key in top_rows[0].keys() %}
+                        <th>{{ key }}</th>
+                        {% endfor %}
+                        {% endif %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in top_rows %}
+                    <tr>
+                        {% for key, value in row.items() %}
+                        <td>{{ value }}</td>
+                        {% endfor %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+$(document).ready(function() {
+    if ($('#strategyTopTable').length) {
+        $('#strategyTopTable').DataTable({
+            pageLength: 10,
+            lengthChange: false,
+            order: [[0, 'desc']],
+            responsive: true
+        });
+    }
+});
+</script>
+{% endblock %}

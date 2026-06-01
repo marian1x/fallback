@@ -11,6 +11,8 @@ Welcome to the Alpaca Trading Bot, a powerful, self-hosted solution for automati
 - **Secure Authentication**: The dashboard is protected by a login system, and the database can be re-initialized securely.
 - **Themeable UI**: Switch between a clean light mode and a futuristic dark mode.
 - **Mobile-Friendly**: The dashboard is fully responsive and optimized for use on mobile devices.
+- **Manual Order Controls**: Place market/limit orders, choose time-in-force, and enable extended-hours trading from the dashboard.
+- **Admin Strategy Lab**: Configure and run local strategy backtests/optimizations without TradingView.
 
 ## 🛠️ Tech Stack
 
@@ -97,6 +99,12 @@ Follow these steps to get your trading bot up and running:
     MAX_ACCOUNT_ALLOCATION_PCT=0
     MAX_OPEN_POSITIONS_PER_ACCOUNT=30
     SIGNAL_DEDUP_WINDOW_SEC=8
+
+    # --- 24/5 / Extended Hours Controls ---
+    AUTO_EXTENDED_HOURS=true
+    AUTO_LIMIT_OUTSIDE_RTH=true
+    OUTSIDE_RTH_LIMIT_SLIPPAGE_BPS=25
+    TRADE_UPDATES_WAIT_SEC=12
     ```
 
     **Important**: Never commit your `.env` file to version control. The `.gitignore` file is already configured to ignore it.

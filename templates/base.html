@@ -29,37 +29,52 @@
         </button>
         <div class="collapse navbar-collapse justify-content-end" id="navMenu">
           <ul class="navbar-nav align-items-center">
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('dashboard') }}">{{ _('Dashboard') }}</a></li>
+            <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('dashboard') }}" data-bs-toggle="tooltip" title="Panoul principal: vezi contul, pozitii deschise si executa ordine manuale.">{{ _('Dashboard') }}</a>
+            </li>
             
             {% if ENABLE_INVESTOR_VIEW %}
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('investor_payout') }}">Investor Payout</a></li>
+            <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('investor_payout') }}" data-bs-toggle="tooltip" title="Raport investitori: distributia capitalului si P/L pentru fiecare investitor.">Investor Payout</a>
+            </li>
             {% endif %}
 
             {% if g.user and g.user.is_superuser %}
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('admin_all_open_trades') }}">All Open Trades</a></li>
+            <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('admin_all_open_trades') }}" data-bs-toggle="tooltip" title="Administrare pozitii: vezi toate pozitiile deschise pentru toti utilizatorii.">All Open Trades</a>
+            </li>
             {% endif %}
 
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('closed_trades') }}">{{ _('Closed Trades') }}</a></li>
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('open_analytics') }}">{{ _('Open Analytics') }}</a></li>
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('stats') }}">{{ _('Advanced Analytics') }}</a></li>
+            <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('closed_trades') }}" data-bs-toggle="tooltip" title="Istoric tranzactii inchise cu profit/pierdere si timpi de executie.">{{ _('Closed Trades') }}</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('open_analytics') }}" data-bs-toggle="tooltip" title="Analiza in timp real pentru pozitiile deschise (expunere, risc, P/L).">{{ _('Open Analytics') }}</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('stats') }}" data-bs-toggle="tooltip" title="Statistici avansate si indicatori agregati ai performantei.">{{ _('Advanced Analytics') }}</a>
+            </li>
             
             {% if g.user and g.user.is_superuser %}
             <li class="nav-item dropdown">
-              <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">Admin Tools</a>
+              <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" title="Instrumente administrative pentru utilizatori, sistem si configurari.">Admin Tools</a>
               <ul class="dropdown-menu dropdown-menu-dark">
-                <li><a class="dropdown-item" href="{{ url_for('admin_user_management') }}">User Management</a></li>
-                <li><a class="dropdown-item" href="{{ url_for('admin_health_dashboard') }}">System Health</a></li>
-                <li><a class="dropdown-item" href="{{ url_for('user_config') }}">My Config</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('admin_user_management') }}" data-bs-toggle="tooltip" title="Creeaza, editeaza, restrictioneaza sau reseteaza parole utilizatori.">User Management</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('admin_health_dashboard') }}" data-bs-toggle="tooltip" title="Monitorizare servicii, loguri si starea generala a platformei.">System Health</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('admin_strategy') }}" data-bs-toggle="tooltip" title="Configureaza strategia locala si ruleaza backtesting/optimizare fara TradingView.">Strategy Lab</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('user_config') }}" data-bs-toggle="tooltip" title="Configureaza credentialele tale si setarile implicite de trading.">My Config</a></li>
                 {% if ENABLE_INVESTOR_VIEW %}
-                <li><a class="dropdown-item" href="{{ url_for('admin_investor_config') }}">Investor Config</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('admin_investor_config') }}" data-bs-toggle="tooltip" title="Seteaza contributia fiecarui investitor pentru raportare.">Investor Config</a></li>
                 {% endif %}
                 <li><hr class="dropdown-divider"></li>
-                <li><a class="dropdown-item" href="{{ url_for('admin_logs') }}">View Logs</a></li>
-                <li><a class="dropdown-item" href="{{ url_for('admin_db_management') }}">DB Management</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('admin_logs') }}" data-bs-toggle="tooltip" title="Vizualizeaza logurile aplicatiei pentru debugging si audit.">View Logs</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('admin_db_management') }}" data-bs-toggle="tooltip" title="Operatiuni baza de date si mentenanta simboluri.">DB Management</a></li>
               </ul>
             </li>
             {% else %}
-             <li class="nav-item"><a class="nav-link" href="{{ url_for('user_config') }}">{{ _('Configuration') }}</a></li>
+             <li class="nav-item">
+              <a class="nav-link" href="{{ url_for('user_config') }}" data-bs-toggle="tooltip" title="Setari cont: credentiale API, profil TradingView, suma implicita per trade.">{{ _('Configuration') }}</a>
+             </li>
             {% endif %}
 
             <li class="nav-item">
@@ -174,6 +189,12 @@
             localStorage.setItem('theme', newTheme);
             setTheme(newTheme);
         });
+
+        if (window.bootstrap && window.bootstrap.Tooltip) {
+            document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach((el) => {
+                window.bootstrap.Tooltip.getOrCreateInstance(el);
+            });
+        }
     })();
     </script>
     {% block scripts %}{% endblock %}

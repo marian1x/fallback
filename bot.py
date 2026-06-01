@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 import os
+import atexit
 import logging
 from logging.handlers import RotatingFileHandler
 import requests
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
-import alpaca_trade_api as tradeapi
 import math
 import hmac
 import threading
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
+from alpaca_api import AlpacaAPIError, LegacyCompatibleAlpacaClient, TradeUpdatesHub
 from models import db, User, Trade
 from utils import decrypt_data
 
@@ -46,9 +48,21 @@ MAX_ACCOUNT_ALLOCATION_PCT = float(os.getenv("MAX_ACCOUNT_ALLOCATION_PCT", "0"))
 MAX_OPEN_POSITIONS_PER_ACCOUNT = int(os.getenv("MAX_OPEN_POSITIONS_PER_ACCOUNT", "30"))
 SIGNAL_DEDUP_WINDOW_SEC = int(os.getenv("SIGNAL_DEDUP_WINDOW_SEC", "8"))
 MAX_WEBHOOK_CONTENT_LENGTH = int(os.getenv("MAX_WEBHOOK_CONTENT_LENGTH", str(128 * 1024)))
+TRADE_UPDATES_WAIT_SEC = float(os.getenv("TRADE_UPDATES_WAIT_SEC", "12"))
+AUTO_EXTENDED_HOURS = os.getenv("AUTO_EXTENDED_HOURS", "true").lower() in ("1", "true", "yes", "y")
+AUTO_LIMIT_OUTSIDE_RTH = os.getenv("AUTO_LIMIT_OUTSIDE_RTH", "true").lower() in ("1", "true", "yes", "y")
+OUTSIDE_RTH_LIMIT_SLIPPAGE_BPS = float(os.getenv("OUTSIDE_RTH_LIMIT_SLIPPAGE_BPS", "25"))
 
 RECENT_SIGNAL_CACHE = {}
 RECENT_SIGNAL_LOCK = threading.Lock()
+TRADE_UPDATES = TradeUpdatesHub(logger=logging.getLogger("trades_logger"))
+
+@atexit.register
+def _shutdown_streams():
+    try:
+        TRADE_UPDATES.stop_all()
+    except Exception:
+        pass
 
 # --- Logging ---
 handler = RotatingFileHandler('trades.log', maxBytes=100000, backupCount=3)
@@ -74,6 +88,35 @@ def is_close_action(act):
 
 def is_crypto(symbol):
     return symbol and (symbol.upper().endswith('USD') or '/' in symbol)
+
+def _parse_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "y", "on")
+
+def is_outside_regular_hours(now_utc=None):
+    now_utc = now_utc or datetime.now(timezone.utc)
+    ny = now_utc.astimezone(ZoneInfo("America/New_York"))
+    if ny.weekday() >= 5:  # Saturday/Sunday
+        return True
+    minutes = ny.hour * 60 + ny.minute
+    return minutes < (9 * 60 + 30) or minutes >= (16 * 60)
+
+def _build_limit_price(last_price, side):
+    slip = max(0.0, OUTSIDE_RTH_LIMIT_SLIPPAGE_BPS) / 10000.0
+    if side == "buy":
+        return round(last_price * (1 + slip), 4)
+    return round(last_price * (1 - slip), 4)
+
+def _safe_float(value):
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 def get_last_price(api_client, symbol):
     try:
@@ -270,6 +313,115 @@ def account_key_for_user(user):
         return None
     return f"{api_key}:{api_secret}"
 
+def _order_fill_price(api, order_id):
+    if not order_id:
+        return None
+    try:
+        ord_obj = api.get_order(order_id)
+        return _safe_float(getattr(ord_obj, "filled_avg_price", None))
+    except Exception:
+        return None
+
+def _is_no_position_error(err_text):
+    normalized = (err_text or "").lower()
+    markers = (
+        "position not found",
+        "position does not exist",
+        "no position",
+        "insufficient qty",
+        "insufficient quantity",
+    )
+    return any(marker in normalized for marker in markers)
+
+def _pick_close_price_from_updates(api_key, api_secret, close_order_id, close_order, api, fallback_symbol):
+    close_price = _safe_float(getattr(close_order, "filled_avg_price", None))
+    if close_price is not None:
+        return close_price
+
+    try:
+        update = TRADE_UPDATES.wait_for_order(
+            api_key=api_key,
+            api_secret=api_secret,
+            base_url=BASE_URL,
+            order_id=str(close_order_id),
+            timeout_sec=TRADE_UPDATES_WAIT_SEC,
+        )
+        if update and update.price is not None:
+            return float(update.price)
+    except Exception as exc:
+        logger.warning(f"[ALPACA_STREAM] Could not read trade update for close order {close_order_id}: {exc}")
+
+    close_price = _order_fill_price(api, close_order_id)
+    if close_price is not None:
+        return close_price
+
+    fallback = get_last_price(api, fallback_symbol)
+    return fallback if fallback else None
+
+def _resolve_equity_order_params(symbol, action, amount, last_price, payload):
+    requested_type = str(payload.get("order_type", "market")).strip().lower() or "market"
+    requested_tif = str(payload.get("time_in_force", "day")).strip().lower() or "day"
+    requested_limit = _safe_float(payload.get("limit_price"))
+    explicit_eh = _parse_bool(payload.get("extended_hours"), default=False)
+
+    outside_rth = is_outside_regular_hours()
+    is_overnight_window = False
+    now_ny = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York"))
+    minutes = now_ny.hour * 60 + now_ny.minute
+    is_weekday_overnight = now_ny.weekday() < 5 and (minutes >= 20 * 60 or minutes < 4 * 60)
+    is_sunday_open = now_ny.weekday() == 6 and minutes >= 20 * 60
+    if is_weekday_overnight or is_sunday_open:
+        is_overnight_window = True
+
+    # Extended-hours eligibility: automatic for outside RTH if enabled.
+    extended_hours = explicit_eh or (AUTO_EXTENDED_HOURS and outside_rth)
+    order_type = requested_type
+    tif = requested_tif
+    limit_price = requested_limit
+
+    # During extended/overnight, Alpaca accepts limit orders only (DAY/GTC).
+    if extended_hours and order_type != "limit":
+        if AUTO_LIMIT_OUTSIDE_RTH:
+            order_type = "limit"
+            if limit_price is None:
+                limit_price = _build_limit_price(last_price, action)
+        else:
+            raise ValueError("Extended-hours orders must use limit type. Set order_type=limit.")
+
+    if extended_hours and tif not in ("day", "gtc"):
+        tif = "day"
+
+    if is_overnight_window:
+        # Explicitly enforce limit-only behavior in overnight window.
+        if order_type != "limit":
+            raise ValueError("Overnight trading supports limit orders only.")
+        if tif not in ("day", "gtc"):
+            tif = "day"
+
+    if order_type == "limit" and limit_price is None:
+        limit_price = _build_limit_price(last_price, action)
+
+    order_params = {
+        "symbol": symbol,
+        "side": action,
+        "type": order_type,
+        "time_in_force": tif,
+        "extended_hours": bool(extended_hours),
+    }
+
+    if action == "buy":
+        order_params["notional"] = float(amount)
+    else:
+        qty = math.floor(float(amount) / float(last_price))
+        if qty <= 0:
+            raise ValueError(f"Amount ${amount} too small to short {symbol}.")
+        order_params["qty"] = qty
+
+    if order_type == "limit":
+        order_params["limit_price"] = float(limit_price)
+
+    return order_params, outside_rth, is_overnight_window
+
 def process_trade_for_user(user, payload):
     if user.is_trading_restricted:
         logger.warning(f"[TRADE_REJECTED] User '{user.username}' is restricted from trading.")
@@ -291,7 +443,7 @@ def process_trade_for_user(user, payload):
     except (TypeError, ValueError):
         return False, 400, {"error": "Invalid amount"}, None
 
-    api = tradeapi.REST(api_key, api_secret, BASE_URL, api_version='v2')
+    api = LegacyCompatibleAlpacaClient(api_key, api_secret, BASE_URL)
     api_symbol = symbol.replace('/', '')
     duplicate, retry_after = _cache_duplicate_signal(user.id, api_symbol, action)
     if duplicate:
@@ -313,20 +465,20 @@ def process_trade_for_user(user, payload):
         try:
             position_to_close = api.get_position(api_symbol)
             close_order = api.close_position(api_symbol)
-            logger.info(f"[TRADE_EXECUTED] User '{user.username}' CLOSE order {close_order.id} for {api_symbol}")
-            close_price = getattr(close_order, "filled_avg_price", None)
-            if close_price is not None:
-                try:
-                    close_price = float(close_price)
-                except (TypeError, ValueError):
-                    close_price = None
-            if close_price is None:
-                last_price = get_last_price(api, symbol)
-                close_price = last_price if last_price else None
+            close_order_id = str(getattr(close_order, "id", ""))
+            logger.info(f"[TRADE_EXECUTED] User '{user.username}' CLOSE order {close_order_id} for {api_symbol}")
+            close_price = _pick_close_price_from_updates(
+                api_key=api_key,
+                api_secret=api_secret,
+                close_order_id=close_order_id,
+                close_order=close_order,
+                api=api,
+                fallback_symbol=symbol,
+            )
             notification_payload = {
                 "result": "closed",
                 "symbol": symbol,
-                "close_order_id": close_order.id,
+                "close_order_id": close_order_id,
                 "payload": payload,
                 "user_id": user.id,
                 "position_obj": {
@@ -340,17 +492,9 @@ def process_trade_for_user(user, payload):
                 notification_payload["close_price"] = close_price
                 notification_payload["close_time"] = datetime.now(timezone.utc).isoformat()
             record_trade_notification(notification_payload)
-            return True, 200, {"result": "closed", "close_order_id": close_order.id}, notification_payload
-        except tradeapi.rest.APIError as e:
-            error_text = str(e).lower()
-            no_position_markers = (
-                "position not found",
-                "position does not exist",
-                "no position",
-                "insufficient qty",
-                "insufficient quantity"
-            )
-            if any(msg in error_text for msg in no_position_markers):
+            return True, 200, {"result": "closed", "close_order_id": close_order_id}, notification_payload
+        except AlpacaAPIError as e:
+            if _is_no_position_error(str(e)):
                 mirror_payload = None
                 if ENABLE_TV_BROADCAST:
                     mirror_payload = mirror_close_trade(user, payload, api)
@@ -370,7 +514,7 @@ def process_trade_for_user(user, payload):
                 mirror_payload = mirror_open_trade(user, payload, api, position_existing, amount)
                 return True, 200, {"result": "mirrored_open" if mirror_payload else "position_exists", "symbol": symbol}, mirror_payload
             return False, 409, {"error": f"{api_symbol} position already open."}, None
-        except tradeapi.rest.APIError:
+        except AlpacaAPIError:
             pass
         except Exception as e:
             logger.error(f"[TRADE_FAIL] Could not verify position for '{user.username}' on {api_symbol}: {e}")
@@ -385,34 +529,86 @@ def process_trade_for_user(user, payload):
             if is_crypto(symbol):
                 qty = amount / last_price
                 qty_to_log = qty
-                order_params = {'symbol': api_symbol, 'side': action.lower(), 'type': 'market', 'qty': qty, 'time_in_force': 'gtc'}
+                tif = str(payload.get("time_in_force", "gtc")).strip().lower() or "gtc"
+                if tif not in ("gtc", "ioc"):
+                    tif = "gtc"
+                order_params = {
+                    "symbol": api_symbol,
+                    "side": action.lower(),
+                    "type": str(payload.get("order_type", "market")).strip().lower() or "market",
+                    "qty": qty,
+                    "time_in_force": tif,
+                }
+                limit_price = _safe_float(payload.get("limit_price"))
+                if order_params["type"] == "limit":
+                    order_params["limit_price"] = limit_price if limit_price else _build_limit_price(last_price, action.lower())
             else:
-                if action.lower() == 'buy':
-                    qty_to_log = amount / last_price
-                    order_params = {'symbol': api_symbol, 'side': 'buy', 'type': 'market', 'notional': amount, 'time_in_force': 'day'}
-                else:
-                    qty = math.floor(amount / last_price)
-                    qty_to_log = qty
-                    if qty == 0:
-                        logger.warning(f"[TRADE_REJECTED] Amount ${amount} too small to short {api_symbol}.")
-                        return False, 400, {"error": f"Amount ${amount} too small to short {api_symbol}."}, None
-                    order_params = {'symbol': api_symbol, 'side': 'sell', 'type': 'market', 'qty': qty, 'time_in_force': 'day'}
+                order_params, outside_rth, is_overnight_window = _resolve_equity_order_params(
+                    symbol=api_symbol,
+                    action=action.lower(),
+                    amount=amount,
+                    last_price=last_price,
+                    payload=payload,
+                )
+                if outside_rth and order_params.get("extended_hours"):
+                    try:
+                        asset = api.get_asset(api_symbol)
+                        overnight_tradable = bool(getattr(asset, "overnight_tradable", False))
+                        overnight_halted = bool(getattr(asset, "overnight_halted", False))
+                        if is_overnight_window and not overnight_tradable:
+                            raise ValueError(f"{api_symbol} is not overnight_tradable for 24/5 session.")
+                        if is_overnight_window and overnight_halted:
+                            raise ValueError(f"{api_symbol} is currently overnight_halted.")
+                    except AlpacaAPIError:
+                        # Keep order flow resilient even if asset metadata lookup fails.
+                        pass
+                qty_to_log = amount / last_price if action.lower() == "buy" else float(order_params.get("qty", 0))
+                if outside_rth:
+                    logger.info(
+                        f"[TRADE_ROUTE] user='{user.username}' symbol='{api_symbol}' outside_rth={outside_rth} "
+                        f"overnight_window={is_overnight_window} order_type={order_params.get('type')} "
+                        f"tif={order_params.get('time_in_force')} extended_hours={order_params.get('extended_hours')}"
+                    )
 
             order = api.submit_order(**order_params)
-            logger.info(f"[TRADE_EXECUTED] User '{user.username}' OPEN order {order.id} for {api_symbol}")
+            order_id = str(getattr(order, "id", ""))
+            logger.info(f"[TRADE_EXECUTED] User '{user.username}' OPEN order {order_id} for {api_symbol}")
+
+            entry_price = _safe_float(getattr(order, "filled_avg_price", None))
+            if entry_price is None:
+                try:
+                    update = TRADE_UPDATES.wait_for_order(
+                        api_key=api_key,
+                        api_secret=api_secret,
+                        base_url=BASE_URL,
+                        order_id=order_id,
+                        timeout_sec=TRADE_UPDATES_WAIT_SEC,
+                    )
+                    if update and update.price is not None:
+                        entry_price = float(update.price)
+                except Exception as exc:
+                    logger.warning(f"[ALPACA_STREAM] Could not read trade update for open order {order_id}: {exc}")
+            if entry_price is None:
+                entry_price = _order_fill_price(api, order_id) or last_price
 
             notification_payload = {
                 "result": "opened",
-                "order_id": order.id,
+                "order_id": order_id,
                 "symbol": symbol,
                 "side": action.lower(),
-                "price": last_price,
+                "price": entry_price,
                 "payload": payload,
                 "user_id": user.id,
                 "qty": qty_to_log
             }
             record_trade_notification(notification_payload)
-            return True, 200, {"result": "opened", "order_id": order.id}, notification_payload
+            return True, 200, {"result": "opened", "order_id": order_id}, notification_payload
+        except ValueError as e:
+            logger.warning(f"[TRADE_REJECTED] {e}")
+            return False, 400, {"error": str(e)}, None
+        except AlpacaAPIError as e:
+            logger.error(f"[TRADE_FAIL] Alpaca API error opening {symbol} for '{user.username}': {e}")
+            return False, 500, {"error": str(e)}, None
         except Exception as e:
             logger.error(f"[TRADE_FAIL] Error opening {symbol} for '{user.username}': {e}")
             return False, 500, {"error": str(e)}, None

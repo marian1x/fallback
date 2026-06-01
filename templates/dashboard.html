@@ -44,18 +44,18 @@
                 </div>
                 <div class="card-body">
                     <form id="openTradeForm" class="row g-2 align-items-end">
-                        <div class="col-12 col-md-4">
+                        <div class="col-12 col-md-3">
                             <label for="symbolInput" class="form-label small">{{ _('Symbol') }}</label>
                             <input type="text" id="symbolInput" name="symbol" class="form-control" placeholder="{{ _('e.g., AAPL, BTC/USD') }}" required list="symbols-datalist" data-bs-toggle="tooltip" title="{{ _('Enter the stock or crypto symbol to trade') }}">
                              <div class="invalid-feedback">
                                 Symbol not found or is not tradable.
                             </div>
                         </div>
-                        <div class="col-12 col-md-3">
+                        <div class="col-12 col-md-2">
                             <label for="amountInput" class="form-label small">{{ _('Amount ($)') }}</label>
                             <input type="number" id="amountInput" name="amount" class="form-control" value="{{ per_trade_amount }}" step="any" required data-bs-toggle="tooltip" title="{{ _('The notional value of the trade in USD') }}">
                         </div>
-                        <div class="col-12 col-md-3">
+                        <div class="col-12 col-md-2">
                             <label for="sideSelect" class="form-label small">{{ _('Side') }}</label>
                             <select id="sideSelect" name="side" class="form-select" required data-bs-toggle="tooltip" title="{{ _('Choose to buy (long) or sell (short)') }}">
                                 <option value="buy">{{ _('Buy (Long)') }}</option>
@@ -63,6 +63,30 @@
                             </select>
                         </div>
                         <div class="col-12 col-md-2">
+                            <label for="orderTypeSelect" class="form-label small">{{ _('Order Type') }}</label>
+                            <select id="orderTypeSelect" name="order_type" class="form-select" data-bs-toggle="tooltip" title="{{ _('Market for immediate execution, Limit for price-controlled execution') }}">
+                                <option value="market">{{ _('Market') }}</option>
+                                <option value="limit">{{ _('Limit') }}</option>
+                            </select>
+                        </div>
+                        <div class="col-12 col-md-1">
+                            <label for="tifSelect" class="form-label small">{{ _('TIF') }}</label>
+                            <select id="tifSelect" name="time_in_force" class="form-select" data-bs-toggle="tooltip" title="{{ _('Time in force: DAY or GTC are recommended for extended hours') }}">
+                                <option value="day">DAY</option>
+                                <option value="gtc">GTC</option>
+                            </select>
+                        </div>
+                        <div class="col-12 col-md-2">
+                            <label for="limitPriceInput" class="form-label small">{{ _('Limit Price') }}</label>
+                            <input type="number" id="limitPriceInput" name="limit_price" class="form-control" step="0.0001" placeholder="{{ _('Optional') }}" disabled data-bs-toggle="tooltip" title="{{ _('Required when Order Type is Limit') }}">
+                        </div>
+                        <div class="col-12 col-md-2 d-flex align-items-center">
+                            <div class="form-check mt-3">
+                                <input class="form-check-input" type="checkbox" id="extendedHoursCheck" data-bs-toggle="tooltip" title="{{ _('Enable pre-market, after-hours, and overnight execution when supported') }}">
+                                <label class="form-check-label small" for="extendedHoursCheck">{{ _('Extended Hours') }}</label>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-1">
                             <button type="submit" class="btn btn-primary w-100" data-bs-toggle="tooltip" title="{{ _('Submit the trade to the bot') }}"><i class="fa fa-paper-plane"></i> {{ _('Send') }}</button>
                         </div>
                     </form>
@@ -426,6 +450,10 @@
     $(document).ready(function(){
         const MIN_CRYPTO_AMOUNT = 10.0;
         const tpSlModal = new bootstrap.Modal(document.getElementById('tpSlModal'));
+        const orderTypeSelect = $('#orderTypeSelect');
+        const limitPriceInput = $('#limitPriceInput');
+        const tifSelect = $('#tifSelect');
+        const extendedHoursCheck = $('#extendedHoursCheck');
         openTable = $('#openTable').DataTable({
             paging: false,
             searching: false,
@@ -442,6 +470,17 @@
         
         setupSymbolAutocomplete(); // MODIFIED: Call new function
         $('#symbolInput').on('input', validateSymbolInput);
+
+        function syncOrderInputs() {
+            const isLimit = orderTypeSelect.val() === 'limit';
+            limitPriceInput.prop('disabled', !isLimit);
+            limitPriceInput.prop('required', isLimit);
+            if (!isLimit) {
+                limitPriceInput.val('');
+            }
+        }
+        orderTypeSelect.on('change', syncOrderInputs);
+        syncOrderInputs();
 
         fetchOpenPositions();
         fetchAccountSummary();
@@ -525,9 +564,20 @@
             const displaySymbol = rawSymbol.toUpperCase().replace(/\s+/g, '');
             const sym = normalizeSymbolInput(rawSymbol);
             const side = $('#sideSelect').val(); const amount = parseFloat($('#amountInput').val());
+            const orderType = orderTypeSelect.val();
+            const timeInForce = tifSelect.val();
+            const limitPriceRaw = limitPriceInput.val();
+            const extendedHours = extendedHoursCheck.is(':checked');
             if(!sym || !side || !amount) {
                  Swal.fire({ title: `{{ _('Invalid Input') }}`, text: `{{ _('Please fill all fields correctly.') }}`, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
                 return;
+            }
+            if (orderType === 'limit') {
+                const limitPrice = parseFloat(limitPriceRaw);
+                if (!limitPrice || limitPrice <= 0) {
+                    Swal.fire({ title: `{{ _('Invalid Input') }}`, text: `{{ _('Limit price must be greater than 0 for limit orders.') }}`, icon: "error", customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }});
+                    return;
+                }
             }
             // MODIFIED: Use the Set for validation
             if (!tradableSymbols.has(sym)) {
@@ -544,7 +594,16 @@
             }
             $.ajax({
                 url: '/api/internal/proxy_trade', method: 'POST', contentType: 'application/json',
-                data: JSON.stringify({symbol: sym, action: side, user: "Dashboard", amount: amount}),
+                data: JSON.stringify({
+                    symbol: sym,
+                    action: side,
+                    user: "Dashboard",
+                    amount: amount,
+                    order_type: orderType,
+                    time_in_force: timeInForce,
+                    extended_hours: extendedHours,
+                    limit_price: orderType === 'limit' ? parseFloat(limitPriceRaw) : null
+                }),
                 success: function(response){
                     const parsed = parseProxyResult(response);
                     const resultCode = parsed.code;
@@ -553,7 +612,10 @@
                         timer: 1500, showConfirmButton: false,
                         customClass: { popup: document.body.classList.contains('dark-mode') ? 'swal2-dark' : '' }
                     });
-                    setTradeActionStatus(`Trade request sent for ${displaySymbol}.`, 'success');
+                    setTradeActionStatus(
+                        `Trade request sent for ${displaySymbol} (${orderType.toUpperCase()}${extendedHours ? ', EH' : ''}).`,
+                        'success'
+                    );
                     if (resultCode && resultCode !== 'opened') {
                         setTradeActionStatus(`Trade result for ${displaySymbol}: ${parsed.message || resultCode}`, 'warning');
                     }

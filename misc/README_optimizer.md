@@ -31,4 +31,6 @@ Generated reports are ignored by git (`misc/optimizer_report*.json`, `misc/optim
 
 - This is an emulator for TradingView behavior, not a 1:1 engine clone.
 - Data feed differences (`iex` vs `sip`) can change metrics significantly.
+- By default, trailing offset is fixed to `4` ticks to match the current Pine script.
+- By default, `outer_kc_mult` is searched on integer values to match `input(2, ...)` from Pine.
 - Use `--bars-csv` for reproducible backtests across environments.

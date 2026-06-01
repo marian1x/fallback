@@ -2,6 +2,7 @@
 import os
 import logging
 import subprocess
+import csv
 from logging.handlers import RotatingFileHandler
 import threading
 import time
@@ -19,9 +20,9 @@ from flask import (
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
-import alpaca_trade_api as tradeapi
 import requests
 
+from alpaca_api import LegacyCompatibleAlpacaClient
 from models import db, Trade, User
 from trade_db import record_open_trade, record_closed_trade
 from utils import encrypt_data, decrypt_data
@@ -71,6 +72,9 @@ if not REPO_PATH or not os.path.isdir(REPO_PATH):
     REPO_PATH = os.path.abspath(os.path.dirname(__file__))
 LAST_GOOD_COMMIT_FILE = os.path.join(app.instance_path, 'last_good_commit.txt')
 VERSION_COUNTER_FILE = os.path.join(app.instance_path, 'version_counter.txt')
+STRATEGY_CONFIG_FILE = os.path.join(app.instance_path, 'strategy_config.json')
+STRATEGY_REPORT_FILE = os.path.join(app.instance_path, 'strategy_last_report.json')
+STRATEGY_TOP_FILE = os.path.join(app.instance_path, 'strategy_last_top.csv')
 LOGIN_RATE_LIMIT_WINDOW_SEC = int(os.getenv('LOGIN_RATE_LIMIT_WINDOW_SEC', '600'))
 LOGIN_RATE_LIMIT_MAX_ATTEMPTS = int(os.getenv('LOGIN_RATE_LIMIT_MAX_ATTEMPTS', '8'))
 PASSWORD_MIN_LENGTH = int(os.getenv('PASSWORD_MIN_LENGTH', '10'))
@@ -244,7 +248,7 @@ def get_user_api(user):
     secret = decrypt_data(user.encrypted_alpaca_secret)
     if not key or not secret: return None
     try:
-        return tradeapi.REST(key, secret, BASE_URL, api_version='v2')
+        return LegacyCompatibleAlpacaClient(key, secret, BASE_URL)
     except Exception as e:
         app.logger.error(f"[API_FAIL] Failed to initialize Alpaca API for {user.username}: {e}")
         return None
@@ -363,6 +367,106 @@ def ensure_last_good_commit():
         return
     if not read_last_good_commit():
         write_last_good_commit(current["hash"])
+
+def get_default_strategy_config():
+    return {
+        "enabled": False,
+        "alpaca_user": "",
+        "symbol": "TSM",
+        "timeframe": "30Min",
+        "session": "regular",
+        "feed": "sip",
+        "trials": 200,
+        "top_k": 20,
+        "trade_direction": "Both",
+        "inner_len_range": "8:40:1",
+        "inner_mult_range": "0.6:1.8:0.1",
+        "outer_len_range": "8:40:1",
+        "outer_mult_range": "1:4:1",
+        "fixed_sl_range": "1.0:5.0:0.1",
+        "fixed_tp_range": "0.8:4.0:0.1",
+        "forced_sl_range": "3.0:10.0:0.2",
+        "forced_tp_range": "3.0:10.0:0.2",
+        "trail_offset_range": "4:4:1",
+    }
+
+def load_strategy_config():
+    data = get_default_strategy_config()
+    if not os.path.exists(STRATEGY_CONFIG_FILE):
+        return data
+    try:
+        with open(STRATEGY_CONFIG_FILE, "r", encoding="utf-8") as f:
+            file_data = json.load(f)
+        if isinstance(file_data, dict):
+            data.update(file_data)
+    except Exception as e:
+        app.logger.error(f"[STRATEGY] Failed to load strategy config: {e}")
+    return data
+
+def save_strategy_config(cfg):
+    try:
+        os.makedirs(os.path.dirname(STRATEGY_CONFIG_FILE), exist_ok=True)
+        with open(STRATEGY_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as e:
+        app.logger.error(f"[STRATEGY] Failed to save strategy config: {e}")
+
+def load_strategy_report():
+    if not os.path.exists(STRATEGY_REPORT_FILE):
+        return None
+    try:
+        with open(STRATEGY_REPORT_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        app.logger.error(f"[STRATEGY] Failed to load strategy report: {e}")
+        return None
+
+def load_strategy_top_rows(limit=20):
+    if not os.path.exists(STRATEGY_TOP_FILE):
+        return []
+    rows = []
+    try:
+        with open(STRATEGY_TOP_FILE, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rows.append(row)
+                if len(rows) >= limit:
+                    break
+    except Exception as e:
+        app.logger.error(f"[STRATEGY] Failed to load strategy top rows: {e}")
+        return []
+    return rows
+
+def run_strategy_optimizer(config):
+    venv_python = os.path.join(REPO_PATH, "venv", "bin", "python")
+    report_path = STRATEGY_REPORT_FILE
+    top_path = STRATEGY_TOP_FILE
+    command = [
+        venv_python,
+        "misc/pine_optimizer.py",
+        "--symbol", str(config.get("symbol", "TSM")),
+        "--timeframe", str(config.get("timeframe", "30Min")),
+        "--session", str(config.get("session", "regular")),
+        "--feed", str(config.get("feed", "iex")),
+        "--trials", str(int(config.get("trials", 200))),
+        "--top-k", str(int(config.get("top_k", 20))),
+        "--trade-direction", str(config.get("trade_direction", "Both")),
+        "--inner-len-range", str(config.get("inner_len_range", "8:40:1")),
+        "--inner-mult-range", str(config.get("inner_mult_range", "0.6:1.8:0.1")),
+        "--outer-len-range", str(config.get("outer_len_range", "8:40:1")),
+        "--outer-mult-range", str(config.get("outer_mult_range", "1:4:1")),
+        "--fixed-sl-range", str(config.get("fixed_sl_range", "1.0:5.0:0.1")),
+        "--fixed-tp-range", str(config.get("fixed_tp_range", "0.8:4.0:0.1")),
+        "--forced-sl-range", str(config.get("forced_sl_range", "3.0:10.0:0.2")),
+        "--forced-tp-range", str(config.get("forced_tp_range", "3.0:10.0:0.2")),
+        "--trail-offset-range", str(config.get("trail_offset_range", "4:4:1")),
+        "--report-json", report_path,
+        "--top-csv", top_path,
+    ]
+    alpaca_user = str(config.get("alpaca_user", "") or "").strip()
+    if alpaca_user:
+        command.extend(["--alpaca-user", alpaca_user])
+    return run_command(command, cwd=REPO_PATH, timeout=900)
 
 # --- Core Routes ---
 @app.route('/login', methods=['GET', 'POST'])
@@ -530,6 +634,72 @@ def admin_db_management():
             flash(f"Error reinitializing database: {e}", "danger")
         return redirect(url_for('admin_db_management'))
     return render_template('admin/db_management.html', current_user=g.user)
+
+@app.route('/admin/strategy', methods=['GET', 'POST'])
+@superuser_required
+def admin_strategy():
+    config = load_strategy_config()
+
+    if request.method == 'POST':
+        action = request.form.get('action', 'save')
+
+        def as_int(value, default):
+            try:
+                return int(str(value).strip())
+            except Exception:
+                return default
+
+        config['enabled'] = 'enabled' in request.form
+        config['alpaca_user'] = request.form.get('alpaca_user', '').strip()
+        config['symbol'] = request.form.get('symbol', config.get('symbol', 'TSM')).strip().upper()
+        config['timeframe'] = request.form.get('timeframe', config.get('timeframe', '30Min')).strip()
+        config['session'] = request.form.get('session', config.get('session', 'regular')).strip()
+        config['feed'] = request.form.get('feed', config.get('feed', 'iex')).strip()
+        config['trade_direction'] = request.form.get('trade_direction', config.get('trade_direction', 'Both')).strip()
+        config['trials'] = max(1, as_int(request.form.get('trials', config.get('trials', 200)), 200))
+        config['top_k'] = max(1, as_int(request.form.get('top_k', config.get('top_k', 20)), 20))
+        config['inner_len_range'] = request.form.get('inner_len_range', config.get('inner_len_range', '8:40:1')).strip()
+        config['inner_mult_range'] = request.form.get('inner_mult_range', config.get('inner_mult_range', '0.6:1.8:0.1')).strip()
+        config['outer_len_range'] = request.form.get('outer_len_range', config.get('outer_len_range', '8:40:1')).strip()
+        config['outer_mult_range'] = request.form.get('outer_mult_range', config.get('outer_mult_range', '1:4:1')).strip()
+        config['fixed_sl_range'] = request.form.get('fixed_sl_range', config.get('fixed_sl_range', '1.0:5.0:0.1')).strip()
+        config['fixed_tp_range'] = request.form.get('fixed_tp_range', config.get('fixed_tp_range', '0.8:4.0:0.1')).strip()
+        config['forced_sl_range'] = request.form.get('forced_sl_range', config.get('forced_sl_range', '3.0:10.0:0.2')).strip()
+        config['forced_tp_range'] = request.form.get('forced_tp_range', config.get('forced_tp_range', '3.0:10.0:0.2')).strip()
+        config['trail_offset_range'] = request.form.get('trail_offset_range', config.get('trail_offset_range', '4:4:1')).strip()
+
+        save_strategy_config(config)
+        app.logger.info(
+            "[STRATEGY] Admin '%s' saved strategy config (enabled=%s, symbol=%s, timeframe=%s).",
+            g.user.username,
+            config['enabled'],
+            config['symbol'],
+            config['timeframe'],
+        )
+
+        if action == 'run':
+            ok, out, err = run_strategy_optimizer(config)
+            if ok:
+                app.logger.info("[STRATEGY] Strategy optimizer run successful. Output=%s", out)
+                flash("Strategy run completed. Report updated.", "success")
+            else:
+                app.logger.error("[STRATEGY] Strategy optimizer failed. Error=%s Output=%s", err, out)
+                detail = err or out or "Unknown error"
+                flash(f"Strategy run failed: {detail}", "danger")
+        else:
+            flash("Strategy configuration saved.", "success")
+        return redirect(url_for('admin_strategy'))
+
+    report = load_strategy_report()
+    top_rows = load_strategy_top_rows(limit=int(config.get('top_k', 20)))
+    users = User.query.order_by(User.username).all()
+    return render_template(
+        'admin/strategy.html',
+        config=config,
+        report=report,
+        top_rows=top_rows,
+        users=users,
+    )
 
 def backfill_admin_trades_for_shared_keys():
     admin_user = User.query.filter_by(is_superuser=True).first()
@@ -1229,12 +1399,35 @@ def proxy_trade_internal():
     symbol = payload.get('symbol')
     action = payload.get('action')
     amount = payload.get('amount')
+    order_type = str(payload.get('order_type', 'market')).strip().lower() or 'market'
+    time_in_force = str(payload.get('time_in_force', 'day')).strip().lower() or 'day'
+    limit_price = payload.get('limit_price')
+    extended_hours_raw = payload.get('extended_hours')
     app.logger.info(
-        f"[TRADE_MANUAL_REQUEST] user='{g.user.username}' symbol='{symbol}' action='{action}' amount='{amount}'"
+        f"[TRADE_MANUAL_REQUEST] user='{g.user.username}' symbol='{symbol}' action='{action}' amount='{amount}' "
+        f"order_type='{order_type}' tif='{time_in_force}' extended_hours='{extended_hours_raw}'"
     )
     if not symbol or not action:
         app.logger.warning(f"[TRADE_MANUAL_REJECTED] Missing symbol/action from user='{g.user.username}'.")
         return jsonify({'error': 'invalid_request', 'detail': 'symbol and action are required'}), 400
+    if order_type not in ('market', 'limit'):
+        return jsonify({'error': 'invalid_request', 'detail': 'order_type must be market or limit'}), 400
+    if time_in_force not in ('day', 'gtc', 'ioc', 'fok', 'opg', 'cls'):
+        return jsonify({'error': 'invalid_request', 'detail': 'invalid time_in_force value'}), 400
+    if order_type == 'limit':
+        try:
+            limit_price = float(limit_price)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'invalid_request', 'detail': 'limit_price is required for limit orders'}), 400
+        if limit_price <= 0:
+            return jsonify({'error': 'invalid_request', 'detail': 'limit_price must be > 0'}), 400
+        payload['limit_price'] = limit_price
+    else:
+        payload.pop('limit_price', None)
+    if extended_hours_raw is not None:
+        payload['extended_hours'] = str(extended_hours_raw).strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+    payload['order_type'] = order_type
+    payload['time_in_force'] = time_in_force
     if amount is not None:
         try:
             amount_val = float(amount)

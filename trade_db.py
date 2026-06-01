@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 from datetime import datetime, timedelta, timezone
 from models import db, Trade, User
-import alpaca_trade_api as tradeapi
 import os
 from dotenv import load_dotenv
 import time
 import logging
+from alpaca_api import AlpacaAPIError, LegacyCompatibleAlpacaClient
 from utils import decrypt_data
 
 ENV_PATH = os.path.join(os.path.dirname(__file__), '.env')
@@ -41,7 +41,7 @@ def get_api_for_user(user_id):
     if not api_key or not api_secret:
         raise ValueError(f"Alpaca credentials not configured for user {user.username}.")
         
-    return tradeapi.REST(api_key, api_secret, BASE_URL, api_version='v2')
+    return LegacyCompatibleAlpacaClient(api_key, api_secret, BASE_URL)
 
 def record_open_trade(data, payload, user_id):
     symbol = payload.get('symbol', '').replace('/', '')
@@ -178,7 +178,7 @@ def record_closed_trade(data, payload, user_id, position_obj):
                 api.get_position(api_symbol)
                 logger.warning(f"[DATABASE] Position still open for {symbol}, user_id={user_id}. Skipping close record.")
                 return None
-            except tradeapi.rest.APIError as e:
+            except AlpacaAPIError as e:
                 if "position not found" not in str(e).lower():
                     logger.error(f"[DATABASE] Error checking position status for {symbol}, user_id={user_id}: {e}")
                     return None

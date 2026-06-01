@@ -1,5 +1,35 @@
 # Release Notes
 
+## Version 2.2.0 - 2026-06-02
+
+### Alpaca Integration / Execution
+- Migrated trading integration from `alpaca-trade-api` to `alpaca-py`.
+- Added trade update stream handling (`trade_updates`) for better order execution tracking.
+- Improved order fill price resolution using stream events + fallback order query.
+
+### 24/5 and Manual Trading
+- Added manual trade controls in Dashboard:
+  - `market` / `limit` order type,
+  - `time_in_force` selector,
+  - `extended_hours` toggle,
+  - optional limit price.
+- Added extended-hours / overnight order routing logic for equities:
+  - auto conversion to limit orders outside RTH when needed,
+  - overnight validation via `overnight_tradable` / `overnight_halted`.
+
+### Admin / UI
+- Added **Admin -> Strategy Lab**:
+  - strategy configuration storage,
+  - local backtest + optimization runs,
+  - reference vs best metrics and top combinations table.
+- Added hover guidance tooltips for navigation/menu items to explain each section.
+
+### Strategy Optimizer Fidelity
+- Updated optimizer defaults for better TradingView parity:
+  - fixed trailing offset (`4` ticks) by default,
+  - integer search range for `outer_kc_mult` by default.
+- Updated backtest loop order to match Pine execution flow better (entry block before exit logic).
+
 ## Version 2.1.0 - 2026-06-02
 
 ### Strategy Research / Optimization
