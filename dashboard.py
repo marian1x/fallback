@@ -14,6 +14,7 @@ from flask import (
     redirect, url_for, flash, g, send_from_directory
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 import alpaca_trade_api as tradeapi
 import requests
@@ -27,6 +28,7 @@ ENV_PATH = os.path.join(os.path.dirname(__file__), '.env')
 load_dotenv(ENV_PATH)
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # --- Standard Flask Configuration ---
 try:
