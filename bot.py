@@ -7,6 +7,9 @@ from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import alpaca_trade_api as tradeapi
 import math
+import hmac
+import threading
+import time
 from datetime import datetime, timezone
 
 from models import db, User, Trade
@@ -24,6 +27,7 @@ except OSError:
 
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///app.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_CONTENT_LENGTH_BYTES', str(512 * 1024)))
 db.init_app(app)
 
 BASE_URL = os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
@@ -34,6 +38,17 @@ INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "your-very-secret-internal-key"
 ENABLE_TV_BROADCAST = os.getenv("ENABLE_TV_BROADCAST", "false").lower() in ("1", "true", "yes", "y")
 TV_BROADCAST_USER = os.getenv("TV_BROADCAST_USER", "Test").strip()
 TV_BROADCAST_INCLUDE_SUPERUSER = os.getenv("TV_BROADCAST_INCLUDE_SUPERUSER", "false").lower() in ("1", "true", "yes", "y")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
+WEBHOOK_SECRET_HEADER = os.getenv("WEBHOOK_SECRET_HEADER", "X-Webhook-Secret").strip() or "X-Webhook-Secret"
+MIN_TRADE_AMOUNT = float(os.getenv("MIN_TRADE_AMOUNT", "1"))
+MAX_TRADE_AMOUNT = float(os.getenv("MAX_TRADE_AMOUNT", "100000"))
+MAX_ACCOUNT_ALLOCATION_PCT = float(os.getenv("MAX_ACCOUNT_ALLOCATION_PCT", "0"))
+MAX_OPEN_POSITIONS_PER_ACCOUNT = int(os.getenv("MAX_OPEN_POSITIONS_PER_ACCOUNT", "30"))
+SIGNAL_DEDUP_WINDOW_SEC = int(os.getenv("SIGNAL_DEDUP_WINDOW_SEC", "8"))
+MAX_WEBHOOK_CONTENT_LENGTH = int(os.getenv("MAX_WEBHOOK_CONTENT_LENGTH", str(128 * 1024)))
+
+RECENT_SIGNAL_CACHE = {}
+RECENT_SIGNAL_LOCK = threading.Lock()
 
 # --- Logging ---
 handler = RotatingFileHandler('trades.log', maxBytes=100000, backupCount=3)
@@ -41,6 +56,11 @@ handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger('trades_logger')
 logger.setLevel(logging.INFO)
 logger.addHandler(handler)
+
+if INTERNAL_API_KEY == "your-very-secret-internal-key":
+    logger.warning("[SECURITY] INTERNAL_API_KEY is using a default value. Set a unique secret in .env.")
+if not WEBHOOK_SECRET:
+    logger.warning("[SECURITY] WEBHOOK_SECRET not set. Webhook endpoint accepts unsigned payloads.")
 
 # --- Action Keywords ---
 CLOSE_ACTIONS = [
@@ -67,6 +87,62 @@ def get_last_price(api_client, symbol):
     except Exception as e:
         logger.error(f"[PRICE_FETCH_FAIL] Failed to get price for {symbol}: {e}")
         return 0.0
+
+def _secure_compare(provided, expected):
+    if not provided or not expected:
+        return False
+    try:
+        return hmac.compare_digest(str(provided), str(expected))
+    except Exception:
+        return False
+
+def _cache_duplicate_signal(user_id, symbol, action):
+    if SIGNAL_DEDUP_WINDOW_SEC <= 0:
+        return False, 0
+    now_ts = time.time()
+    key = f"{user_id}:{symbol}:{action.lower()}"
+    with RECENT_SIGNAL_LOCK:
+        stale_keys = [k for k, ts in RECENT_SIGNAL_CACHE.items() if now_ts - ts > SIGNAL_DEDUP_WINDOW_SEC]
+        for stale in stale_keys:
+            RECENT_SIGNAL_CACHE.pop(stale, None)
+        last_ts = RECENT_SIGNAL_CACHE.get(key)
+        if last_ts and (now_ts - last_ts) < SIGNAL_DEDUP_WINDOW_SEC:
+            remaining = SIGNAL_DEDUP_WINDOW_SEC - int(now_ts - last_ts)
+            return True, max(remaining, 1)
+        RECENT_SIGNAL_CACHE[key] = now_ts
+    return False, 0
+
+def _validate_trade_risk(api_client, user, symbol, action, amount):
+    if amount < MIN_TRADE_AMOUNT:
+        return False, 400, f"Amount must be >= {MIN_TRADE_AMOUNT}"
+    if amount > MAX_TRADE_AMOUNT:
+        return False, 400, f"Amount exceeds configured max trade amount ({MAX_TRADE_AMOUNT})"
+
+    if action.lower() in ("buy", "sell"):
+        if MAX_OPEN_POSITIONS_PER_ACCOUNT > 0:
+            try:
+                open_positions = api_client.list_positions()
+            except Exception as e:
+                logger.error(f"[RISK_FAIL] Could not fetch open positions for '{user.username}': {e}")
+                return False, 500, "Risk verification failed (open positions check)"
+            if len(open_positions) >= MAX_OPEN_POSITIONS_PER_ACCOUNT:
+                return False, 409, f"Account reached max open positions ({MAX_OPEN_POSITIONS_PER_ACCOUNT})"
+
+        if MAX_ACCOUNT_ALLOCATION_PCT > 0:
+            try:
+                account = api_client.get_account()
+                equity = float(account.equity)
+            except Exception as e:
+                logger.error(f"[RISK_FAIL] Could not fetch account equity for '{user.username}': {e}")
+                return False, 500, "Risk verification failed (equity check)"
+            allowed_amount = equity * (MAX_ACCOUNT_ALLOCATION_PCT / 100.0)
+            if amount > allowed_amount:
+                return False, 400, (
+                    f"Amount exceeds allocation rule: max {MAX_ACCOUNT_ALLOCATION_PCT}% of equity "
+                    f"({allowed_amount:.2f})"
+                )
+
+    return True, 200, None
 
 def record_trade_notification(payload):
     try:
@@ -217,6 +293,21 @@ def process_trade_for_user(user, payload):
 
     api = tradeapi.REST(api_key, api_secret, BASE_URL, api_version='v2')
     api_symbol = symbol.replace('/', '')
+    duplicate, retry_after = _cache_duplicate_signal(user.id, api_symbol, action)
+    if duplicate:
+        logger.warning(
+            f"[TRADE_DEDUP] Ignored duplicate signal for user='{user.username}' symbol='{api_symbol}' "
+            f"action='{action}' retry_after={retry_after}s"
+        )
+        return True, 200, {"result": "duplicate_ignored", "retry_after_sec": retry_after}, None
+
+    risk_ok, risk_status, risk_error = _validate_trade_risk(api, user, symbol, action, amount)
+    if not risk_ok:
+        logger.warning(
+            f"[TRADE_REJECTED] Risk rule rejected trade for user='{user.username}' symbol='{api_symbol}' "
+            f"action='{action}' amount={amount}: {risk_error}"
+        )
+        return False, risk_status, {"error": risk_error}, None
 
     if is_close_action(action):
         try:
@@ -331,6 +422,24 @@ def process_trade_for_user(user, payload):
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    if request.content_length and request.content_length > MAX_WEBHOOK_CONTENT_LENGTH:
+        logger.warning(
+            f"[SECURITY] Rejected oversized webhook from ip={request.remote_addr} "
+            f"content_length={request.content_length}"
+        )
+        return jsonify({"error": "payload_too_large"}), 413
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        logger.warning(f"[TRADE_REJECTED] Invalid or missing JSON payload from ip={request.remote_addr}")
+        return jsonify({"error": "Invalid JSON payload"}), 400
+
+    if WEBHOOK_SECRET:
+        provided_secret = request.headers.get(WEBHOOK_SECRET_HEADER) or payload.get('passphrase') or payload.get('secret')
+        if not _secure_compare(provided_secret, WEBHOOK_SECRET):
+            logger.warning(f"[SECURITY] Webhook secret mismatch from ip={request.remote_addr}")
+            return jsonify({"error": "Unauthorized"}), 401
+
     webhook_log_path = os.path.join(app.instance_path, 'last_webhook.log')
     try:
         with open(webhook_log_path, 'w') as f:
@@ -338,7 +447,6 @@ def webhook():
     except Exception as e:
         logger.error(f"[BOT_STATUS] Could not write to last_webhook.log: {e}")
 
-    payload = request.get_json(force=True)
     logger.info(f"[WEBHOOK_RECEIVED] Payload: {payload}")
     tradingview_user = (payload.get("user") or "").strip()
     dashboard_user_id = payload.get("dashboard_user_id")

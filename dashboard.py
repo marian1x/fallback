@@ -7,6 +7,9 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 import json
+import hmac
+import secrets
+from urllib.parse import urlsplit
 from functools import wraps
 
 from flask import (
@@ -42,6 +45,12 @@ app.config.update(
     SECRET_KEY=os.getenv('FLASK_SECRET', 'a_very_strong_and_random_secret_key_please_change'),
     UPLOAD_FOLDER=os.path.join(app.instance_path, 'uploads'),
     BACKUP_FOLDER=os.path.join(app.instance_path, 'backups'),
+    MAX_CONTENT_LENGTH=int(os.getenv('MAX_CONTENT_LENGTH_BYTES', str(512 * 1024))),
+    PREFERRED_URL_SCHEME='https',
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=os.getenv('SESSION_COOKIE_SECURE', 'true').lower() in ('1', 'true', 'yes', 'y'),
+    PERMANENT_SESSION_LIFETIME=timedelta(minutes=int(os.getenv('SESSION_LIFETIME_MINUTES', '720'))),
 )
 
 # --- Environment Variables ---
@@ -62,6 +71,13 @@ if not REPO_PATH or not os.path.isdir(REPO_PATH):
     REPO_PATH = os.path.abspath(os.path.dirname(__file__))
 LAST_GOOD_COMMIT_FILE = os.path.join(app.instance_path, 'last_good_commit.txt')
 VERSION_COUNTER_FILE = os.path.join(app.instance_path, 'version_counter.txt')
+LOGIN_RATE_LIMIT_WINDOW_SEC = int(os.getenv('LOGIN_RATE_LIMIT_WINDOW_SEC', '600'))
+LOGIN_RATE_LIMIT_MAX_ATTEMPTS = int(os.getenv('LOGIN_RATE_LIMIT_MAX_ATTEMPTS', '8'))
+PASSWORD_MIN_LENGTH = int(os.getenv('PASSWORD_MIN_LENGTH', '10'))
+
+LOGIN_ATTEMPTS = {}
+LOGIN_ATTEMPTS_LOCK = threading.Lock()
+CSRF_EXEMPT_ENDPOINTS = {'webhook', 'record_trade_internal'}
 
 # --- Enhanced Logging Setup ---
 log_handler = RotatingFileHandler('dashboard.log', maxBytes=100000, backupCount=5)
@@ -75,7 +91,111 @@ login_logger = logging.getLogger('login_logger')
 login_logger.setLevel(logging.INFO)
 login_logger.addHandler(login_logger_handler)
 
+if INTERNAL_API_KEY == "your-very-secret-internal-key":
+    app.logger.warning("[SECURITY] INTERNAL_API_KEY is using the default placeholder. Configure a strong value in .env.")
+
 db.init_app(app)
+
+def get_client_ip():
+    forwarded = request.headers.get('X-Forwarded-For', '')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    return request.remote_addr or 'unknown'
+
+def _purge_old_login_attempts(now_ts):
+    stale_keys = []
+    for ip, attempts in LOGIN_ATTEMPTS.items():
+        recent = [t for t in attempts if (now_ts - t) <= LOGIN_RATE_LIMIT_WINDOW_SEC]
+        if recent:
+            LOGIN_ATTEMPTS[ip] = recent
+        else:
+            stale_keys.append(ip)
+    for ip in stale_keys:
+        LOGIN_ATTEMPTS.pop(ip, None)
+
+def is_login_rate_limited(ip):
+    now_ts = time.time()
+    with LOGIN_ATTEMPTS_LOCK:
+        _purge_old_login_attempts(now_ts)
+        attempts = LOGIN_ATTEMPTS.get(ip, [])
+        return len(attempts) >= LOGIN_RATE_LIMIT_MAX_ATTEMPTS
+
+def mark_login_failure(ip):
+    now_ts = time.time()
+    with LOGIN_ATTEMPTS_LOCK:
+        _purge_old_login_attempts(now_ts)
+        LOGIN_ATTEMPTS.setdefault(ip, []).append(now_ts)
+
+def clear_login_failures(ip):
+    with LOGIN_ATTEMPTS_LOCK:
+        LOGIN_ATTEMPTS.pop(ip, None)
+
+def csrf_token():
+    token = session.get('csrf_token')
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session['csrf_token'] = token
+    return token
+
+def is_safe_redirect_target(target):
+    if not target:
+        return False
+    host_url = urlsplit(request.host_url)
+    redirect_url = urlsplit(target)
+    if redirect_url.scheme or redirect_url.netloc:
+        return False
+    if not target.startswith('/') or target.startswith('//'):
+        return False
+    return host_url.scheme in ('http', 'https')
+
+def _is_internal_api_key_valid(provided_key):
+    if not INTERNAL_API_KEY:
+        return False
+    if not provided_key:
+        return False
+    try:
+        return hmac.compare_digest(str(provided_key), str(INTERNAL_API_KEY))
+    except Exception:
+        return False
+
+@app.before_request
+def enforce_session_security():
+    session.permanent = True
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        endpoint = request.endpoint or ''
+        if endpoint in CSRF_EXEMPT_ENDPOINTS:
+            return None
+        expected = session.get('csrf_token')
+        supplied = request.headers.get('X-CSRF-Token') or request.form.get('csrf_token')
+        if not expected or not supplied or not hmac.compare_digest(str(expected), str(supplied)):
+            app.logger.warning(f"[SECURITY] CSRF validation failed on endpoint '{endpoint}' from ip={get_client_ip()}.")
+            if request.path.startswith('/api/'):
+                return jsonify({'error': 'csrf_failed'}), 400
+            flash("Your session token is invalid. Please retry the action.", "danger")
+            return redirect(url_for('login'))
+    return None
+
+@app.after_request
+def add_security_headers(response):
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('X-Frame-Options', 'SAMEORIGIN')
+    response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+    response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+    if request.is_secure:
+        response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+    csp = (
+        "default-src 'self'; "
+        "img-src 'self' data: https:; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://cdn.datatables.net; "
+        "font-src 'self' data: https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
+        "script-src 'self' 'unsafe-inline' https://code.jquery.com https://cdn.jsdelivr.net https://cdn.datatables.net https://cdnjs.cloudflare.com; "
+        "connect-src 'self'; "
+        "frame-ancestors 'self'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+    response.headers.setdefault('Content-Security-Policy', csp)
+    return response
 
 def translate(message, **kwargs):
     if kwargs:
@@ -86,7 +206,7 @@ def translate(message, **kwargs):
     return message
 
 gettext = translate
-app.jinja_env.globals.update(_=translate)
+app.jinja_env.globals.update(_=translate, csrf_token=csrf_token)
 
 @app.context_processor
 def inject_globals():
@@ -103,7 +223,10 @@ def login_required(f):
     def decorated_function(*args, **kwargs):
         if g.user is None:
             flash(gettext("Please log in first."), "warning")
-            return redirect(url_for('login', next=request.url))
+            next_path = request.full_path if request.query_string else request.path
+            if next_path.endswith('?'):
+                next_path = next_path[:-1]
+            return redirect(url_for('login', next=next_path))
         return f(*args, **kwargs)
     return decorated_function
 
@@ -246,21 +369,31 @@ def ensure_last_good_commit():
 def login():
     if g.user:
         return redirect(url_for('dashboard'))
+    next_url = request.args.get('next') or request.form.get('next')
+    safe_next_url = next_url if is_safe_redirect_target(next_url) else None
     if request.method == 'POST':
+        client_ip = get_client_ip()
+        if is_login_rate_limited(client_ip):
+            app.logger.warning(f"[SECURITY] Login rate limit triggered for ip={client_ip}")
+            flash("Too many login attempts. Try again in a few minutes.", "danger")
+            return render_template('login.html', next_url=safe_next_url), 429
         username = request.form['username']
         password = request.form['password']
         user = User.query.filter_by(username=username).first()
         ip_address = request.headers.get('X-Forwarded-For', request.remote_addr)
         user_agent = request.user_agent.string
         if user and check_password_hash(user.password_hash, password):
+            clear_login_failures(client_ip)
             session.clear()
             session['user_id'] = user.id
+            session['csrf_token'] = secrets.token_urlsafe(32)
             login_logger.info(f"SUCCESSFUL LOGIN | UserID: {user.id}, Username: '{username}', Email: '{user.email}', IP: {ip_address}, Agent: '{user_agent}'")
             flash(gettext("Logged in."), "success")
-            return redirect(request.args.get('next') or url_for('dashboard'))
+            return redirect(safe_next_url or url_for('dashboard'))
+        mark_login_failure(client_ip)
         login_logger.warning(f"FAILED LOGIN ATTEMPT | Attempted Username: '{username}', IP: {ip_address}, Agent: '{user_agent}'")
         flash(gettext("Invalid credentials."), "danger")
-    return render_template('login.html')
+    return render_template('login.html', next_url=safe_next_url)
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -270,10 +403,14 @@ def register():
         username = request.form['username']
         email = request.form['email']
         tv_user = request.form['tradingview_user']
+        password = request.form.get('password', '')
+        if len(password) < PASSWORD_MIN_LENGTH:
+            flash(f"Password must be at least {PASSWORD_MIN_LENGTH} characters.", "danger")
+            return render_template('register.html')
         if User.query.filter((User.username == username) | (User.email == email) | (User.tradingview_user == tv_user)).first():
             flash("Username, email, or TradingView user already exists.", "danger")
         else:
-            hashed_pw = generate_password_hash(request.form['password'])
+            hashed_pw = generate_password_hash(password)
             new_user = User(
                 username=username, email=email, password_hash=hashed_pw,
                 tradingview_user=tv_user, per_trade_amount=1000.0, is_trading_restricted=False
@@ -285,7 +422,7 @@ def register():
             return redirect(url_for('login'))
     return render_template('register.html')
 
-@app.route('/logout')
+@app.route('/logout', methods=['POST'])
 @login_required
 def logout():
     app.logger.info(f"[USER_ACTION] User '{g.user.username}' logged out.")
@@ -634,6 +771,9 @@ def admin_create_user():
     if not all([username, email, tv_user, password]):
         flash('All fields are required.', 'danger')
         return redirect(url_for('admin_user_management'))
+    if len(password) < PASSWORD_MIN_LENGTH:
+        flash(f'Password must be at least {PASSWORD_MIN_LENGTH} characters.', 'danger')
+        return redirect(url_for('admin_user_management'))
     if User.query.filter((User.username == username) | (User.email == email) | (User.tradingview_user == tv_user)).first():
         flash('Username, email, or TradingView user already exists.', 'danger')
         return redirect(url_for('admin_user_management'))
@@ -667,6 +807,9 @@ def admin_reset_password(user_id):
     if user:
         new_password = request.form.get('new_password')
         if new_password:
+            if len(new_password) < PASSWORD_MIN_LENGTH:
+                flash(f"Password must be at least {PASSWORD_MIN_LENGTH} characters.", "danger")
+                return redirect(url_for('admin_user_management'))
             user.password_hash = generate_password_hash(new_password)
             db.session.commit()
             app.logger.info(f"[USER_ACTION] Admin '{g.user.username}' reset password for user '{user.username}'.")
@@ -1048,6 +1191,14 @@ def proxy_trade_internal():
     if not symbol or not action:
         app.logger.warning(f"[TRADE_MANUAL_REJECTED] Missing symbol/action from user='{g.user.username}'.")
         return jsonify({'error': 'invalid_request', 'detail': 'symbol and action are required'}), 400
+    if amount is not None:
+        try:
+            amount_val = float(amount)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'invalid_request', 'detail': 'amount must be numeric'}), 400
+        if amount_val <= 0:
+            return jsonify({'error': 'invalid_request', 'detail': 'amount must be positive'}), 400
+        payload['amount'] = amount_val
     try:
         r = requests.post(BOT_WEBHOOK, json=payload, timeout=10)
         if not r.ok:
@@ -1106,10 +1257,13 @@ def proxy_trade_alias():
 
 @app.route('/api/internal/record_trade', methods=['POST'])
 def record_trade_internal():
-    if request.headers.get('X-Internal-API-Key') != INTERNAL_API_KEY:
+    if not _is_internal_api_key_valid(request.headers.get('X-Internal-API-Key')):
         app.logger.warning("[SECURITY] Unauthorized attempt to access internal record_trade API.")
         return jsonify({'error': 'Unauthorized'}), 401
-    data = request.get_json()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        app.logger.warning("[SECURITY] Invalid internal record_trade payload format.")
+        return jsonify({'error': 'invalid_payload'}), 400
     def background_task(data_dict, app_context):
         with app_context:
             try:

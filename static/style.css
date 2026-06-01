@@ -9,6 +9,7 @@ body {
     transition: background-color 0.3s ease, color 0.3s ease;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
 }
 
 /* --- Light Mode (Default) --- */
@@ -80,6 +81,9 @@ body.dark-mode {
 /* --- Apply Theme Colors --- */
 body {
     background-color: var(--bg-color);
+    background-image:
+      radial-gradient(circle at 10% 0%, rgba(100, 255, 218, 0.07), transparent 25%),
+      radial-gradient(circle at 90% 10%, rgba(0, 123, 255, 0.06), transparent 22%);
     color: var(--text-color);
 }
 h1, h2, h3, h4, h5, h6 {
@@ -87,6 +91,13 @@ h1, h2, h3, h4, h5, h6 {
 }
 .navbar { background-color: var(--navbar-bg); border-bottom: 1px solid var(--navbar-border); backdrop-filter: blur(10px); }
 .navbar-brand { color: var(--accent-color) !important; font-weight: 600; }
+.navbar .nav-link {
+    padding: 0.45rem 0.7rem;
+    border-radius: 8px;
+}
+.navbar .nav-link:hover {
+    background: rgba(127, 127, 127, 0.12);
+}
 .app-version {
     font-size: 0.7rem;
     font-weight: 600;
@@ -97,7 +108,16 @@ h1, h2, h3, h4, h5, h6 {
 }
 .nav-link { color: var(--text-color) !important; }
 .nav-link.active { color: var(--accent-color) !important; font-weight: bold; }
-.card { background-color: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px; }
+.card {
+    background-color: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
+}
+.card-header {
+    border-bottom: 1px solid var(--card-border);
+    font-weight: 600;
+}
 .list-group-item { background-color: var(--card-bg); border-color: var(--card-border); color: var(--text-color); }
 .list-group-item > span:first-child { color: var(--text-color); }
 .table, .table th, .table td {
@@ -144,6 +164,10 @@ body.dark-mode .navbar-toggler-icon {
 
 /* --- DataTables Mobile/Responsive --- */
 .dataTables_wrapper { width: 100%; max-width: 100%; }
+.table td,
+.table th {
+    vertical-align: middle;
+}
 .dataTables_wrapper .dataTables_length,
 .dataTables_wrapper .dataTables_filter,
 .dataTables_wrapper .dataTables_info,
@@ -151,6 +175,29 @@ body.dark-mode .navbar-toggler-icon {
     color: var(--text-color);
 }
 @media (max-width: 768px) {
+    body {
+        font-size: 0.87rem;
+    }
+    .navbar-brand {
+        font-size: 1.05rem !important;
+    }
+    main.container-fluid {
+        padding-left: 0.55rem;
+        padding-right: 0.55rem;
+    }
+    .card-header {
+        font-size: 0.9rem;
+        padding: 0.55rem 0.7rem;
+    }
+    .card-body {
+        padding: 0.75rem;
+    }
+    .btn, .form-control, .form-select {
+        min-height: 40px;
+    }
+    .btn-group .btn {
+        min-height: 36px;
+    }
     .dataTables_wrapper { overflow-x: auto; }
     .dataTables_wrapper .dataTables_length,
     .dataTables_wrapper .dataTables_filter,

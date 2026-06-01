@@ -1,5 +1,6 @@
 # utils.py
 import os
+import logging
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 
@@ -10,9 +11,9 @@ load_dotenv(ENV_PATH)
 ENCRYPTION_KEY_STR = os.getenv("ENCRYPTION_KEY")
 if not ENCRYPTION_KEY_STR:
     ENCRYPTION_KEY = Fernet.generate_key()
-    # IMPORTANT: Save this key to your .env file!
-    with open('.env', 'a') as f:
-        f.write(f'\nENCRYPTION_KEY={ENCRYPTION_KEY.decode("utf-8")}')
+    logging.getLogger(__name__).warning(
+        "[SECURITY] ENCRYPTION_KEY is missing; generated volatile key for current process only."
+    )
 else:
     ENCRYPTION_KEY = ENCRYPTION_KEY_STR.encode('utf-8')
 

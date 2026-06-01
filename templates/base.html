@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <title>{% block title %}{{ _('Trading Dashboard') }}{% endblock %}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;600&display=swap" rel="stylesheet">
@@ -61,7 +62,14 @@
              <li class="nav-item"><a class="nav-link" href="{{ url_for('user_config') }}">{{ _('Configuration') }}</a></li>
             {% endif %}
 
-            <li class="nav-item"><a class="nav-link" href="{{ url_for('logout') }}" title="Log Out"><i class="fa fa-sign-out-alt"></i></a></li>
+            <li class="nav-item">
+              <form method="post" action="{{ url_for('logout') }}" class="d-inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn nav-link border-0 bg-transparent p-0" type="submit" title="Log Out">
+                  <i class="fa fa-sign-out-alt"></i>
+                </button>
+              </form>
+            </li>
             
             <li class="nav-item ms-lg-2">
                 <div class="form-check form-switch" title="Toggle Dark/Light Mode">
@@ -98,8 +106,60 @@
     <script src="https://cdn.datatables.net/responsive/2.5.0/js/dataTables.responsive.min.js"></script>
     <script src="https://cdn.datatables.net/responsive/2.5.0/js/responsive.bootstrap5.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script>
     (function() {
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+        const isCsrfSafeMethod = (method) => ['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes((method || 'GET').toUpperCase());
+        const isSameOriginUrl = (url) => {
+            if (!url || typeof url !== 'string') return true;
+            if (url.startsWith('/')) return true;
+            try {
+                return new URL(url, window.location.origin).origin === window.location.origin;
+            } catch (e) {
+                return false;
+            }
+        };
+        if (window.jQuery && csrfToken) {
+            $.ajaxSetup({
+                beforeSend: function(xhr, settings) {
+                    const method = (settings.type || 'GET').toUpperCase();
+                    if (!isCsrfSafeMethod(method)) {
+                        xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+                    }
+                }
+            });
+        }
+
+        if (window.fetch && csrfToken) {
+            const nativeFetch = window.fetch.bind(window);
+            window.fetch = function(input, init = {}) {
+                const method = (init.method || 'GET').toUpperCase();
+                const url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+                if (!isCsrfSafeMethod(method) && isSameOriginUrl(url)) {
+                    const headers = new Headers(init.headers || (input && input.headers) || {});
+                    if (!headers.has('X-CSRF-Token')) {
+                        headers.set('X-CSRF-Token', csrfToken);
+                    }
+                    init.headers = headers;
+                }
+                return nativeFetch(input, init);
+            };
+        }
+
+        if (csrfToken) {
+            document.querySelectorAll('form[method="post"], form[method="POST"]').forEach((form) => {
+                if (form.querySelector('input[name="csrf_token"]')) {
+                    return;
+                }
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'csrf_token';
+                input.value = csrfToken;
+                form.appendChild(input);
+            });
+        }
+
         const themeSwitch = document.getElementById('themeSwitch');
         const themeIcon = document.querySelector('label[for="themeSwitch"] i');
         const currentTheme = localStorage.getItem('theme') || 'dark';

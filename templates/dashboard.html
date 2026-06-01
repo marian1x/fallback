@@ -2,6 +2,15 @@
 {% block title %}{{ _('Dashboard') }} - {{ _('TradingBot') }}{% endblock %}
 {% block content %}
 <div class="my-4 animate__animated animate__fadeInUp">
+    <div class="d-flex flex-column flex-md-row align-items-md-end justify-content-between mb-3">
+        <div>
+            <h3 class="mb-1">{{ _('Trading Control Center') }}</h3>
+            <div class="small text-muted">{{ _('Monitor account health, execute trades and manage open risk in one place.') }}</div>
+        </div>
+        <div class="small text-muted mt-2 mt-md-0">
+            <i class="fa-solid fa-shield-halved me-1"></i>{{ _('Session secured') }}
+        </div>
+    </div>
     <div class="row g-4">
         <div class="col-12 col-lg-4">
             <div class="card shadow-sm mb-4">
@@ -35,25 +44,25 @@
                 </div>
                 <div class="card-body">
                     <form id="openTradeForm" class="row g-2 align-items-end">
-                        <div class="col-sm-4">
+                        <div class="col-12 col-md-4">
                             <label for="symbolInput" class="form-label small">{{ _('Symbol') }}</label>
                             <input type="text" id="symbolInput" name="symbol" class="form-control" placeholder="{{ _('e.g., AAPL, BTC/USD') }}" required list="symbols-datalist" data-bs-toggle="tooltip" title="{{ _('Enter the stock or crypto symbol to trade') }}">
                              <div class="invalid-feedback">
                                 Symbol not found or is not tradable.
                             </div>
                         </div>
-                        <div class="col-sm-3">
+                        <div class="col-12 col-md-3">
                             <label for="amountInput" class="form-label small">{{ _('Amount ($)') }}</label>
                             <input type="number" id="amountInput" name="amount" class="form-control" value="{{ per_trade_amount }}" step="any" required data-bs-toggle="tooltip" title="{{ _('The notional value of the trade in USD') }}">
                         </div>
-                        <div class="col-sm-3">
+                        <div class="col-12 col-md-3">
                             <label for="sideSelect" class="form-label small">{{ _('Side') }}</label>
                             <select id="sideSelect" name="side" class="form-select" required data-bs-toggle="tooltip" title="{{ _('Choose to buy (long) or sell (short)') }}">
                                 <option value="buy">{{ _('Buy (Long)') }}</option>
                                 <option value="sell">{{ _('Sell (Short)') }}</option>
                             </select>
                         </div>
-                        <div class="col-sm-2">
+                        <div class="col-12 col-md-2">
                             <button type="submit" class="btn btn-primary w-100" data-bs-toggle="tooltip" title="{{ _('Submit the trade to the bot') }}"><i class="fa fa-paper-plane"></i> {{ _('Send') }}</button>
                         </div>
                     </form>

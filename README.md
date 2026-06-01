@@ -27,6 +27,14 @@ Before you begin, ensure you have the following installed:
 - `pip` and `venv`
 - An account with [Alpaca](https://alpaca.markets/)
 
+## 🔐 Security & Deployment Recommendations
+
+- Keep both Flask services bound to `127.0.0.1` and expose them only through Nginx.
+- Use HTTPS only for public access (`https://salavat.home.ro/...`).
+- Set a strong `INTERNAL_API_KEY` and (recommended) `WEBHOOK_SECRET`.
+- Never commit runtime files (`instance/`, logs, `.env`, `venv/`).
+- Rotate `FLASK_SECRET`, `ENCRYPTION_KEY`, and API credentials periodically.
+
 ## ⚙️ Installation & Setup
 
 Follow these steps to get your trading bot up and running:
@@ -71,6 +79,24 @@ Follow these steps to get your trading bot up and running:
     # --- Network Configuration ---
     BOT_PORT=5000
     DASHBOARD_PORT=5050
+
+    # --- Security Hardening ---
+    SESSION_COOKIE_SECURE=true
+    SESSION_LIFETIME_MINUTES=720
+    PASSWORD_MIN_LENGTH=10
+    LOGIN_RATE_LIMIT_WINDOW_SEC=600
+    LOGIN_RATE_LIMIT_MAX_ATTEMPTS=8
+
+    # --- Webhook Security ---
+    WEBHOOK_SECRET="your_shared_secret"
+    WEBHOOK_SECRET_HEADER="X-Webhook-Secret"
+
+    # --- Risk Controls ---
+    MIN_TRADE_AMOUNT=1
+    MAX_TRADE_AMOUNT=100000
+    MAX_ACCOUNT_ALLOCATION_PCT=0
+    MAX_OPEN_POSITIONS_PER_ACCOUNT=30
+    SIGNAL_DEDUP_WINDOW_SEC=8
     ```
 
     **Important**: Never commit your `.env` file to version control. The `.gitignore` file is already configured to ignore it.
