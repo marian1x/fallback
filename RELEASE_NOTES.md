@@ -1,5 +1,25 @@
 # Release Notes
 
+## Version 2.1.0 - 2026-06-02
+
+### Strategy Research / Optimization
+- Added `misc/pine_optimizer.py` to run local backtests and parameter search directly from your Pine strategy logic.
+- Optimizer can:
+  - read defaults from `misc/keltner.pine`,
+  - use TradingView export metadata from XLSX as a baseline,
+  - fetch bars from Alpaca (`iex` / `sip`) or local CSV,
+  - rank best parameter combinations and export JSON + CSV reports.
+
+### Documentation / Repository Hygiene
+- Added optimizer usage documentation:
+  - `misc/README_optimizer.md`
+  - README section `Local Pine Optimizer`
+- Added optimizer/report artifacts to `.gitignore` to keep the repo clean.
+- Added required optimizer dependencies to `requirements.txt`:
+  - `numpy`
+  - `pandas`
+  - `openpyxl`
+
 ## Version 2.0.1 - 2026-06-01
 
 ### Deployment / Runtime

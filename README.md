@@ -123,6 +123,27 @@ You need to run two separate processes: the trading bot and the dashboard.
 
 You can now access the dashboard at `http://127.0.0.1:5050`.
 
+## 🔎 Local Pine Optimizer
+
+You can optimize the local Pine strategy parameters without TradingView using:
+
+```bash
+source venv/bin/activate
+python3 misc/pine_optimizer.py \
+  --trials 300 \
+  --session regular \
+  --feed iex \
+  --report-json misc/optimizer_report.json \
+  --top-csv misc/optimizer_top.csv
+```
+
+Useful flags:
+
+- `--alpaca-user <username>`: use a specific local user for Alpaca credentials.
+- `--feed iex|sip`: data feed selection (`iex` usually works on free plans).
+- `--bars-csv /path/to/bars.csv`: run backtests from local CSV data.
+- `--top-k 20`: number of best configurations saved.
+
 ## 훅 Webhook Configuration
 
 To trigger trades, you need to configure your webhook provider (e.g., TradingView) to send a `POST` request to the bot's webhook URL:

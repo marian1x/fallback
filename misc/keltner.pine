@@ -1,0 +1,128 @@
+//@version=6
+strategy('Keltner channel strategy stocks', overlay = true, default_qty_type = strategy.percent_of_equity, process_orders_on_close = true, default_qty_value = 95, initial_capital = 1000, commission_value = 0.04)
+
+// === Trade Direction Option ===
+trade_direction = input.string(
+     title = "Trade Direction",
+     defval = "Both",
+     options = ["Both", "Long Only", "Short Only"],
+     group = "Trade Settings")
+
+
+// Keltner Channel (Inner)
+kc_length_inner = input(13, title = 'Inner KC Length', group = 'Keltner Channel Settings')
+kc_mult_inner = input(1.0, title = 'Inner KC Multiplier', group = 'Keltner Channel Settings')
+[middle_kc, upper_kc_inner, lower_kc_inner] = ta.kc(close, kc_length_inner, kc_mult_inner)
+
+// Keltner Channel (Outer)
+kc_length_outer = input(13, title = 'Outer KC Length', group = 'Keltner Channel Settings')
+kc_mult_outer = input(2, title = 'Outer KC Multiplier', group = 'Keltner Channel Settings')
+[middle_kc_outer, upper_kc_outer, lower_kc_outer] = ta.kc(close, kc_length_outer, kc_mult_outer)
+
+// Backtest Range
+backtest_group = 'Backtest Range'
+start = input.time(timestamp('2021-01-01T00:00:00'), title = 'Start Date', group = backtest_group)
+finish = input.time(timestamp('2030-12-31T00:00:00'), title = 'End Date', group = backtest_group)
+inDateRange = time >= start and time <= finish
+
+// Plot Keltner Channel Lines
+plot(upper_kc_outer, color = color.red, title = 'Outer KC Upper')
+plot(upper_kc_inner, color = color.yellow, title = 'Inner KC Upper')
+plot(middle_kc, color = color.blue, title = 'KC Middle')
+plot(lower_kc_inner, color = color.yellow, title = 'Inner KC Lower')
+plot(lower_kc_outer, color = color.red, title = 'Outer KC Lower')
+
+// Dynamic Stop/Take-Profit Variables
+var float stop_price = 0.0
+var float profit_price = 0.0
+
+// Stop Loss / Take Profit Inputs
+fixed_stop_loss_percent = input.float(3.0, title = 'Fixed Stop Loss (%)', group = 'SL/TP Settings', step = 0.1)
+fixed_take_profit_percent = input.float(3.0, title = 'Fixed Take Profit (%)', group = 'SL/TP Settings', step = 0.1)
+forced_stop_loss_percent = input.float(6.0, title = 'Forced Stop Loss (%)', group = 'SL/TP Settings', step = 0.1)
+forced_take_profit_percent = input.float(6.0, title = 'Forced Take Profit (%)', group = 'SL/TP Settings', step = 0.1)
+
+// Flags to prevent multiple exits
+var bool exit_executed_long = false
+var bool exit_executed_short = false
+
+// Entry Conditions (Only 1 trade at a time)
+if strategy.opentrades == 0 or strategy.position_size == 0
+    longCondition = ta.crossover(close, lower_kc_inner) and close < middle_kc
+    if (trade_direction == "Both" or trade_direction == "Long Only") and longCondition and inDateRange
+        stop_price := lower_kc_outer
+        profit_price := upper_kc_inner
+        strategy.entry('Long', strategy.long, comment = 'buy')
+        exit_executed_long := false
+
+    shortCondition = ta.crossunder(close, upper_kc_inner) and close > middle_kc
+    if (trade_direction == "Both" or trade_direction == "Short Only") and shortCondition and inDateRange
+        stop_price := upper_kc_outer
+        profit_price := lower_kc_inner
+        strategy.entry('Short', strategy.short, comment = 'sell')
+        exit_executed_short := false
+
+// Exit Logic (Fixed and Forced SL/TP)
+if strategy.opentrades > 0
+    if strategy.position_size > 0 and not exit_executed_long
+        // Fixed Stop Loss
+        fixed_stop_loss_price = strategy.position_avg_price * (1 - fixed_stop_loss_percent / 100)
+        if low <= fixed_stop_loss_price
+            strategy.close('Long', comment = 'Fixed Stop Loss (Long)')
+            exit_executed_long := true
+
+        // Fixed Take Profit
+        fixed_take_profit_price = strategy.position_avg_price * (1 + fixed_take_profit_percent / 100)
+        if high >= fixed_take_profit_price
+            strategy.close('Long', comment = 'Fixed Take Profit (Long)')
+            exit_executed_long := true
+
+        // Forced SL/TP
+        forced_stop_loss_price = strategy.position_avg_price * (1 - forced_stop_loss_percent / 100)
+        forced_take_profit_price = strategy.position_avg_price * (1 + forced_take_profit_percent / 100)
+        strategy.exit('Forced SL (Long)', from_entry = 'Long', stop = forced_stop_loss_price, comment = 'Forced SL Long')
+        strategy.exit('Forced TP (Long)', from_entry = 'Long', limit = forced_take_profit_price, comment = 'Forced TP Long')
+
+    if strategy.position_size < 0 and not exit_executed_short
+        // Fixed Stop Loss
+        fixed_stop_loss_price = strategy.position_avg_price * (1 + fixed_stop_loss_percent / 100)
+        if high >= fixed_stop_loss_price
+            strategy.close('Short', comment = 'Fixed Stop Loss (Short)')
+            exit_executed_short := true
+
+        // Fixed Take Profit
+        fixed_take_profit_price = strategy.position_avg_price * (1 - fixed_take_profit_percent / 100)
+        if low <= fixed_take_profit_price
+            strategy.close('Short', comment = 'Fixed Take Profit (Short)')
+            exit_executed_short := true
+
+        // Forced SL/TP
+        forced_stop_loss_price = strategy.position_avg_price * (1 + forced_stop_loss_percent / 100)
+        forced_take_profit_price = strategy.position_avg_price * (1 - forced_take_profit_percent / 100)
+        strategy.exit('Forced SL (Short)', from_entry = 'Short', stop = forced_stop_loss_price, comment = 'Forced SL Short')
+        strategy.exit('Forced TP (Short)', from_entry = 'Short', limit = forced_take_profit_price, comment = 'Forced TP Short')
+
+// Trailing Stop Exit (if not already exited)
+if not exit_executed_long
+    strategy.exit('Trailing Exit (Long)', from_entry = 'Long', trail_price = middle_kc, trail_offset = 4, comment = 'Trailing Exit Long')
+
+if not exit_executed_short
+    strategy.exit('Trailing Exit (Short)', from_entry = 'Short', trail_price = middle_kc, trail_offset = 4, comment = 'Trailing Exit Short')
+
+// === Time-based Profit-Taking Exit Before Market Close (EEST = UTC+3) ===
+market_close_utc = timestamp("UTC", year, month, dayofmonth, 20, 30)  // 23:30 EEST = 20:30 UTC
+four_min_before_close = market_close_utc - 4 * 60 * 1000  // 4 minutes in milliseconds
+
+// Get current UTC time
+now = time
+
+// Check for open positions and profitability
+long_profitable = strategy.position_size > 0 and close > strategy.position_avg_price
+short_profitable = strategy.position_size < 0 and close < strategy.position_avg_price
+
+// Close profitable positions 4 min before market close
+if (now >= four_min_before_close and now < market_close_utc)
+    if (long_profitable)
+        strategy.close('Long', comment = 'Forced TP Long')
+    if (short_profitable)
+        strategy.close('Short', comment = 'Forced TP Short')

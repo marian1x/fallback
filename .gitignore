@@ -18,3 +18,10 @@ instance/
 
 # Local temp / scratch
 bot_temp.py
+
+# Optimizer outputs
+misc/optimizer_report*.json
+misc/optimizer_top*.csv
+
+# Local strategy research exports
+misc/*.xlsx

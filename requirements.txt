@@ -6,3 +6,6 @@ cryptography
 requests
 werkzeug
 gunicorn
+numpy
+pandas
+openpyxl
