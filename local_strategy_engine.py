@@ -171,7 +171,13 @@ class LocalStrategyEngine:
     def entry_check_deferred(self, symbol: str, timeframe: str) -> bool:
         st = self.symbol_state(symbol)
         due = self._parse_state_time(st.get("next_entry_check_utc"))
-        if due and datetime.now(timezone.utc) < due:
+        now = datetime.now(timezone.utc)
+        max_delay = max(self.poll_seconds, self.entry_refetch_seconds)
+        if due and due > (now + timedelta(seconds=max_delay + self.poll_seconds)):
+            st["next_entry_check_utc"] = now.isoformat()
+            self.save_state()
+            return False
+        if due and now < due:
             return True
         return False
 
