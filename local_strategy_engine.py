@@ -139,10 +139,10 @@ class LocalStrategyEngine:
 
     def resolve_user(self, cfg: Dict) -> Optional[User]:
         username = str(cfg.get("alpaca_user", "") or "").strip()
-        user = User.query.filter_by(username=username).first() if username else None
+        user = User.query.filter_by(username=username, is_superuser=False).first() if username else None
         if user:
             return user
-        return User.query.filter_by(is_superuser=True).first() or User.query.first()
+        return User.query.filter_by(is_superuser=False).order_by(User.username).first()
 
     def api_for_user(self, user: User) -> Optional[LegacyCompatibleAlpacaClient]:
         api_key = decrypt_data(user.encrypted_alpaca_key)

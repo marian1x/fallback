@@ -11,6 +11,23 @@
             <i class="fa-solid fa-shield-halved me-1"></i>{{ _('Session secured') }}
         </div>
     </div>
+    {% if current_user.is_superuser %}
+    <div class="card shadow-sm mb-4">
+        <div class="card-body d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3">
+            <div>
+                <div class="fw-semibold"><i class="fa-solid fa-user-check me-2"></i>{{ _('Trading user') }}</div>
+                <div class="small text-muted">{{ _('Admin is only the operator. Orders and dashboard data use the selected non-admin user.') }}</div>
+            </div>
+            <div class="admin-trading-user-select">
+                <select id="adminTargetUser" class="form-select" data-bs-toggle="tooltip" title="{{ _('Select the user account that will own manual orders and displayed positions.') }}">
+                    {% for u in all_users %}
+                    <option value="{{ u.id }}" data-per-trade-amount="{{ u.per_trade_amount }}" {% if selected_trading_user and selected_trading_user.id == u.id %}selected{% endif %}>{{ u.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+    </div>
+    {% endif %}
     <div class="row g-4">
         <div class="col-12 col-lg-4">
             <div class="card shadow-sm mb-4">
@@ -172,6 +189,23 @@
     const tradableSymbolsUrl = "{{ url_for('api_tradable_symbols') }}";
     const proxyTradeUrl = "{{ url_for('proxy_trade_internal') }}";
     const logClientEventUrl = "{{ url_for('log_client_event') }}";
+    const isAdminSession = {{ 'true' if current_user.is_superuser else 'false' }};
+
+    function selectedTradingUserId() {
+        return isAdminSession ? ($('#adminTargetUser').val() || '') : '';
+    }
+
+    function withSelectedUser(url) {
+        const userId = selectedTradingUserId();
+        if (!userId) return url;
+        const separator = url.includes('?') ? '&' : '?';
+        return `${url}${separator}user_id=${encodeURIComponent(userId)}`;
+    }
+
+    function selectedUserPayload() {
+        const userId = selectedTradingUserId();
+        return userId ? { dashboard_target_user_id: userId } : {};
+    }
 
     function colorPL(val, isBadge = false, tp = null, sl = null) {
         const sign = val > 0 ? '+' : (val < 0 ? '-' : '');
@@ -303,7 +337,7 @@
 
     function fetchOpenPositions() {
         const bracketOrders = JSON.parse(localStorage.getItem('bracketOrders')) || {};
-        $.get(openPositionsUrl, function(data){
+        $.get(withSelectedUser(openPositionsUrl), function(data){
             openTable.clear();
             let totalPL = 0;
             const symbolsWithActiveBrackets = Object.keys(bracketOrders);
@@ -364,7 +398,7 @@
     }
 
     function fetchAccountSummary() {
-        $.get(accountUrl, function(data){
+        $.get(withSelectedUser(accountUrl), function(data){
             $("#statEquity").text("$" + Number(data.equity || 0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}));
             $("#statCash").text("$" + Number(data.cash || 0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}));
         });
@@ -407,7 +441,7 @@
         const executeClose = () => {
             $.ajax({
                 url: proxyTradeUrl, method: 'POST', contentType: 'application/json',
-                data: JSON.stringify({symbol: symbol, action: "close", user: "Dashboard"}),
+                data: JSON.stringify(Object.assign({symbol: symbol, action: "close", user: "Dashboard"}, selectedUserPayload())),
                 success: function(response){
                     const parsed = parseProxyResult(response);
                     const resultCode = parsed.code;
@@ -486,6 +520,18 @@
         }
         orderTypeSelect.on('change', syncOrderInputs);
         syncOrderInputs();
+
+        $('#adminTargetUser').on('change', function() {
+            const selected = $(this).find('option:selected');
+            const amount = selected.data('per-trade-amount');
+            if (amount !== undefined && amount !== null && amount !== '') {
+                $('#amountInput').val(amount);
+            }
+            localStorage.removeItem('bracketOrders');
+            setTradeActionStatus('');
+            fetchOpenPositions();
+            fetchAccountSummary();
+        });
 
         fetchOpenPositions();
         fetchAccountSummary();
@@ -607,7 +653,8 @@
                     order_type: orderType,
                     time_in_force: timeInForce,
                     extended_hours: extendedHours,
-                    limit_price: orderType === 'limit' ? parseFloat(limitPriceRaw) : null
+                    limit_price: orderType === 'limit' ? parseFloat(limitPriceRaw) : null,
+                    ...selectedUserPayload()
                 }),
                 success: function(response){
                     const parsed = parseProxyResult(response);
@@ -637,6 +684,9 @@
     });
 </script>
 <style>
+.admin-trading-user-select {
+    min-width: min(100%, 320px);
+}
 .form-control.is-invalid {
     border-color: var(--loss-color-text);
 }

@@ -11,6 +11,7 @@ import hmac
 import threading
 import time
 import sys
+import json
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -208,11 +209,25 @@ def _validate_trade_risk(api_client, user, symbol, action, amount):
 
     return True, 200, None
 
+def _json_safe(value):
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        return str(value)
+
 def record_trade_notification(payload):
     try:
+        safe_payload = _json_safe(payload)
         r = requests.post(
             f"{DASHBOARD_INTERNAL_URL}/api/internal/record_trade",
-            json=payload,
+            json=safe_payload,
             headers={'X-Internal-API-Key': INTERNAL_API_KEY},
             timeout=3
         )
@@ -524,7 +539,7 @@ def process_trade_for_user(user, payload):
                     "avg_entry_price": position_to_close.avg_entry_price,
                     "qty": position_to_close.qty,
                     "side": position_to_close.side,
-                    "asset_id": position_to_close.asset_id
+                    "asset_id": str(position_to_close.asset_id)
                 }
             }
             if close_price is not None:
@@ -705,12 +720,8 @@ def webhook():
             if not user and dashboard_username:
                 user = User.query.filter_by(username=dashboard_username).first()
             target_users = []
-            if user:
-                account_key = account_key_for_user(user)
-                if account_key:
-                    target_users = [u for u in User.query.all() if account_key_for_user(u) == account_key]
-                else:
-                    target_users = [user]
+            if user and not user.is_superuser:
+                target_users = [user]
             logger.info(f"[WEBHOOK_DASHBOARD] Targeting {len(target_users)} user(s) for dashboard request.")
         elif ENABLE_TV_BROADCAST and TV_BROADCAST_USER and tradingview_user.lower() == TV_BROADCAST_USER.lower():
             query = User.query
@@ -719,7 +730,7 @@ def webhook():
             target_users = query.all()
             logger.info(f"[WEBHOOK_BROADCAST] Using broadcast for '{tradingview_user}'. Users={len(target_users)}")
         else:
-            target_users = User.query.filter_by(tradingview_user=tradingview_user).all()
+            target_users = User.query.filter_by(tradingview_user=tradingview_user, is_superuser=False).all()
 
     if not target_users:
         logger.error(f"[TRADE_REJECTED] No registered user for TV user='{tradingview_user}'")

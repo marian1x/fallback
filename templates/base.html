@@ -62,10 +62,11 @@
 
             {% if g.user and g.user.is_superuser %}
             <li class="nav-item dropdown">
-              <a class="nav-link dropdown-toggle {% if request.endpoint in ['admin_user_management', 'admin_health_dashboard', 'admin_strategy', 'user_config', 'admin_investor_config', 'admin_logs', 'admin_db_management'] %}active{% endif %}" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+              <a class="nav-link dropdown-toggle {% if request.endpoint in ['admin_dashboard_overview', 'admin_user_management', 'admin_health_dashboard', 'admin_strategy', 'user_config', 'admin_investor_config', 'admin_logs', 'admin_db_management'] %}active{% endif %}" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
                 <i class="fa-solid fa-screwdriver-wrench me-1"></i>Admin
               </a>
               <ul class="dropdown-menu dropdown-menu-end admin-menu">
+                <li><a class="dropdown-item" href="{{ url_for('admin_dashboard_overview') }}"><i class="fa-solid fa-table-cells-large me-2"></i>Admin Overview</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('admin_strategy') }}"><i class="fa-solid fa-flask-vial me-2"></i>Strategy Lab</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('admin_user_management') }}"><i class="fa-solid fa-user-gear me-2"></i>User Management</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('admin_health_dashboard') }}"><i class="fa-solid fa-heart-pulse me-2"></i>System Health</a></li>

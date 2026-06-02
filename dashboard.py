@@ -70,6 +70,8 @@ ADMIN_PASS = os.getenv('ADMIN_PASSWORD', 'admin')
 INTERNAL_API_KEY = os.getenv('INTERNAL_API_KEY', 'your-very-secret-internal-key')
 BASE_URL = os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
 BOT_WEBHOOK = os.getenv('TRADING_BOT_URL', 'http://127.0.0.1:5000/webhook')
+WEBHOOK_SECRET = os.getenv('WEBHOOK_SECRET', '').strip()
+WEBHOOK_SECRET_HEADER = os.getenv('WEBHOOK_SECRET_HEADER', 'X-Webhook-Secret').strip() or 'X-Webhook-Secret'
 RESTART_COMMAND = os.getenv('RESTART_COMMAND', '').strip()
 if not RESTART_COMMAND and os.name == 'posix':
     RESTART_COMMAND = 'sudo systemctl restart fallback_dashboard.service'
@@ -263,6 +265,34 @@ def get_user_api(user):
         app.logger.error(f"[API_FAIL] Failed to initialize Alpaca API for {user.username}: {e}")
         return None
 
+def regular_users_query():
+    return User.query.filter_by(is_superuser=False)
+
+def get_regular_user_by_id(user_id):
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    user = db.session.get(User, user_id)
+    if not user or user.is_superuser:
+        return None
+    return user
+
+def get_admin_dashboard_target_user(payload=None, required=False):
+    if not g.user or not g.user.is_superuser:
+        return g.user
+    payload = payload or {}
+    target_id = (
+        payload.get('dashboard_target_user_id')
+        or payload.get('target_user_id')
+        or request.args.get('user_id')
+    )
+    if target_id:
+        return get_regular_user_by_id(target_id)
+    if required:
+        return None
+    return regular_users_query().order_by(User.username).first()
+
 def get_user_keypair(user):
     key = decrypt_data(user.encrypted_alpaca_key)
     secret = decrypt_data(user.encrypted_alpaca_secret)
@@ -441,10 +471,10 @@ def parse_strategy_universe_from_form(form):
 def get_strategy_api_user(config):
     username = str(config.get('alpaca_user', '') or '').strip()
     if username:
-        user = User.query.filter_by(username=username).first()
+        user = User.query.filter_by(username=username, is_superuser=False).first()
         if user:
             return user
-    return User.query.filter_by(is_superuser=True).first() or User.query.first()
+    return regular_users_query().order_by(User.username).first()
 
 def load_strategy_report():
     if not os.path.exists(STRATEGY_REPORT_FILE):
@@ -960,26 +990,39 @@ def logout():
 @login_required
 def dashboard():
     if g.user.is_superuser:
-        all_users = User.query.filter_by(is_superuser=False).order_by(User.username).all()
-        return render_template('admin/dashboard_overview.html', current_user=g.user, all_users=all_users)
-    return render_template('dashboard.html', current_user=g.user)
+        all_users = regular_users_query().order_by(User.username).all()
+        selected_user = all_users[0] if all_users else None
+        return render_template(
+            'dashboard.html',
+            current_user=g.user,
+            all_users=all_users,
+            selected_trading_user=selected_user,
+            per_trade_amount=selected_user.per_trade_amount if selected_user else 0,
+        )
+    return render_template('dashboard.html', current_user=g.user, per_trade_amount=g.user.per_trade_amount)
+
+@app.route('/admin/overview')
+@superuser_required
+def admin_dashboard_overview():
+    all_users = regular_users_query().order_by(User.username).all()
+    return render_template('admin/dashboard_overview.html', current_user=g.user, all_users=all_users)
 
 @app.route('/closed_trades')
 @login_required
 def closed_trades():
-    all_users = User.query.all() if g.user.is_superuser else None
+    all_users = regular_users_query().order_by(User.username).all() if g.user.is_superuser else None
     return render_template('closed_trades.html', current_user=g.user, all_users=all_users)
 
 @app.route('/open_analytics')
 @login_required
 def open_analytics():
-    all_users = User.query.all() if g.user.is_superuser else None
+    all_users = regular_users_query().order_by(User.username).all() if g.user.is_superuser else None
     return render_template('open_analytics.html', all_users=all_users, current_user=g.user)
 
 @app.route('/stats')
 @login_required
 def stats():
-    all_users = User.query.all() if g.user.is_superuser else None
+    all_users = regular_users_query().order_by(User.username).all() if g.user.is_superuser else None
     return render_template('stats.html', all_users=all_users, current_user=g.user)
 
 @app.route('/config', methods=['GET', 'POST'])
@@ -1549,7 +1592,7 @@ def admin_user_management():
 @app.route('/admin/all_open_trades')
 @superuser_required
 def admin_all_open_trades():
-    users = User.query.order_by(User.username).all()
+    users = regular_users_query().order_by(User.username).all()
     return render_template('admin/open_trades.html', current_user=g.user, all_users=users)
 
 @app.route('/admin/health')
@@ -1923,7 +1966,12 @@ def api_admin_dashboard_summary():
 @app.route('/api/admin/performance_leaderboard')
 @superuser_required
 def api_admin_performance_leaderboard():
-    closed_trades = Trade.query.filter(Trade.status == 'closed').all()
+    closed_trades = (
+        Trade.query
+        .join(User, Trade.user_id == User.id)
+        .filter(Trade.status == 'closed', User.is_superuser == False)
+        .all()
+    )
     user_stats = {}
     for trade in closed_trades:
         if trade.user_id not in user_stats:
@@ -1950,9 +1998,12 @@ def api_admin_performance_leaderboard():
 def api_admin_all_open_positions():
     user_filter_id = request.args.get('user_id')
 
-    query = User.query
+    query = regular_users_query()
     if user_filter_id:
-        query = query.filter(User.id == user_filter_id)
+        target_user = get_regular_user_by_id(user_filter_id)
+        if not target_user:
+            return jsonify([])
+        query = query.filter(User.id == target_user.id)
 
     users_with_keys = [u for u in query.all() if u.encrypted_alpaca_key]
     all_positions = []
@@ -1991,7 +2042,7 @@ def api_admin_close_trades():
     for trade_info in trades_to_close:
         user_id = trade_info.get('user_id')
         symbol = trade_info.get('symbol')
-        user = db.session.get(User, user_id)
+        user = get_regular_user_by_id(user_id)
 
         if not user or not symbol:
             errors.append(f"Invalid trade data received: {trade_info}")
@@ -2035,18 +2086,41 @@ def api_admin_close_trades():
 @app.route('/api/open_positions')
 @login_required
 def api_open_positions():
-    api = get_user_api(g.user)
-    if not api: return jsonify([])
-    try:
-        positions = api.list_positions()
-        db_trades = {t.symbol: t.open_time for t in Trade.query.filter_by(status='open', user_id=g.user.id).all()}
-    except Exception as e:
-        app.logger.error(f"[API_FAIL] Error fetching positions for user {g.user.username}: {e}")
-        return jsonify([])
     out = []
-    for p in positions:
-        open_time_utc = db_trades.get(p.symbol, datetime.now(timezone.utc))
-        out.append({'symbol': p.symbol, 'side': 'sell' if float(p.qty) < 0 else 'buy', 'qty': abs(float(p.qty)), 'open_price': float(p.avg_entry_price), 'current_price': float(p.current_price or 0), 'market_value': float(p.market_value), 'unrealized_pl': float(p.unrealized_pl), 'open_time_iso': open_time_utc.isoformat() if open_time_utc else None})
+    if g.user.is_superuser:
+        user_filter_id = request.args.get('user_id')
+        if user_filter_id:
+            target_user = get_regular_user_by_id(user_filter_id)
+            users = [target_user] if target_user else []
+        else:
+            users = regular_users_query().order_by(User.username).all()
+    else:
+        users = [g.user]
+
+    for user in users:
+        api = get_user_api(user)
+        if not api:
+            continue
+        try:
+            positions = api.list_positions()
+            db_trades = {t.symbol: t.open_time for t in Trade.query.filter_by(status='open', user_id=user.id).all()}
+        except Exception as e:
+            app.logger.error(f"[API_FAIL] Error fetching positions for user {user.username}: {e}")
+            continue
+        for p in positions:
+            open_time_utc = db_trades.get(p.symbol, datetime.now(timezone.utc))
+            out.append({
+                'user_id': user.id,
+                'username': user.username,
+                'symbol': p.symbol,
+                'side': 'sell' if float(p.qty) < 0 else 'buy',
+                'qty': abs(float(p.qty)),
+                'open_price': float(p.avg_entry_price),
+                'current_price': float(p.current_price or 0),
+                'market_value': float(p.market_value),
+                'unrealized_pl': float(p.unrealized_pl),
+                'open_time_iso': open_time_utc.isoformat() if open_time_utc else None
+            })
     return jsonify(out)
 
 @app.route('/api/closed_orders')
@@ -2056,10 +2130,12 @@ def api_closed_orders():
     if g.user.is_superuser:
         user_filter_id = request.args.get('user_id', '0')
         if user_filter_id != '0':
-            try:
-                query = query.filter_by(user_id=int(user_filter_id))
-            except ValueError:
+            target_user = get_regular_user_by_id(user_filter_id)
+            if not target_user:
                 return jsonify({"error": "Invalid user filter"}), 400
+            query = query.filter_by(user_id=target_user.id)
+        else:
+            query = query.join(User, Trade.user_id == User.id).filter(User.is_superuser == False)
     else:
         query = query.filter_by(user_id=g.user.id)
     closed_trades = query.order_by(Trade.close_time.desc()).all()
@@ -2068,7 +2144,10 @@ def api_closed_orders():
 @app.route('/api/account')
 @login_required
 def api_account():
-    api = get_user_api(g.user)
+    target_user = get_admin_dashboard_target_user() if g.user.is_superuser else g.user
+    if not target_user:
+        return jsonify({'equity': 0, 'cash': 0})
+    api = get_user_api(target_user)
     if not api: return jsonify({'equity': 0, 'cash': 0})
     try:
         acct = api.get_account()
@@ -2079,9 +2158,12 @@ def api_account():
 @login_required
 def proxy_trade_internal():
     payload = request.get_json(silent=True) or {}
-    payload['user'] = g.user.tradingview_user
-    payload['dashboard_user_id'] = g.user.id
-    payload['dashboard_username'] = g.user.username
+    target_user = get_admin_dashboard_target_user(payload, required=True) if g.user.is_superuser else g.user
+    if not target_user:
+        return jsonify({'error': 'invalid_request', 'detail': 'Admin must select a non-admin trading user.'}), 400
+    payload['user'] = target_user.tradingview_user
+    payload['dashboard_user_id'] = target_user.id
+    payload['dashboard_username'] = target_user.username
     payload['dashboard_request'] = True
     symbol = payload.get('symbol')
     action = payload.get('action')
@@ -2091,11 +2173,11 @@ def proxy_trade_internal():
     limit_price = payload.get('limit_price')
     extended_hours_raw = payload.get('extended_hours')
     app.logger.info(
-        f"[TRADE_MANUAL_REQUEST] user='{g.user.username}' symbol='{symbol}' action='{action}' amount='{amount}' "
+        f"[TRADE_MANUAL_REQUEST] operator='{g.user.username}' target_user='{target_user.username}' symbol='{symbol}' action='{action}' amount='{amount}' "
         f"order_type='{order_type}' tif='{time_in_force}' extended_hours='{extended_hours_raw}'"
     )
     if not symbol or not action:
-        app.logger.warning(f"[TRADE_MANUAL_REJECTED] Missing symbol/action from user='{g.user.username}'.")
+        app.logger.warning(f"[TRADE_MANUAL_REJECTED] Missing symbol/action from operator='{g.user.username}' target_user='{target_user.username}'.")
         return jsonify({'error': 'invalid_request', 'detail': 'symbol and action are required'}), 400
     if order_type not in ('market', 'limit'):
         return jsonify({'error': 'invalid_request', 'detail': 'order_type must be market or limit'}), 400
@@ -2124,7 +2206,10 @@ def proxy_trade_internal():
             return jsonify({'error': 'invalid_request', 'detail': 'amount must be positive'}), 400
         payload['amount'] = amount_val
     try:
-        r = requests.post(BOT_WEBHOOK, json=payload, timeout=10)
+        headers = {}
+        if WEBHOOK_SECRET:
+            headers[WEBHOOK_SECRET_HEADER] = WEBHOOK_SECRET
+        r = requests.post(BOT_WEBHOOK, json=payload, headers=headers, timeout=10)
         if not r.ok:
             detail = r.text
             try:
@@ -2132,7 +2217,7 @@ def proxy_trade_internal():
             except ValueError:
                 pass
             app.logger.warning(
-                f"[TRADE_MANUAL_REJECTED] user='{g.user.username}' symbol='{symbol}' action='{action}' status={r.status_code} detail='{detail}'"
+                f"[TRADE_MANUAL_REJECTED] operator='{g.user.username}' target_user='{target_user.username}' symbol='{symbol}' action='{action}' status={r.status_code} detail='{detail}'"
             )
             return jsonify({'error': 'proxy_failed', 'detail': detail}), r.status_code
         try:
@@ -2140,7 +2225,7 @@ def proxy_trade_internal():
         except ValueError:
             response_payload = {'detail': r.text}
         app.logger.info(
-            f"[TRADE_MANUAL_SUCCESS] user='{g.user.username}' symbol='{symbol}' action='{action}' status={r.status_code}"
+            f"[TRADE_MANUAL_SUCCESS] operator='{g.user.username}' target_user='{target_user.username}' symbol='{symbol}' action='{action}' status={r.status_code}"
         )
         return jsonify(response_payload), r.status_code
     except Exception as e:
@@ -2151,7 +2236,7 @@ def proxy_trade_internal():
             except ValueError:
                 detail = e.response.text
         app.logger.error(
-            f"[BOT_PROXY_FAIL] user='{g.user.username}' symbol='{symbol}' action='{action}' detail='{detail}'",
+            f"[BOT_PROXY_FAIL] operator='{g.user.username}' target_user='{target_user.username}' symbol='{symbol}' action='{action}' detail='{detail}'",
             exc_info=True
         )
         return jsonify({'error': 'proxy_failed', 'detail': detail}), 500
