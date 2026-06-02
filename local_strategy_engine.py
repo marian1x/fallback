@@ -50,6 +50,7 @@ class LocalStrategyEngine:
         self.logger = logger
         self.poll_seconds = int(os.getenv("LOCAL_STRATEGY_POLL_SECONDS", "15"))
         self.bars_lookback = int(os.getenv("LOCAL_STRATEGY_BARS_LOOKBACK", "260"))
+        self.entry_check_delay_seconds = int(os.getenv("LOCAL_STRATEGY_ENTRY_CHECK_DELAY_SECONDS", "5"))
         self.recovery_base_seconds = int(os.getenv("LOCAL_STRATEGY_RECOVERY_BASE_SECONDS", "15"))
         self.recovery_max_seconds = int(os.getenv("LOCAL_STRATEGY_RECOVERY_MAX_SECONDS", "300"))
         self.open_recovery_max_attempts = int(os.getenv("LOCAL_STRATEGY_OPEN_RECOVERY_MAX_ATTEMPTS", "3"))
@@ -156,6 +157,34 @@ class LocalStrategyEngine:
         with self.state_lock:
             return self.state.setdefault("symbols", {}).setdefault(symbol, {})
 
+    def _parse_state_time(self, value) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value))
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except Exception:
+            return None
+
+    def next_entry_check_time(self, timeframe: str) -> datetime:
+        seconds = max(1, timeframe_seconds(timeframe))
+        now_ts = time.time()
+        next_boundary = (math.floor(now_ts / seconds) + 1) * seconds
+        return datetime.fromtimestamp(next_boundary + max(0, self.entry_check_delay_seconds), tz=timezone.utc)
+
+    def entry_check_deferred(self, symbol: str, timeframe: str) -> bool:
+        st = self.symbol_state(symbol)
+        due = self._parse_state_time(st.get("next_entry_check_utc"))
+        if due and datetime.now(timezone.utc) < due:
+            return True
+        return False
+
+    def defer_next_entry_check(self, symbol: str, timeframe: str) -> None:
+        st = self.symbol_state(symbol)
+        st["next_entry_check_utc"] = self.next_entry_check_time(timeframe).isoformat()
+
     def params_from_backtest(self, cfg: Dict, backtest: Dict) -> Dict:
         params = backtest.get("params") if isinstance(backtest.get("params"), dict) else {}
         return {
@@ -202,27 +231,41 @@ class LocalStrategyEngine:
         timeframe = normalize_timeframe_token(backtest.get("timeframe") or cfg.get("timeframe", "30Min"))
         feed = str(cfg.get("feed", "iex"))
         session = str(backtest.get("session") or cfg.get("session", "regular"))
+
+        position = self.get_position(api, symbol)
+        if position is None and self.entry_check_deferred(symbol, timeframe):
+            return
+
         bars = self.fetch_closed_bars(api, symbol, timeframe, feed, session)
         min_bars = max(params["inner_kc_length"], params["outer_kc_length"]) + 3
         if len(bars) < min_bars:
             self.logger.info("[LOCAL_STRATEGY] %s skipped: bars=%s min=%s timeframe=%s", symbol, len(bars), min_bars, timeframe)
+            if position is None:
+                self.defer_next_entry_check(symbol, timeframe)
+                self.save_state()
             return
 
         mid, upper, lower = keltner_channel(bars, params["inner_kc_length"], params["inner_kc_mult"])
         frame = bars.assign(mid_inner=mid, up_inner=upper, low_inner=lower).dropna()
         if len(frame) < 2:
+            if position is None:
+                self.defer_next_entry_check(symbol, timeframe)
+                self.save_state()
             return
         last_bar_ts = frame.index[-1].isoformat()
         latest_price = self.get_latest_price(api, symbol)
         if latest_price <= 0:
             self.logger.warning("[LOCAL_STRATEGY] %s skipped: no latest price.", symbol)
+            if position is None:
+                self.defer_next_entry_check(symbol, timeframe)
+                self.save_state()
             return
 
-        position = self.get_position(api, symbol)
         if position is not None:
             self.evaluate_exit(user, symbol, position, latest_price, params, frame, last_bar_ts, timeframe)
             return
 
+        self.defer_next_entry_check(symbol, timeframe)
         self.reset_position_state(symbol)
         self.evaluate_entry(user, cfg, symbol, latest_price, params, frame, last_bar_ts, timeframe, backtest)
 

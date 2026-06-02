@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import threading
 import time
-from dataclasses import dataclass
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Set
@@ -269,6 +271,7 @@ class TradeUpdateEvent:
     timestamp: Optional[datetime]
     price: Optional[float]
     qty: Optional[float]
+    received_at: float = field(default_factory=time.time)
 
 
 class _TradeUpdatesRunner:
@@ -279,8 +282,10 @@ class _TradeUpdatesRunner:
         self.paper = is_paper_base_url(base_url)
         self.logger = logger
         self._lock = threading.Lock()
-        self._latest_by_order: Dict[str, TradeUpdateEvent] = {}
+        self._latest_by_order: "OrderedDict[str, TradeUpdateEvent]" = OrderedDict()
         self._waiters: Dict[str, List[threading.Event]] = {}
+        self._event_ttl_sec = int(os.getenv("TRADE_UPDATES_EVENT_TTL_SEC", "3600"))
+        self._max_events = int(os.getenv("TRADE_UPDATES_MAX_EVENTS", "500"))
         self._thread: Optional[threading.Thread] = None
         self._stop_signal = threading.Event()
         self._stream_ready = threading.Event()
@@ -336,6 +341,8 @@ class _TradeUpdatesRunner:
         )
         with self._lock:
             self._latest_by_order[order_id] = payload
+            self._latest_by_order.move_to_end(order_id)
+            self._prune_latest_locked()
             waiters = list(self._waiters.get(order_id, []))
         for waiter in waiters:
             waiter.set()
@@ -388,6 +395,7 @@ class _TradeUpdatesRunner:
         waiter = threading.Event()
 
         with self._lock:
+            self._prune_latest_locked()
             latest = self._latest_by_order.get(order_id)
             if latest and latest.event in term:
                 return latest
@@ -413,6 +421,20 @@ class _TradeUpdatesRunner:
                     waiters.remove(waiter)
                 if not waiters:
                     self._waiters.pop(order_id, None)
+
+    def _prune_latest_locked(self) -> None:
+        now = time.time()
+        if self._event_ttl_sec > 0:
+            stale = [
+                order_id
+                for order_id, event in self._latest_by_order.items()
+                if (now - float(getattr(event, "received_at", now))) > self._event_ttl_sec
+            ]
+            for order_id in stale:
+                self._latest_by_order.pop(order_id, None)
+        if self._max_events > 0:
+            while len(self._latest_by_order) > self._max_events:
+                self._latest_by_order.popitem(last=False)
 
 
 class TradeUpdatesHub:
