@@ -193,7 +193,7 @@ class LocalStrategyEngine:
         bars = bars[["open", "high", "low", "close", "volume"]]
         bars = resample_bars(bars, normalized_tf)
         bars = filter_session(bars, session)
-        cutoff = pd.Timestamp(now - timedelta(seconds=timeframe_seconds(normalized_tf)), tz="UTC")
+        cutoff = pd.Timestamp(now - timedelta(seconds=timeframe_seconds(normalized_tf)))
         return bars[bars.index <= cutoff].dropna()
 
     def evaluate_symbol(self, user: User, api: LegacyCompatibleAlpacaClient, cfg: Dict, entry: Dict, backtest: Dict) -> None:
