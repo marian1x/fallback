@@ -154,6 +154,26 @@ Useful flags:
 
 Admins can also use the web UI at `Admin Tools -> Admin Strategy Lab` (`/admin/strategy`) to configure strategy runs, manage the signal universe, and compare local vs TradingView signal routing per symbol.
 
+### Remote Optimizer Worker
+
+For heavier optimization runs, Strategy Lab can queue the job on the PI5 and let another machine run the calculation. The PI5 downloads Alpaca OHLC bars and sends only historical bar data plus optimizer parameters to the worker. Alpaca credentials stay on the PI5.
+
+On the remote machine:
+
+```bash
+git clone git@github.com:marian1x/fallback.git
+cd fallback
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+export STRATEGY_WORKER_TOKEN="same_value_as_PI5_STRATEGY_WORKER_TOKEN"
+python misc/remote_optimizer_worker.py \
+  --server https://salavat.home.ro/trading \
+  --token "$STRATEGY_WORKER_TOKEN"
+```
+
+Set `STRATEGY_WORKER_TOKEN` in the PI5 `.env`. If not set, the dashboard falls back to `INTERNAL_API_KEY`.
+
 ## 훅 Webhook Configuration
 
 To trigger trades, you need to configure your webhook provider (e.g., TradingView) to send a `POST` request to the bot's webhook URL:

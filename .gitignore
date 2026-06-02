@@ -18,6 +18,7 @@ instance/
 
 # Local temp / scratch
 bot_temp.py
+.remote_optimizer_work/
 
 # Optimizer outputs
 misc/optimizer_report*.json

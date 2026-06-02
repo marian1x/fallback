@@ -111,6 +111,8 @@ def _parse_timeframe(value: str) -> TimeFrame:
         return TimeFrame(1, TimeFrameUnit.Hour)
     if token in ("1day", "1d", "day"):
         return TimeFrame.Day
+    if token in ("1week", "1w", "week"):
+        return TimeFrame.Week
     raise ValueError(f"Unsupported timeframe: {value}")
 
 

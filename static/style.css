@@ -300,6 +300,12 @@ body.dark-mode .navbar-toggler-icon {
 .strategy-panel-body {
     padding: 1.15rem;
 }
+.strategy-target-card {
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    background: var(--surface-alt);
+    padding: 1rem;
+}
 .strategy-subtabs {
     border-bottom: 1px solid var(--card-border);
     gap: 0.25rem;
@@ -401,6 +407,24 @@ body.dark-mode .navbar-toggler-icon {
 }
 .strategy-metrics strong {
     font-size: 1.05rem;
+}
+.strategy-detail-collapse {
+    background: var(--surface-alt);
+    border-bottom: 1px solid var(--card-border);
+    padding: 0.8rem;
+}
+.strategy-json {
+    color: var(--text-color);
+    background: rgba(0, 0, 0, 0.08);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    max-height: 320px;
+    overflow: auto;
+    padding: 0.85rem;
+    white-space: pre-wrap;
+}
+body.dark-mode .strategy-json {
+    background: rgba(0, 0, 0, 0.22);
 }
 
 /* --- DataTables Mobile/Responsive --- */

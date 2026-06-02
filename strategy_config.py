@@ -28,6 +28,7 @@ def get_default_strategy_config() -> Dict:
         "session": "regular",
         "feed": "sip",
         "live_data_source": "alpaca",
+        "compute_target": "local",
         "inner_kc_length": 33,
         "inner_kc_mult": 1.7,
         "outer_kc_length": 23,
@@ -52,6 +53,7 @@ def get_default_strategy_config() -> Dict:
         "recalc_after_order_filled": False,
         "recalc_on_every_tick": False,
         "optimize_enabled": False,
+        "last_backtest": None,
         "trials": 200,
         "top_k": 20,
         "trade_direction": "Both",
@@ -70,6 +72,7 @@ def get_default_strategy_config() -> Dict:
                 "mode": "both",
                 "enabled": True,
                 "notes": "Baseline comparison",
+                "backtest": None,
             }
         ],
     }
@@ -91,11 +94,15 @@ def normalize_universe(raw_entries) -> List[Dict]:
             mode = "both"
         enabled = bool(item.get("enabled", True))
         notes = str(item.get("notes", "") or "").strip()[:200]
+        backtest = item.get("backtest")
+        if not isinstance(backtest, dict):
+            backtest = None
         entries.append({
             "symbol": symbol,
             "mode": mode,
             "enabled": enabled,
             "notes": notes,
+            "backtest": backtest,
         })
         seen.add(symbol)
     return entries

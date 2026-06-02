@@ -356,6 +356,10 @@ def filter_session(df: pd.DataFrame, mode: str) -> pd.DataFrame:
     mode = (mode or "regular").lower()
     if mode == "all":
         return df
+    if len(df.index) > 1:
+        min_delta = df.index.to_series().diff().dropna().min()
+        if pd.notna(min_delta) and min_delta >= pd.Timedelta(hours=23):
+            return df if mode == "regular" else df.iloc[0:0]
     ny = df.tz_convert("America/New_York")
     minutes = ny.index.hour * 60 + ny.index.minute
     regular_mask = (minutes >= (9 * 60 + 30)) & (minutes < (16 * 60))

@@ -3,6 +3,8 @@ import os
 import logging
 import subprocess
 import csv
+import io
+import uuid
 from logging.handlers import RotatingFileHandler
 import threading
 import time
@@ -76,13 +78,16 @@ LAST_GOOD_COMMIT_FILE = os.path.join(app.instance_path, 'last_good_commit.txt')
 VERSION_COUNTER_FILE = os.path.join(app.instance_path, 'version_counter.txt')
 STRATEGY_REPORT_FILE = os.path.join(app.instance_path, 'strategy_last_report.json')
 STRATEGY_TOP_FILE = os.path.join(app.instance_path, 'strategy_last_top.csv')
+STRATEGY_JOBS_DIR = os.path.join(app.instance_path, 'strategy_jobs')
+STRATEGY_WORKER_TOKEN = os.getenv('STRATEGY_WORKER_TOKEN', INTERNAL_API_KEY)
 LOGIN_RATE_LIMIT_WINDOW_SEC = int(os.getenv('LOGIN_RATE_LIMIT_WINDOW_SEC', '600'))
 LOGIN_RATE_LIMIT_MAX_ATTEMPTS = int(os.getenv('LOGIN_RATE_LIMIT_MAX_ATTEMPTS', '8'))
 PASSWORD_MIN_LENGTH = int(os.getenv('PASSWORD_MIN_LENGTH', '10'))
+os.makedirs(STRATEGY_JOBS_DIR, exist_ok=True)
 
 LOGIN_ATTEMPTS = {}
 LOGIN_ATTEMPTS_LOCK = threading.Lock()
-CSRF_EXEMPT_ENDPOINTS = {'webhook', 'record_trade_internal'}
+CSRF_EXEMPT_ENDPOINTS = {'webhook', 'record_trade_internal', 'api_strategy_remote_next', 'api_strategy_remote_complete'}
 
 # --- Enhanced Logging Setup ---
 log_handler = RotatingFileHandler('dashboard.log', maxBytes=100000, backupCount=5)
@@ -403,6 +408,7 @@ def parse_strategy_universe_from_form(form):
     modes = form.getlist('universe_mode[]')
     enabled_values = form.getlist('universe_enabled[]')
     notes = form.getlist('universe_notes[]')
+    backtests = form.getlist('universe_backtest[]')
     entries = []
     for idx, raw_symbol in enumerate(symbols):
         symbol = strategy_store.normalize_symbol(raw_symbol)
@@ -411,11 +417,20 @@ def parse_strategy_universe_from_form(form):
         mode = modes[idx] if idx < len(modes) else 'both'
         enabled_value = enabled_values[idx] if idx < len(enabled_values) else '1'
         note = notes[idx] if idx < len(notes) else ''
+        backtest = None
+        if idx < len(backtests) and backtests[idx]:
+            try:
+                parsed = json.loads(backtests[idx])
+                if isinstance(parsed, dict):
+                    backtest = parsed
+            except Exception:
+                backtest = None
         entries.append({
             'symbol': symbol,
             'mode': mode,
             'enabled': str(enabled_value).lower() in ('1', 'true', 'yes', 'on'),
             'notes': note,
+            'backtest': backtest,
         })
     return strategy_store.normalize_universe(entries)
 
@@ -453,6 +468,106 @@ def load_strategy_top_rows(limit=20):
         return []
     return rows
 
+def strategy_job_path(job_id):
+    safe_id = ''.join(ch for ch in str(job_id) if ch.isalnum() or ch in ('-', '_'))
+    return os.path.join(STRATEGY_JOBS_DIR, f"{safe_id}.json")
+
+def strategy_job_bars_path(job_id):
+    safe_id = ''.join(ch for ch in str(job_id) if ch.isalnum() or ch in ('-', '_'))
+    return os.path.join(STRATEGY_JOBS_DIR, f"{safe_id}_bars.csv")
+
+def save_strategy_job(job):
+    os.makedirs(STRATEGY_JOBS_DIR, exist_ok=True)
+    path = strategy_job_path(job.get('id', 'unknown'))
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(job, f, indent=2)
+    os.replace(tmp_path, path)
+
+def load_strategy_job(job_id):
+    path = strategy_job_path(job_id)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        app.logger.error(f"[STRATEGY_REMOTE] Failed to load job {job_id}: {e}")
+        return None
+
+def list_strategy_jobs(limit=8):
+    jobs = []
+    if not os.path.isdir(STRATEGY_JOBS_DIR):
+        return jobs
+    for name in os.listdir(STRATEGY_JOBS_DIR):
+        if not name.endswith(".json"):
+            continue
+        job = load_strategy_job(name[:-5])
+        if job:
+            jobs.append(job)
+    jobs.sort(key=lambda item: item.get('created_at_utc', ''), reverse=True)
+    return jobs[:limit]
+
+def summarize_strategy_report(report, source='local', job_id=None):
+    if not isinstance(report, dict):
+        return None
+    best = report.get('best_result') or {}
+    if not isinstance(best, dict) or not best:
+        return None
+    metric_keys = [
+        'score', 'net_profit', 'return_pct', 'total_trades', 'win_rate_pct',
+        'profit_factor', 'sharpe', 'max_drawdown', 'max_drawdown_pct',
+    ]
+    param_keys = [
+        'trade_direction', 'inner_kc_length', 'inner_kc_mult', 'outer_kc_length',
+        'outer_kc_mult', 'fixed_stop_loss_pct', 'fixed_take_profit_pct',
+        'forced_stop_loss_pct', 'forced_take_profit_pct', 'trailing_offset_ticks',
+        'tick_size',
+    ]
+    return {
+        'symbol': strategy_store.normalize_symbol(report.get('symbol_used') or report.get('symbol_input') or ''),
+        'timeframe': report.get('timeframe'),
+        'session': report.get('session_filter'),
+        'run_at_utc': report.get('generated_at_utc') or datetime.now(timezone.utc).isoformat(),
+        'source': source,
+        'job_id': job_id,
+        'bars_count': report.get('bars_count'),
+        'date_range_utc': report.get('date_range_utc'),
+        'metrics': {key: best.get(key) for key in metric_keys if key in best},
+        'params': {key: best.get(key) for key in param_keys if key in best},
+    }
+
+def apply_strategy_report_to_config(config, report, source='local', job_id=None):
+    summary = summarize_strategy_report(report, source=source, job_id=job_id)
+    if not summary:
+        return None
+    config['last_backtest'] = summary
+    return summary
+
+def upsert_universe_backtest(config, summary, mode='local'):
+    if not summary or not summary.get('symbol'):
+        return False
+    symbol = strategy_store.normalize_symbol(summary['symbol'])
+    universe = strategy_store.normalize_universe(config.get('universe'))
+    found = False
+    for item in universe:
+        if item['symbol'] == symbol:
+            item['backtest'] = summary
+            item['mode'] = item.get('mode') or mode
+            item['enabled'] = bool(item.get('enabled', True))
+            found = True
+            break
+    if not found:
+        universe.append({
+            'symbol': symbol,
+            'mode': mode,
+            'enabled': True,
+            'notes': 'Added from Strategy Tester',
+            'backtest': summary,
+        })
+    config['universe'] = universe
+    return True
+
 def local_strategy_datetime_to_utc_iso(date_value, time_value, cap_now=False):
     raw_date = str(date_value or '').strip()
     raw_time = str(time_value or '00:00').strip() or '00:00'
@@ -471,10 +586,7 @@ def local_strategy_datetime_to_utc_iso(date_value, time_value, cap_now=False):
 def exact_range(value, step='0.1'):
     return f"{value}:{value}:{step}"
 
-def run_strategy_optimizer(config):
-    venv_python = os.path.join(REPO_PATH, "venv", "bin", "python")
-    report_path = STRATEGY_REPORT_FILE
-    top_path = STRATEGY_TOP_FILE
+def build_strategy_optimizer_args(config, report_path, top_path, bars_csv_path=None):
     start_iso = local_strategy_datetime_to_utc_iso(
         config.get("backtest_start_date"),
         config.get("backtest_start_time"),
@@ -493,8 +605,7 @@ def run_strategy_optimizer(config):
     fixed_tp_range = str(config.get("fixed_tp_range", "0.8:4.0:0.1")) if optimize_enabled else exact_range(config.get("fixed_take_profit_pct", 3.1))
     forced_sl_range = str(config.get("forced_sl_range", "3.0:10.0:0.2")) if optimize_enabled else exact_range(config.get("forced_stop_loss_pct", 9.0))
     forced_tp_range = str(config.get("forced_tp_range", "3.0:10.0:0.2")) if optimize_enabled else exact_range(config.get("forced_take_profit_pct", 10.0))
-    command = [
-        venv_python,
+    args = [
         "misc/pine_optimizer.py",
         "--symbol", str(config.get("symbol", "TSM")),
         "--timeframe", str(config.get("timeframe", "30Min")),
@@ -518,14 +629,86 @@ def run_strategy_optimizer(config):
         "--report-json", report_path,
         "--top-csv", top_path,
     ]
+    if bars_csv_path:
+        args.extend(["--bars-csv", bars_csv_path])
     if start_iso:
-        command.extend(["--start", start_iso])
+        args.extend(["--start", start_iso])
     if end_iso:
-        command.extend(["--end", end_iso])
+        args.extend(["--end", end_iso])
     alpaca_user = str(config.get("alpaca_user", "") or "").strip()
-    if alpaca_user:
-        command.extend(["--alpaca-user", alpaca_user])
+    if alpaca_user and not bars_csv_path:
+        args.extend(["--alpaca-user", alpaca_user])
+    return args
+
+def run_strategy_optimizer(config):
+    venv_python = os.path.join(REPO_PATH, "venv", "bin", "python")
+    command = [venv_python] + build_strategy_optimizer_args(config, STRATEGY_REPORT_FILE, STRATEGY_TOP_FILE)
     return run_command(command, cwd=REPO_PATH, timeout=900)
+
+def fetch_strategy_bars_csv(config):
+    start_iso = local_strategy_datetime_to_utc_iso(config.get("backtest_start_date"), config.get("backtest_start_time"))
+    end_iso = local_strategy_datetime_to_utc_iso(config.get("backtest_end_date"), config.get("backtest_end_time"), cap_now=True)
+    if not start_iso or not end_iso:
+        raise ValueError("Invalid backtest date range.")
+    api_user = get_strategy_api_user(config)
+    if not api_user:
+        raise ValueError("No Alpaca user available for historical bars.")
+    api = get_user_api(api_user)
+    if not api:
+        raise ValueError(f"Alpaca API is not configured for user '{api_user.username}'.")
+    symbol = strategy_store.normalize_symbol(config.get("symbol", ""))
+    bars = api.get_bars(
+        symbol,
+        str(config.get("timeframe", "30Min")),
+        start=start_iso,
+        end=end_iso,
+        adjustment="raw",
+        feed=str(config.get("feed", "iex")),
+    ).df
+    if bars.empty:
+        raise ValueError(f"No bars returned from Alpaca for {symbol}.")
+    df = bars.copy()
+    df.index.name = df.index.name or "timestamp"
+    df = df.reset_index()
+    if "timestamp" not in df.columns:
+        first_col = df.columns[0]
+        df = df.rename(columns={first_col: "timestamp"})
+    if "volume" not in df.columns:
+        df["volume"] = 0
+    columns = ["timestamp", "open", "high", "low", "close", "volume"]
+    missing = [col for col in columns if col not in df.columns]
+    if missing:
+        raise ValueError(f"Alpaca bars missing columns: {', '.join(missing)}")
+    buf = io.StringIO()
+    df[columns].to_csv(buf, index=False)
+    return buf.getvalue()
+
+def create_remote_strategy_job(config):
+    job_id = uuid.uuid4().hex
+    bars_csv = fetch_strategy_bars_csv(config)
+    bars_path = strategy_job_bars_path(job_id)
+    with open(bars_path, "w", encoding="utf-8") as f:
+        f.write(bars_csv)
+    job = {
+        'id': job_id,
+        'status': 'queued',
+        'created_at_utc': datetime.now(timezone.utc).isoformat(),
+        'updated_at_utc': datetime.now(timezone.utc).isoformat(),
+        'symbol': strategy_store.normalize_symbol(config.get('symbol', '')),
+        'timeframe': config.get('timeframe'),
+        'session': config.get('session'),
+        'feed': config.get('feed'),
+        'optimize_enabled': bool(config.get('optimize_enabled')),
+        'trials': int(config.get('trials', 200)),
+        'top_k': int(config.get('top_k', 20)),
+        'optimizer_args': build_strategy_optimizer_args(config, "__REPORT_JSON__", "__TOP_CSV__", bars_csv_path="__BARS_CSV__"),
+        'bars_csv_file': os.path.basename(bars_path),
+        'summary': None,
+        'stdout': '',
+        'stderr': '',
+    }
+    save_strategy_job(job)
+    return job
 
 # --- Core Routes ---
 @app.route('/login', methods=['GET', 'POST'])
@@ -716,6 +899,8 @@ def admin_strategy():
 
         config['enabled'] = 'enabled' in request.form
         config['optimize_enabled'] = 'optimize_enabled' in request.form
+        compute_target = request.form.get('compute_target', config.get('compute_target', 'local')).strip().lower()
+        config['compute_target'] = compute_target if compute_target in ('local', 'remote') else 'local'
         config['alpaca_user'] = request.form.get('alpaca_user', '').strip()
         config['symbol'] = request.form.get('symbol', config.get('symbol', 'TSM')).strip().upper()
         config['timeframe'] = request.form.get('timeframe', config.get('timeframe', '30Min')).strip()
@@ -781,15 +966,36 @@ def admin_strategy():
         if invalid_symbols:
             flash(f"Skipped symbols not found in Alpaca tradable list: {', '.join(invalid_symbols[:12])}", "warning")
 
-        if action == 'run':
-            ok, out, err = run_strategy_optimizer(config)
-            if ok:
-                app.logger.info("[STRATEGY] Strategy optimizer run successful. Output=%s", out)
-                flash("Strategy run completed. Report updated.", "success")
+        if action == 'add_result':
+            report = load_strategy_report()
+            previous_source = (config.get('last_backtest') or {}).get('source', 'local') if isinstance(config.get('last_backtest'), dict) else 'local'
+            summary = apply_strategy_report_to_config(config, report, source=previous_source)
+            if summary and upsert_universe_backtest(config, summary, mode='local'):
+                save_strategy_config(config)
+                flash(f"Added {summary['symbol']} to Signal Universe with latest backtest result.", "success")
             else:
-                app.logger.error("[STRATEGY] Strategy optimizer failed. Error=%s Output=%s", err, out)
-                detail = err or out or "Unknown error"
-                flash(f"Strategy run failed: {detail}", "danger")
+                flash("No valid backtest result available to add.", "warning")
+        elif action == 'run':
+            if config.get('compute_target') == 'remote':
+                try:
+                    job = create_remote_strategy_job(config)
+                    flash(f"Remote optimization job queued for {job['symbol']} ({job['timeframe']}). Start the worker on your mini-PC.", "info")
+                except Exception as e:
+                    app.logger.error("[STRATEGY_REMOTE] Failed to queue remote job: %s", e)
+                    flash(f"Remote job failed to queue: {e}", "danger")
+            else:
+                ok, out, err = run_strategy_optimizer(config)
+                if ok:
+                    report = load_strategy_report()
+                    summary = apply_strategy_report_to_config(config, report, source='local')
+                    if summary:
+                        save_strategy_config(config)
+                    app.logger.info("[STRATEGY] Strategy optimizer run successful. Output=%s", out)
+                    flash("Strategy run completed. Report updated.", "success")
+                else:
+                    app.logger.error("[STRATEGY] Strategy optimizer failed. Error=%s Output=%s", err, out)
+                    detail = err or out or "Unknown error"
+                    flash(f"Strategy run failed: {detail}", "danger")
         else:
             flash("Strategy configuration saved.", "success")
         return redirect(url_for('admin_strategy'))
@@ -803,6 +1009,7 @@ def admin_strategy():
         report=report,
         top_rows=top_rows,
         users=users,
+        remote_jobs=list_strategy_jobs(limit=8),
         tradable_symbols=[],
     )
 
@@ -848,6 +1055,88 @@ def api_admin_strategy_live_snapshot():
         'data_source': 'Alpaca',
         'rows': rows,
     })
+
+def is_strategy_worker_authorized():
+    provided = request.headers.get('X-Strategy-Worker-Token') or request.args.get('token') or ''
+    expected = STRATEGY_WORKER_TOKEN or ''
+    return bool(expected) and hmac.compare_digest(str(provided), str(expected))
+
+@app.route('/api/admin/strategy/remote_jobs/next')
+def api_strategy_remote_next():
+    if not is_strategy_worker_authorized():
+        return jsonify({'error': 'unauthorized'}), 401
+    worker_name = request.args.get('worker') or request.headers.get('X-Strategy-Worker') or 'remote-worker'
+    queued = [job for job in list_strategy_jobs(limit=200) if job.get('status') == 'queued']
+    queued.sort(key=lambda item: item.get('created_at_utc', ''))
+    if not queued:
+        return jsonify({'job': None})
+    job = queued[0]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    job['status'] = 'running'
+    job['worker'] = worker_name
+    job['started_at_utc'] = now_iso
+    job['updated_at_utc'] = now_iso
+    save_strategy_job(job)
+    bars_csv = job.get('bars_csv', '')
+    if not bars_csv:
+        bars_path = strategy_job_bars_path(job['id'])
+        if os.path.exists(bars_path):
+            with open(bars_path, "r", encoding="utf-8") as f:
+                bars_csv = f.read()
+    return jsonify({
+        'job': {
+            'id': job['id'],
+            'symbol': job.get('symbol'),
+            'timeframe': job.get('timeframe'),
+            'optimizer_args': job.get('optimizer_args', []),
+            'bars_csv': bars_csv,
+        }
+    })
+
+@app.route('/api/admin/strategy/remote_jobs/<job_id>/complete', methods=['POST'])
+def api_strategy_remote_complete(job_id):
+    if not is_strategy_worker_authorized():
+        return jsonify({'error': 'unauthorized'}), 401
+    job = load_strategy_job(job_id)
+    if not job:
+        return jsonify({'error': 'job_not_found'}), 404
+    data = request.get_json(silent=True) or {}
+    returncode = int(data.get('returncode', 1))
+    stdout = str(data.get('stdout', '') or '')[-20000:]
+    stderr = str(data.get('stderr', '') or '')[-20000:]
+    report = data.get('report')
+    if isinstance(report, str):
+        try:
+            report = json.loads(report)
+        except Exception:
+            report = None
+    top_csv = str(data.get('top_csv', '') or '')
+    now_iso = datetime.now(timezone.utc).isoformat()
+    job['returncode'] = returncode
+    job['stdout'] = stdout
+    job['stderr'] = stderr
+    job['updated_at_utc'] = now_iso
+    job['completed_at_utc'] = now_iso
+
+    if returncode == 0 and isinstance(report, dict):
+        with open(STRATEGY_REPORT_FILE, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+        if top_csv:
+            with open(STRATEGY_TOP_FILE, "w", encoding="utf-8") as f:
+                f.write(top_csv)
+        config = load_strategy_config()
+        summary = apply_strategy_report_to_config(config, report, source='remote', job_id=job_id)
+        if summary:
+            save_strategy_config(config)
+        job['summary'] = summary
+        job['status'] = 'completed'
+        save_strategy_job(job)
+        return jsonify({'ok': True, 'summary': summary})
+
+    job['status'] = 'failed'
+    job['error'] = stderr or stdout or 'Remote optimizer failed.'
+    save_strategy_job(job)
+    return jsonify({'ok': False, 'error': job['error']})
 
 def backfill_admin_trades_for_shared_keys():
     admin_user = User.query.filter_by(is_superuser=True).first()

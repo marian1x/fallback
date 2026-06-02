@@ -1,5 +1,25 @@
 # Release Notes
 
+## Version 2.3.0 - 2026-06-02
+
+### Strategy Lab Workflow
+- Moved the backtest target into Strategy Tester:
+  - stock symbol,
+  - chart interval,
+  - Alpaca user,
+  - session,
+  - data feed,
+  - local vs remote compute target.
+- Added chart intervals from `1Min` through `1Week`.
+- Added **Add Latest Result to Signals** to save a validated backtest into Signal Universe.
+- Signal Universe rows now show saved backtest performance and keep winning parameters hidden behind an expandable details view.
+- Latest Backtest and Remote Jobs status are visible in the Results tab.
+
+### Remote Optimization
+- Added a pull-based remote optimizer worker: `misc/remote_optimizer_worker.py`.
+- PI5 keeps Alpaca credentials local, fetches historical bars, and sends only OHLC CSV + optimizer parameters to the remote worker.
+- Added authenticated remote job endpoints protected by `STRATEGY_WORKER_TOKEN`.
+
 ## Version 2.2.1 - 2026-06-02
 
 ### UI / Navigation
