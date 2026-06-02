@@ -561,6 +561,8 @@ def enrich_strategy_jobs(jobs, config=None):
             item['report'] = report
             item['best_trades'] = report.get('best_trades') or []
             item['top_results'] = report.get('top_results') or []
+        if not isinstance(item.get('summary'), dict):
+            item['summary'] = strategy_summary_from_job(item, report)
         enriched.append(item)
     return enriched
 
@@ -624,6 +626,23 @@ def summarize_strategy_report(report, source='local', job_id=None):
         'metrics': {key: best.get(key) for key in metric_keys if key in best},
         'params': {key: best.get(key) for key in param_keys if key in best},
     }
+
+def strategy_summary_from_job(job, report=None):
+    if not isinstance(job, dict):
+        return None
+    job_id = str(job.get('id') or '').strip()
+    source = job.get('compute_target', 'local') or 'local'
+    summary = summarize_strategy_report(report, source=source, job_id=job_id)
+    if summary:
+        return summary
+    existing = job.get('summary')
+    if isinstance(existing, dict) and existing.get('symbol') and existing.get('metrics'):
+        normalized = dict(existing)
+        normalized['symbol'] = strategy_store.normalize_symbol(normalized.get('symbol', job.get('symbol', '')))
+        normalized['source'] = normalized.get('source') or source
+        normalized['job_id'] = normalized.get('job_id') or job_id
+        return normalized
+    return None
 
 def apply_strategy_report_to_config(config, report, source='local', job_id=None):
     summary = summarize_strategy_report(report, source=source, job_id=job_id)
@@ -1149,14 +1168,13 @@ def admin_strategy():
             job_id = request.form.get('job_id', '').strip()
             job = load_strategy_job(job_id)
             report = load_strategy_job_report(job_id)
-            source = job.get('compute_target', 'local') if isinstance(job, dict) else 'local'
-            summary = summarize_strategy_report(report, source=source, job_id=job_id)
+            summary = strategy_summary_from_job(job, report)
             if summary and upsert_universe_backtest(config, summary, mode='local'):
                 config['last_backtest'] = summary
                 save_strategy_config(config)
                 flash(f"Added {summary['symbol']} to Signal Universe from selected optimizer run.", "success")
             else:
-                flash("Selected optimizer run has no valid completed report.", "warning")
+                flash("Selected optimizer run has no valid completed summary.", "warning")
         elif action == 'run':
             symbols = parse_strategy_symbols(request.form.get('symbol', ''))
             if not symbols:
