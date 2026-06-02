@@ -175,7 +175,7 @@ Useful env vars:
 - `LOCAL_STRATEGY_ENGINE_AUTOSTART=true`: start the local engine with `fallback.service`.
 - `LOCAL_STRATEGY_DRY_RUN=false`: log decisions without submitting orders when set to `true`.
 - `LOCAL_STRATEGY_POLL_SECONDS=15`: engine polling interval.
-- `LOCAL_STRATEGY_ENTRY_CHECK_DELAY_SECONDS=5`: after a closed bar is evaluated with no open position, defer the next historical-bar fetch until the next expected bar close plus this delay.
+- `LOCAL_STRATEGY_ENTRY_REFETCH_SECONDS=60`: when there is no open position, refetch historical bars at this interval; Keltner still uses the full `LOCAL_STRATEGY_BARS_LOOKBACK` window, but old DataFrames are not retained in memory.
 - `LOCAL_STRATEGY_BARS_LOOKBACK=260`: max lookback bars fetched for live strategy evaluation.
 - `LOCAL_STRATEGY_OPEN_RECOVERY_MAX_ATTEMPTS=3`: max retries for failed opens.
 - `LOCAL_STRATEGY_CLOSE_RECOVERY_MAX_ATTEMPTS=0`: close retries; `0` means keep retrying until obsolete/success.

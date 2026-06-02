@@ -50,7 +50,7 @@ class LocalStrategyEngine:
         self.logger = logger
         self.poll_seconds = int(os.getenv("LOCAL_STRATEGY_POLL_SECONDS", "15"))
         self.bars_lookback = int(os.getenv("LOCAL_STRATEGY_BARS_LOOKBACK", "260"))
-        self.entry_check_delay_seconds = int(os.getenv("LOCAL_STRATEGY_ENTRY_CHECK_DELAY_SECONDS", "5"))
+        self.entry_refetch_seconds = int(os.getenv("LOCAL_STRATEGY_ENTRY_REFETCH_SECONDS", "60"))
         self.recovery_base_seconds = int(os.getenv("LOCAL_STRATEGY_RECOVERY_BASE_SECONDS", "15"))
         self.recovery_max_seconds = int(os.getenv("LOCAL_STRATEGY_RECOVERY_MAX_SECONDS", "300"))
         self.open_recovery_max_attempts = int(os.getenv("LOCAL_STRATEGY_OPEN_RECOVERY_MAX_ATTEMPTS", "3"))
@@ -168,12 +168,6 @@ class LocalStrategyEngine:
         except Exception:
             return None
 
-    def next_entry_check_time(self, timeframe: str) -> datetime:
-        seconds = max(1, timeframe_seconds(timeframe))
-        now_ts = time.time()
-        next_boundary = (math.floor(now_ts / seconds) + 1) * seconds
-        return datetime.fromtimestamp(next_boundary + max(0, self.entry_check_delay_seconds), tz=timezone.utc)
-
     def entry_check_deferred(self, symbol: str, timeframe: str) -> bool:
         st = self.symbol_state(symbol)
         due = self._parse_state_time(st.get("next_entry_check_utc"))
@@ -183,7 +177,8 @@ class LocalStrategyEngine:
 
     def defer_next_entry_check(self, symbol: str, timeframe: str) -> None:
         st = self.symbol_state(symbol)
-        st["next_entry_check_utc"] = self.next_entry_check_time(timeframe).isoformat()
+        delay = max(self.poll_seconds, self.entry_refetch_seconds)
+        st["next_entry_check_utc"] = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
 
     def params_from_backtest(self, cfg: Dict, backtest: Dict) -> Dict:
         params = backtest.get("params") if isinstance(backtest.get("params"), dict) else {}
