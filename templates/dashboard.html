@@ -167,6 +167,11 @@
 <script>
     let openTable;
     let tradableSymbols = new Set(); // MODIFIED: Using a Set for faster lookups
+    const openPositionsUrl = "{{ url_for('api_open_positions') }}";
+    const accountUrl = "{{ url_for('api_account') }}";
+    const tradableSymbolsUrl = "{{ url_for('api_tradable_symbols') }}";
+    const proxyTradeUrl = "{{ url_for('proxy_trade_internal') }}";
+    const logClientEventUrl = "{{ url_for('log_client_event') }}";
 
     function colorPL(val, isBadge = false, tp = null, sl = null) {
         const sign = val > 0 ? '+' : (val < 0 ? '-' : '');
@@ -223,7 +228,7 @@
 
     function logClientEvent(eventType, message, detail = null) {
         $.ajax({
-            url: '/api/internal/log_client_event',
+            url: logClientEventUrl,
             method: 'POST',
             contentType: 'application/json',
             data: JSON.stringify({ event_type: eventType, message: message, detail: detail }),
@@ -298,7 +303,7 @@
 
     function fetchOpenPositions() {
         const bracketOrders = JSON.parse(localStorage.getItem('bracketOrders')) || {};
-        $.get('/api/open_positions', function(data){
+        $.get(openPositionsUrl, function(data){
             openTable.clear();
             let totalPL = 0;
             const symbolsWithActiveBrackets = Object.keys(bracketOrders);
@@ -359,7 +364,7 @@
     }
 
     function fetchAccountSummary() {
-        $.get('/api/account', function(data){
+        $.get(accountUrl, function(data){
             $("#statEquity").text("$" + Number(data.equity || 0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}));
             $("#statCash").text("$" + Number(data.cash || 0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}));
         });
@@ -368,7 +373,7 @@
     // MODIFIED: New symbol fetching and validation logic
     async function setupSymbolAutocomplete() {
         try {
-            const response = await fetch('/api/tradable_symbols'); // Using the new endpoint
+            const response = await fetch(tradableSymbolsUrl);
             const symbols = await response.json();
             if (Array.isArray(symbols)) {
                 tradableSymbols = new Set(symbols.map(s => s.toUpperCase()));
@@ -401,7 +406,7 @@
         };
         const executeClose = () => {
             $.ajax({
-                url: '/api/internal/proxy_trade', method: 'POST', contentType: 'application/json',
+                url: proxyTradeUrl, method: 'POST', contentType: 'application/json',
                 data: JSON.stringify({symbol: symbol, action: "close", user: "Dashboard"}),
                 success: function(response){
                     const parsed = parseProxyResult(response);
@@ -593,7 +598,7 @@
                 }); return;
             }
             $.ajax({
-                url: '/api/internal/proxy_trade', method: 'POST', contentType: 'application/json',
+                url: proxyTradeUrl, method: 'POST', contentType: 'application/json',
                 data: JSON.stringify({
                     symbol: sym,
                     action: side,

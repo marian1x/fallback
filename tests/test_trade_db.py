@@ -95,11 +95,6 @@ def test_record_closed_trade_fallback_on_unfilled_order(app, monkeypatch):
             asset_id='asset123'
         )
 
-        class FakeAPIError(Exception):
-            pass
-
-        monkeypatch.setattr(trade_db.tradeapi.rest, "APIError", FakeAPIError, raising=False)
-
         class MockOrder:
             status = 'accepted'
             filled_avg_price = None
@@ -113,7 +108,7 @@ def test_record_closed_trade_fallback_on_unfilled_order(app, monkeypatch):
                 assert order_id == 'close123'
                 return MockOrder()
             def get_position(self, symbol):
-                raise FakeAPIError("position not found")
+                raise trade_db.AlpacaAPIError("position not found")
             def get_latest_trade(self, symbol):
                 return MockTrade()
 

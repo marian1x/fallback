@@ -122,6 +122,7 @@ let allTrades = [];
 let charts = {};
 let symbolPerformanceTable;
 let recentTradesTable;
+const closedOrdersUrl = "{{ url_for('api_closed_orders') }}";
 const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const currencyFormatterShort = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
@@ -195,7 +196,7 @@ function destroyChart(chartId) {
 function fetchAndComputeAnalytics() {
     const userId = $('#userFilter').length ? $('#userFilter').val() : '{{ g.user.id }}';
     
-    $.get('/api/closed_orders', { user_id: userId }, function(data) {
+    $.get(closedOrdersUrl, { user_id: userId }, function(data) {
         if (!Array.isArray(data)) {
             console.error('Closed orders API returned non-array response:', data);
             allTrades = [];

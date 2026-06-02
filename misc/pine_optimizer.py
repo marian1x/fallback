@@ -810,6 +810,10 @@ def main() -> None:
     parser.add_argument("--start", type=str, default=None, help="UTC ISO start override, e.g. 2023-01-03T00:00:00Z")
     parser.add_argument("--end", type=str, default=None, help="UTC ISO end override")
     parser.add_argument("--timezone", type=str, default="Europe/Bucharest")
+    parser.add_argument("--initial-capital", type=float, default=None)
+    parser.add_argument("--order-size", type=float, default=None)
+    parser.add_argument("--commission-pct", type=float, default=None)
+    parser.add_argument("--tick-size", type=float, default=None)
     parser.add_argument("--trials", type=int, default=250)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--top-k", type=int, default=20)
@@ -856,6 +860,15 @@ def main() -> None:
     if args.end:
         end_utc = pd.Timestamp(args.end, tz="UTC").to_pydatetime()
 
+    if args.initial_capital is not None:
+        cfg.initial_capital = float(args.initial_capital)
+    if args.order_size is not None:
+        cfg.order_size_usd = float(args.order_size)
+    if args.commission_pct is not None:
+        cfg.commission_pct = float(args.commission_pct)
+    if args.tick_size is not None:
+        base_params.tick_size = float(args.tick_size)
+
     if args.bars_csv:
         bars = load_bars_csv(args.bars_csv)
     else:
@@ -883,6 +896,20 @@ def main() -> None:
         "forced_take_profit_pct": parse_range(args.forced_tp_range, is_int=False),
         "trailing_offset_ticks": parse_range(args.trail_offset_range, is_int=True),
     }
+    if all(len(values) == 1 for values in ranges.values()):
+        base_params = StrategyParams(
+            trade_direction=args.trade_direction,
+            inner_kc_length=int(ranges["inner_kc_length"][0]),
+            inner_kc_mult=float(ranges["inner_kc_mult"][0]),
+            outer_kc_length=int(ranges["outer_kc_length"][0]),
+            outer_kc_mult=float(ranges["outer_kc_mult"][0]),
+            fixed_stop_loss_pct=float(ranges["fixed_stop_loss_pct"][0]),
+            fixed_take_profit_pct=float(ranges["fixed_take_profit_pct"][0]),
+            forced_stop_loss_pct=float(ranges["forced_stop_loss_pct"][0]),
+            forced_take_profit_pct=float(ranges["forced_take_profit_pct"][0]),
+            trailing_offset_ticks=int(ranges["trailing_offset_ticks"][0]),
+            tick_size=base_params.tick_size,
+        )
 
     rng = random.Random(args.seed)
     seen = set()

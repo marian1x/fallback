@@ -100,6 +100,12 @@
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
 <script>
+    const healthDataUrl = "{{ url_for('api_admin_health_data') }}";
+    const serverVersionUrl = "{{ url_for('api_admin_server_version') }}";
+    const serverRestartUrl = "{{ url_for('api_admin_server_restart') }}";
+    const serverPullUpdatesUrl = "{{ url_for('api_admin_pull_updates') }}";
+    const serverRollbackUrl = "{{ url_for('api_admin_rollback') }}";
+
     function classifyLogLine(line) {
         const upper = line.toUpperCase();
         const isError = upper.includes(' ERROR') || upper.includes('ERROR:') || upper.includes('[ERROR]') ||
@@ -132,7 +138,7 @@
     }
 
     function fetchHealthData() {
-        $.get('/api/admin/health_data', function(data) {
+        $.get(healthDataUrl, function(data) {
             // Bot Status
             let statusHtml = '';
             if (data.bot_status === 'Active') {
@@ -185,7 +191,7 @@
     }
 
     function refreshServerVersion() {
-        $.get('/api/admin/server/version', function(data) {
+        $.get(serverVersionUrl, function(data) {
             $('#server-current-commit').html(renderCommitInfo(data.current));
             $('#server-last-good-commit').html(renderCommitInfo(data.last_good));
         }).fail(function() {
@@ -223,13 +229,13 @@
 
         $('#restartServerBtn').on('click', function() {
             if (!confirm('Restart the server now?')) return;
-            postServerAction('/api/admin/server/restart', {}, function() {
+            postServerAction(serverRestartUrl, {}, function() {
                 setServerStatus('Restart initiated. The page may refresh once the service is back online.');
             });
         });
 
         $('#pullUpdatesBtn').on('click', function() {
-            postServerAction('/api/admin/server/pull_updates', {}, function(data) {
+            postServerAction(serverPullUpdatesUrl, {}, function(data) {
                 if (!data.changed) {
                     setServerStatus('Already up to date.');
                     refreshServerVersion();
@@ -240,7 +246,7 @@
                 refreshServerVersion();
                 const confirmRestart = confirm(`Updates pulled:\n${after}\n\nRestart the server now?`);
                 if (confirmRestart) {
-                    postServerAction('/api/admin/server/restart', {}, function() {
+                    postServerAction(serverRestartUrl, {}, function() {
                         setServerStatus('Restart initiated after update.');
                     });
                 }
@@ -249,13 +255,13 @@
 
         $('#rollbackBtn').on('click', function() {
             if (!confirm('Rollback to the last known good commit?')) return;
-            postServerAction('/api/admin/server/rollback', {}, function(data) {
+            postServerAction(serverRollbackUrl, {}, function(data) {
                 const after = data.after ? `${data.after.short_hash} - ${data.after.subject}` : 'unknown';
                 setServerStatus(`Rolled back to: ${after}`);
                 refreshServerVersion();
                 const confirmRestart = confirm(`Rollback completed:\n${after}\n\nRestart the server now?`);
                 if (confirmRestart) {
-                    postServerAction('/api/admin/server/restart', {}, function() {
+                    postServerAction(serverRestartUrl, {}, function() {
                         setServerStatus('Restart initiated after rollback.');
                     });
                 }

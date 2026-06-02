@@ -1,282 +1,432 @@
 {% extends "base.html" %}
-{% block title %}Strategy Lab{% endblock %}
+{% block title %}Admin Strategy Lab{% endblock %}
+
+{% macro tip(text) -%}
+<i class="fa-solid fa-circle-info strategy-tip" data-bs-toggle="tooltip" data-bs-placement="top" title="{{ text }}"></i>
+{%- endmacro %}
 
 {% block content %}
-<div class="container-fluid my-4 animate__animated animate__fadeIn">
-    <div class="d-flex flex-column flex-md-row align-items-md-end justify-content-between mb-3">
+<div class="container-fluid my-4 animate__animated animate__fadeIn strategy-lab">
+    <div class="d-flex flex-column flex-lg-row align-items-lg-end justify-content-between gap-3 mb-3">
         <div>
-            <h3 class="mb-1">Strategy Lab</h3>
-            <div class="small text-muted">Configure local Pine-based strategy runs and review backtest metrics without TradingView.</div>
+            <h3 class="mb-1">Admin Strategy Lab</h3>
+            <div class="small text-muted">Keltner channel strategy stocks</div>
+        </div>
+        <div class="strategy-status-strip">
+            <span><i class="fa-solid fa-database me-1"></i>Live data: Alpaca</span>
+            <span><i class="fa-solid fa-clock me-1"></i>{{ config.timeframe }}</span>
+            <span><i class="fa-solid fa-signal me-1"></i>{{ config.feed|upper }}</span>
         </div>
     </div>
 
-    <form method="post" class="card shadow-sm mb-4">
-        <div class="card-header">
-            <i class="fa-solid fa-sliders me-2"></i>Strategy Configuration
-        </div>
-        <div class="card-body">
-            <div class="row g-3">
-                <div class="col-12 col-md-3">
-                    <label class="form-label small">Alpaca User</label>
-                    <select name="alpaca_user" class="form-select">
-                        <option value="">Auto (superuser/first user)</option>
-                        {% for user in users %}
-                        <option value="{{ user.username }}" {% if config.alpaca_user == user.username %}selected{% endif %}>
-                            {{ user.username }}
-                        </option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="col-6 col-md-2">
-                    <label class="form-label small">Symbol</label>
-                    <input type="text" name="symbol" class="form-control" value="{{ config.symbol }}" required>
-                </div>
-                <div class="col-6 col-md-2">
-                    <label class="form-label small">Timeframe</label>
-                    <select name="timeframe" class="form-select">
-                        {% for tf in ['5Min', '15Min', '30Min', '1Hour'] %}
-                        <option value="{{ tf }}" {% if config.timeframe == tf %}selected{% endif %}>{{ tf }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="col-6 col-md-2">
-                    <label class="form-label small">Session</label>
-                    <select name="session" class="form-select">
-                        {% for s in ['regular', 'extended', 'all'] %}
-                        <option value="{{ s }}" {% if config.session == s %}selected{% endif %}>{{ s }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="col-6 col-md-1">
-                    <label class="form-label small">Feed</label>
-                    <select name="feed" class="form-select">
-                        {% for s in ['sip', 'iex'] %}
-                        <option value="{{ s }}" {% if config.feed == s %}selected{% endif %}>{{ s }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="col-6 col-md-1">
-                    <label class="form-label small">Live Data</label>
-                    <input type="text" class="form-control" value="Alpaca" disabled>
-                </div>
-                <div class="col-6 col-md-1">
-                    <label class="form-label small">Trials</label>
-                    <input type="number" min="1" name="trials" class="form-control" value="{{ config.trials }}">
-                </div>
-                <div class="col-6 col-md-1">
-                    <label class="form-label small">Top K</label>
-                    <input type="number" min="1" name="top_k" class="form-control" value="{{ config.top_k }}">
-                </div>
-            </div>
-
-            <div class="row g-3 mt-1">
-                <div class="col-6 col-md-2">
-                    <label class="form-label small">Trade Direction</label>
-                    <select name="trade_direction" class="form-select">
-                        {% for d in ['Both', 'Long Only', 'Short Only'] %}
-                        <option value="{{ d }}" {% if config.trade_direction == d %}selected{% endif %}>{{ d }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="col-6 col-md-2">
-                    <label class="form-label small">Inner Len Range</label>
-                    <input type="text" name="inner_len_range" class="form-control" value="{{ config.inner_len_range }}">
-                </div>
-                <div class="col-6 col-md-2">
-                    <label class="form-label small">Inner Mult Range</label>
-                    <input type="text" name="inner_mult_range" class="form-control" value="{{ config.inner_mult_range }}">
-                </div>
-                <div class="col-6 col-md-2">
-                    <label class="form-label small">Outer Len Range</label>
-                    <input type="text" name="outer_len_range" class="form-control" value="{{ config.outer_len_range }}">
-                </div>
-                <div class="col-6 col-md-2">
-                    <label class="form-label small">Outer Mult Range</label>
-                    <input type="text" name="outer_mult_range" class="form-control" value="{{ config.outer_mult_range }}">
-                </div>
-                <div class="col-6 col-md-2">
-                    <label class="form-label small">Trail Offset Range</label>
-                    <input type="text" name="trail_offset_range" class="form-control" value="{{ config.trail_offset_range }}">
-                </div>
-            </div>
-
-            <div class="row g-3 mt-1">
-                <div class="col-6 col-md-3">
-                    <label class="form-label small">Fixed SL Range</label>
-                    <input type="text" name="fixed_sl_range" class="form-control" value="{{ config.fixed_sl_range }}">
-                </div>
-                <div class="col-6 col-md-3">
-                    <label class="form-label small">Fixed TP Range</label>
-                    <input type="text" name="fixed_tp_range" class="form-control" value="{{ config.fixed_tp_range }}">
-                </div>
-                <div class="col-6 col-md-3">
-                    <label class="form-label small">Forced SL Range</label>
-                    <input type="text" name="forced_sl_range" class="form-control" value="{{ config.forced_sl_range }}">
-                </div>
-                <div class="col-6 col-md-3">
-                    <label class="form-label small">Forced TP Range</label>
-                    <input type="text" name="forced_tp_range" class="form-control" value="{{ config.forced_tp_range }}">
-                </div>
-            </div>
-
-            <div class="mt-4">
-                <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2 mb-2">
-                    <h6 class="mb-0"><i class="fa-solid fa-list-check me-2"></i>Signal Universe</h6>
-                    <button type="button" id="addUniverseRow" class="btn btn-sm btn-outline-primary">
-                        <i class="fa-solid fa-plus me-1"></i>Add Stock
+    <form method="post" id="strategyConfigForm">
+        <div class="strategy-workbench">
+            <ul class="nav nav-pills strategy-main-tabs mb-3" id="strategyMainTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="tester-tab" data-bs-toggle="pill" data-bs-target="#tester-pane" type="button" role="tab" data-strategy-tip title="Ruleaza backtest cu setari identice cu TradingView sau cauta combinatii prin optimizer.">
+                        <i class="fa-solid fa-chart-line me-2"></i>Strategy Tester
                     </button>
-                </div>
-                <div class="table-responsive">
-                    <table class="table table-sm align-middle" id="universeTable">
-                        <thead>
-                            <tr>
-                                <th style="min-width: 160px;">Symbol</th>
-                                <th style="min-width: 140px;">Mode</th>
-                                <th style="min-width: 90px;">Active</th>
-                                <th style="min-width: 180px;">Notes</th>
-                                <th class="text-end">Action</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for item in config.universe %}
-                            <tr>
-                                <td>
-                                    <input type="text" name="universe_symbol[]" class="form-control form-control-sm universe-symbol" value="{{ item.symbol }}" list="strategy-symbols" required>
-                                </td>
-                                <td>
-                                    <select name="universe_mode[]" class="form-select form-select-sm">
-                                        <option value="local" {% if item.mode == 'local' %}selected{% endif %}>Local</option>
-                                        <option value="tw" {% if item.mode == 'tw' %}selected{% endif %}>TradingView</option>
-                                        <option value="both" {% if item.mode == 'both' %}selected{% endif %}>Both</option>
-                                        <option value="disabled" {% if item.mode == 'disabled' %}selected{% endif %}>Disabled</option>
-                                    </select>
-                                </td>
-                                <td>
-                                    <input type="hidden" name="universe_enabled[]" value="{{ '1' if item.enabled else '0' }}">
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input universe-enabled-toggle" type="checkbox" {% if item.enabled %}checked{% endif %}>
-                                    </div>
-                                </td>
-                                <td>
-                                    <input type="text" name="universe_notes[]" class="form-control form-control-sm" value="{{ item.notes }}">
-                                </td>
-                                <td class="text-end">
-                                    <button type="button" class="btn btn-sm btn-outline-danger remove-universe-row" title="Remove symbol">
-                                        <i class="fa-solid fa-trash"></i>
-                                    </button>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-                <datalist id="strategy-symbols">
-                    {% for symbol in tradable_symbols %}
-                    <option value="{{ symbol }}"></option>
-                    {% endfor %}
-                </datalist>
-            </div>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="routing-tab" data-bs-toggle="pill" data-bs-target="#routing-pane" type="button" role="tab" data-strategy-tip title="Configureaza sursa semnalelor pentru fiecare simbol: local, TradingView, ambele sau dezactivat.">
+                        <i class="fa-solid fa-route me-2"></i>Bot Routing
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="results-tab" data-bs-toggle="pill" data-bs-target="#results-pane" type="button" role="tab" data-strategy-tip title="Vezi rezultatul ultimei rulari si topul parametrilor testati.">
+                        <i class="fa-solid fa-table-list me-2"></i>Results
+                    </button>
+                </li>
+            </ul>
 
-            <div class="form-check mt-3">
-                <input class="form-check-input" type="checkbox" name="enabled" id="strategyEnabled" {% if config.enabled %}checked{% endif %}>
-                <label class="form-check-label" for="strategyEnabled">
-                    Enable local strategy mode (configuration is saved for future live automation)
-                </label>
+            <div class="tab-content">
+                <div class="tab-pane fade show active" id="tester-pane" role="tabpanel" aria-labelledby="tester-tab">
+                    <div class="strategy-panel">
+                        <div class="strategy-panel-header">
+                            <span>Strategy Tester</span>
+                            <div class="small text-muted">TradingView-compatible layout</div>
+                        </div>
+                        <div class="strategy-panel-body">
+                            <ul class="nav nav-tabs strategy-subtabs mb-4" id="testerSubTabs" role="tablist">
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link active" id="inputs-tab" data-bs-toggle="tab" data-bs-target="#inputs-pane" type="button" role="tab" data-strategy-tip title="Parametrii strategiei Pine: Keltner, interval de backtest si stop loss/take profit.">Inputs</button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="properties-tab" data-bs-toggle="tab" data-bs-target="#properties-pane" type="button" role="tab" data-strategy-tip title="Setari de simulare ca in TradingView: capital, marime ordin, comision, slippage si recalculare.">Properties</button>
+                                </li>
+                                <li class="nav-item" role="presentation">
+                                    <button class="nav-link" id="optimizer-tab" data-bs-toggle="tab" data-bs-target="#optimizer-pane" type="button" role="tab" data-strategy-tip title="Off ruleaza exact valorile din Inputs. On cauta automat combinatii in intervalele definite aici.">Optimization</button>
+                                </li>
+                            </ul>
+
+                            <div class="tab-content">
+                                <div class="tab-pane fade show active" id="inputs-pane" role="tabpanel">
+                                    <div class="tw-settings">
+                                        <div class="tw-section-label">Keltner Channel Settings</div>
+                                        <div class="tw-row">
+                                            <label>Inner KC Length {{ tip('Number of bars used for the inner Keltner channel EMA. Example: 33 smooths signals more than 13.') }}</label>
+                                            <input type="number" name="inner_kc_length" class="form-control" value="{{ config.inner_kc_length }}" min="1" step="1">
+                                        </div>
+                                        <div class="tw-row">
+                                            <label>Inner KC Multiplier {{ tip('ATR multiplier for the inner channel. Higher values widen the entry band and usually reduce trade frequency.') }}</label>
+                                            <input type="number" name="inner_kc_mult" class="form-control" value="{{ config.inner_kc_mult }}" step="0.1">
+                                        </div>
+                                        <div class="tw-row">
+                                            <label>Outer KC Length {{ tip('Number of bars used for the outer Keltner channel. This affects forced SL/TP reference behavior.') }}</label>
+                                            <input type="number" name="outer_kc_length" class="form-control" value="{{ config.outer_kc_length }}" min="1" step="1">
+                                        </div>
+                                        <div class="tw-row">
+                                            <label>Outer KC Multiplier {{ tip('ATR multiplier for the outer channel. Example: 3 is wider than 2 and changes extreme-band behavior.') }}</label>
+                                            <input type="number" name="outer_kc_mult" class="form-control" value="{{ config.outer_kc_mult }}" step="0.1">
+                                        </div>
+
+                                        <div class="tw-section-label">Backtest Range</div>
+                                        <div class="tw-row tw-row-wide">
+                                            <label>Start Date {{ tip('Backtest start in local Europe/Bucharest time. Alpaca request is converted to UTC.') }}</label>
+                                            <div class="d-flex gap-2">
+                                                <input type="date" name="backtest_start_date" class="form-control" value="{{ config.backtest_start_date }}">
+                                                <input type="time" name="backtest_start_time" class="form-control" value="{{ config.backtest_start_time }}">
+                                            </div>
+                                        </div>
+                                        <div class="tw-row tw-row-wide">
+                                            <label>End Date {{ tip('Backtest end in local Europe/Bucharest time. Future dates are capped to current time for Alpaca data.') }}</label>
+                                            <div class="d-flex gap-2">
+                                                <input type="date" name="backtest_end_date" class="form-control" value="{{ config.backtest_end_date }}">
+                                                <input type="time" name="backtest_end_time" class="form-control" value="{{ config.backtest_end_time }}">
+                                            </div>
+                                        </div>
+
+                                        <div class="tw-section-label">SL/TP Settings</div>
+                                        <div class="tw-row">
+                                            <label>Fixed Stop Loss (%) {{ tip('Close at bar close when the bar touches this loss threshold. Example: 4.7 means -4.7% from entry.') }}</label>
+                                            <input type="number" name="fixed_stop_loss_pct" class="form-control" value="{{ config.fixed_stop_loss_pct }}" step="0.1">
+                                        </div>
+                                        <div class="tw-row">
+                                            <label>Fixed Take Profit (%) {{ tip('Close at bar close when the bar touches this profit threshold. Example: 3.1 means +3.1% from entry.') }}</label>
+                                            <input type="number" name="fixed_take_profit_pct" class="form-control" value="{{ config.fixed_take_profit_pct }}" step="0.1">
+                                        </div>
+                                        <div class="tw-row">
+                                            <label>Forced Stop Loss (%) {{ tip('Intrabar stop-style exit. This is modeled closer to broker-emulator stop behavior.') }}</label>
+                                            <input type="number" name="forced_stop_loss_pct" class="form-control" value="{{ config.forced_stop_loss_pct }}" step="0.1">
+                                        </div>
+                                        <div class="tw-row">
+                                            <label>Forced Take Profit (%) {{ tip('Intrabar limit-style exit. This can fill before the candle close in the local emulator.') }}</label>
+                                            <input type="number" name="forced_take_profit_pct" class="form-control" value="{{ config.forced_take_profit_pct }}" step="0.1">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="tab-pane fade" id="properties-pane" role="tabpanel">
+                                    <div class="tw-settings">
+                                        <div class="tw-row">
+                                            <label>Initial capital {{ tip('Starting equity used in backtest performance calculations.') }}</label>
+                                            <input type="number" name="initial_capital" class="form-control" value="{{ config.initial_capital }}" step="1">
+                                        </div>
+                                        <div class="tw-row">
+                                            <label>Base currency {{ tip('Reporting currency. Current Alpaca integration assumes USD.') }}</label>
+                                            <select name="base_currency" class="form-select">
+                                                <option value="USD" {% if config.base_currency == 'USD' %}selected{% endif %}>USD</option>
+                                            </select>
+                                        </div>
+                                        <div class="tw-row tw-row-wide">
+                                            <label>Default order size {{ tip('Dollar notional per strategy order. Example: 2000 means each backtest trade uses about $2000.') }}</label>
+                                            <div class="d-flex gap-2">
+                                                <input type="number" name="order_size" class="form-control" value="{{ config.order_size }}" step="1">
+                                                <input type="text" class="form-control tw-unit" value="USD" disabled>
+                                            </div>
+                                        </div>
+                                        <div class="tw-row">
+                                            <label>Pyramiding {{ tip('Number of extra entries allowed while already in a position. Current bot/backtester uses 0.') }}</label>
+                                            <input type="number" name="pyramiding" class="form-control" value="{{ config.pyramiding }}" min="0" step="1">
+                                        </div>
+
+                                        <div class="tw-section-label">Cost Simulation</div>
+                                        <div class="tw-row">
+                                            <label>Commission {{ tip('Commission percent per side. Example: 0.04 means 0.04%.') }}</label>
+                                            <input type="number" name="commission_pct" class="form-control" value="{{ config.commission_pct }}" step="0.01">
+                                        </div>
+                                        <div class="tw-row">
+                                            <label>Verify price for limit orders {{ tip('TradingView setting in ticks. Kept for parity; local emulator currently records it but does not enforce queue verification.') }}</label>
+                                            <input type="number" name="verify_price_ticks" class="form-control" value="{{ config.verify_price_ticks }}" min="0" step="1">
+                                        </div>
+                                        <div class="tw-row">
+                                            <label>Slippage {{ tip('Slippage in ticks. Kept for parity; use this later for conservative local execution modeling.') }}</label>
+                                            <input type="number" name="slippage_ticks" class="form-control" value="{{ config.slippage_ticks }}" min="0" step="1">
+                                        </div>
+
+                                        <div class="tw-section-label">Margin</div>
+                                        <div class="tw-row">
+                                            <label>Margin for long positions {{ tip('TradingView margin percentage for long positions. Current Alpaca risk checks use account buying power separately.') }}</label>
+                                            <input type="number" name="margin_long_pct" class="form-control" value="{{ config.margin_long_pct }}" step="1">
+                                        </div>
+                                        <div class="tw-row">
+                                            <label>Margin for short positions {{ tip('TradingView margin percentage for short positions. Shorting also depends on Alpaca account permissions and borrow availability.') }}</label>
+                                            <input type="number" name="margin_short_pct" class="form-control" value="{{ config.margin_short_pct }}" step="1">
+                                        </div>
+
+                                        <div class="tw-section-label">Recalculate</div>
+                                        <div class="tw-check">
+                                            <input class="form-check-input" type="checkbox" name="recalc_after_order_filled" id="recalcAfterFill" {% if config.recalc_after_order_filled %}checked{% endif %}>
+                                            <label for="recalcAfterFill">After order is filled {{ tip('TradingView recalculation flag. Local strategy live mode will evaluate on completed Alpaca bars first.') }}</label>
+                                        </div>
+                                        <div class="tw-check">
+                                            <input class="form-check-input" type="checkbox" name="recalc_on_every_tick" id="recalcOnTick" {% if config.recalc_on_every_tick %}checked{% endif %}>
+                                            <label for="recalcOnTick">On every tick {{ tip('Tick-level evaluation can create behavior that differs from 30 minute bars. Keep off for TW parity.') }}</label>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="tab-pane fade" id="optimizer-pane" role="tabpanel">
+                                    <div class="strategy-grid">
+                                        <div>
+                                            <div class="form-check form-switch mb-3">
+                                                <input class="form-check-input" type="checkbox" name="optimize_enabled" id="optimizeEnabled" {% if config.optimize_enabled %}checked{% endif %}>
+                                                <label class="form-check-label" for="optimizeEnabled">Enable parameter optimization {{ tip('Off: run exact TW-style settings. On: run random search using the ranges below.') }}</label>
+                                            </div>
+                                            <div class="row g-3">
+                                                <div class="col-6 col-lg-3">
+                                                    <label class="form-label">Trials {{ tip('Number of random combinations to test. Higher values take longer.') }}</label>
+                                                    <input type="number" min="1" name="trials" class="form-control" value="{{ config.trials }}">
+                                                </div>
+                                                <div class="col-6 col-lg-3">
+                                                    <label class="form-label">Top K {{ tip('Number of best configurations saved in the results table.') }}</label>
+                                                    <input type="number" min="1" name="top_k" class="form-control" value="{{ config.top_k }}">
+                                                </div>
+                                                <div class="col-12 col-lg-3">
+                                                    <label class="form-label">Trade Direction {{ tip('Both tests long and short entries. Long Only and Short Only isolate one side.') }}</label>
+                                                    <select name="trade_direction" class="form-select">
+                                                        {% for d in ['Both', 'Long Only', 'Short Only'] %}
+                                                        <option value="{{ d }}" {% if config.trade_direction == d %}selected{% endif %}>{{ d }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+                                                <div class="col-12 col-lg-3">
+                                                    <label class="form-label">Trail Offset Range {{ tip('Current Pine script uses 4 ticks. Keep 4:4:1 for best TW parity.') }}</label>
+                                                    <input type="text" name="trail_offset_range" class="form-control" value="{{ config.trail_offset_range }}">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="row g-3 mt-1">
+                                            <div class="col-6 col-xl-3"><label class="form-label">Inner Len Range</label><input type="text" name="inner_len_range" class="form-control" value="{{ config.inner_len_range }}"></div>
+                                            <div class="col-6 col-xl-3"><label class="form-label">Inner Mult Range</label><input type="text" name="inner_mult_range" class="form-control" value="{{ config.inner_mult_range }}"></div>
+                                            <div class="col-6 col-xl-3"><label class="form-label">Outer Len Range</label><input type="text" name="outer_len_range" class="form-control" value="{{ config.outer_len_range }}"></div>
+                                            <div class="col-6 col-xl-3"><label class="form-label">Outer Mult Range</label><input type="text" name="outer_mult_range" class="form-control" value="{{ config.outer_mult_range }}"></div>
+                                            <div class="col-6 col-xl-3"><label class="form-label">Fixed SL Range</label><input type="text" name="fixed_sl_range" class="form-control" value="{{ config.fixed_sl_range }}"></div>
+                                            <div class="col-6 col-xl-3"><label class="form-label">Fixed TP Range</label><input type="text" name="fixed_tp_range" class="form-control" value="{{ config.fixed_tp_range }}"></div>
+                                            <div class="col-6 col-xl-3"><label class="form-label">Forced SL Range</label><input type="text" name="forced_sl_range" class="form-control" value="{{ config.forced_sl_range }}"></div>
+                                            <div class="col-6 col-xl-3"><label class="form-label">Forced TP Range</label><input type="text" name="forced_tp_range" class="form-control" value="{{ config.forced_tp_range }}"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="strategy-actions mt-4">
+                                <button type="submit" name="action" value="save" class="btn btn-outline-primary" data-strategy-tip title="Salveaza configuratia fara sa ruleze backtest.">
+                                    <i class="fa-solid fa-floppy-disk me-1"></i>Save
+                                </button>
+                                <button type="submit" name="action" value="run" class="btn btn-primary" data-strategy-tip title="Salveaza configuratia si ruleaza backtestul local cu date Alpaca.">
+                                    <i class="fa-solid fa-play me-1"></i>Run Backtest
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tab-pane fade" id="routing-pane" role="tabpanel" aria-labelledby="routing-tab">
+                    <div class="strategy-panel mb-3">
+                        <div class="strategy-panel-header">
+                            <span>Bot Routing</span>
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" name="enabled" id="strategyEnabled" {% if config.enabled %}checked{% endif %}>
+                                <label class="form-check-label" for="strategyEnabled">Local strategy enabled {{ tip('Master switch for local strategy automation. TW routing filters still apply by symbol mode.') }}</label>
+                            </div>
+                        </div>
+                        <div class="strategy-panel-body">
+                            <div class="row g-3 mb-3">
+                                <div class="col-12 col-lg-3">
+                                    <label class="form-label">Alpaca User {{ tip('Credentials used for backtests and live Alpaca snapshots. Auto uses superuser/first configured user.') }}</label>
+                                    <select name="alpaca_user" class="form-select">
+                                        <option value="">Auto</option>
+                                        {% for user in users %}
+                                        <option value="{{ user.username }}" {% if config.alpaca_user == user.username %}selected{% endif %}>{{ user.username }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-6 col-lg-2">
+                                    <label class="form-label">Symbol {{ tip('Primary symbol used when running a single backtest from Strategy Tester.') }}</label>
+                                    <input type="text" name="symbol" class="form-control" value="{{ config.symbol }}" required>
+                                </div>
+                                <div class="col-6 col-lg-2">
+                                    <label class="form-label">Timeframe {{ tip('Bar interval used for local strategy bars from Alpaca.') }}</label>
+                                    <select name="timeframe" class="form-select">
+                                        {% for tf in ['5Min', '15Min', '30Min', '1Hour'] %}
+                                        <option value="{{ tf }}" {% if config.timeframe == tf %}selected{% endif %}>{{ tf }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-6 col-lg-2">
+                                    <label class="form-label">Session {{ tip('regular uses US regular hours. extended uses non-regular hours. all uses every returned Alpaca bar.') }}</label>
+                                    <select name="session" class="form-select">
+                                        {% for s in ['regular', 'extended', 'all'] %}
+                                        <option value="{{ s }}" {% if config.session == s %}selected{% endif %}>{{ s }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-6 col-lg-1">
+                                    <label class="form-label">Feed {{ tip('sip is consolidated market data if your Alpaca plan allows it. iex is usually available on free plans but differs from TW.') }}</label>
+                                    <select name="feed" class="form-select">
+                                        {% for s in ['sip', 'iex'] %}
+                                        <option value="{{ s }}" {% if config.feed == s %}selected{% endif %}>{{ s }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="col-12 col-lg-2">
+                                    <label class="form-label">Live Data {{ tip('Local strategy reads bars/prices from Alpaca so signal generation and execution share the same source.') }}</label>
+                                    <input type="text" class="form-control" value="Alpaca" disabled>
+                                </div>
+                            </div>
+
+                            <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2 mb-2">
+                                <h6 class="mb-0"><i class="fa-solid fa-list-check me-2"></i>Signal Universe</h6>
+                                <button type="button" id="addUniverseRow" class="btn btn-sm btn-outline-primary" data-strategy-tip title="Adauga un simbol in lista de semnale. Simbolul este validat cu lista Alpaca tradable.">
+                                    <i class="fa-solid fa-plus me-1"></i>Add Stock
+                                </button>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="table table-sm align-middle" id="universeTable">
+                                    <thead>
+                                        <tr>
+                                            <th>Symbol {{ tip('Must be available in the Alpaca tradable list.') }}</th>
+                                            <th>Mode {{ tip('Local: ignore TW and use local strategy later. TradingView: TW only. Both: compare both. Disabled: block symbol.') }}</th>
+                                            <th>Active {{ tip('Fast on/off switch for this row.') }}</th>
+                                            <th>Notes</th>
+                                            <th class="text-end">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for item in config.universe %}
+                                        <tr>
+                                            <td><input type="text" name="universe_symbol[]" class="form-control form-control-sm universe-symbol" value="{{ item.symbol }}" list="strategy-symbols" required></td>
+                                            <td>
+                                                <select name="universe_mode[]" class="form-select form-select-sm">
+                                                    <option value="local" {% if item.mode == 'local' %}selected{% endif %}>Local</option>
+                                                    <option value="tw" {% if item.mode == 'tw' %}selected{% endif %}>TradingView</option>
+                                                    <option value="both" {% if item.mode == 'both' %}selected{% endif %}>Both</option>
+                                                    <option value="disabled" {% if item.mode == 'disabled' %}selected{% endif %}>Disabled</option>
+                                                </select>
+                                            </td>
+                                            <td>
+                                                <input type="hidden" name="universe_enabled[]" value="{{ '1' if item.enabled else '0' }}">
+                                                <div class="form-check form-switch"><input class="form-check-input universe-enabled-toggle" type="checkbox" {% if item.enabled %}checked{% endif %}></div>
+                                            </td>
+                                            <td><input type="text" name="universe_notes[]" class="form-control form-control-sm" value="{{ item.notes }}"></td>
+                                            <td class="text-end">
+                                                <button type="button" class="btn btn-sm btn-outline-danger remove-universe-row" title="Remove symbol"><i class="fa-solid fa-trash"></i></button>
+                                            </td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <datalist id="strategy-symbols"></datalist>
+                        </div>
+                    </div>
+
+                    <div class="strategy-panel">
+                        <div class="strategy-panel-header">
+                            <span>Alpaca Live Data</span>
+                            <button type="button" id="refreshLiveSnapshot" class="btn btn-sm btn-outline-primary" data-strategy-tip title="Citeste ultimul pret disponibil din Alpaca pentru simbolurile Local sau Both.">
+                                <i class="fa-solid fa-rotate me-1"></i>Refresh
+                            </button>
+                        </div>
+                        <div class="strategy-panel-body table-responsive">
+                            <div id="liveSnapshotMeta" class="small text-muted mb-2"></div>
+                            <table class="table table-sm align-middle mb-0">
+                                <thead><tr><th>Symbol</th><th>Mode</th><th>Price</th><th>Source</th><th>Status</th></tr></thead>
+                                <tbody id="liveSnapshotBody"><tr><td colspan="5" class="text-muted">No snapshot loaded.</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="tab-pane fade" id="results-pane" role="tabpanel" aria-labelledby="results-tab">
+                    {% if report %}
+                    <div class="row g-3 mb-3">
+                        <div class="col-12 col-lg-6">
+                            <div class="strategy-panel h-100">
+                                <div class="strategy-panel-header">Reference Result</div>
+                                <div class="strategy-panel-body strategy-metrics">
+                                    <div><span>Net Profit</span><strong>{{ report.reference_result.net_profit }}</strong></div>
+                                    <div><span>Return %</span><strong>{{ report.reference_result.return_pct }}</strong></div>
+                                    <div><span>Trades</span><strong>{{ report.reference_result.total_trades }}</strong></div>
+                                    <div><span>Win Rate %</span><strong>{{ report.reference_result.win_rate_pct }}</strong></div>
+                                    <div><span>Profit Factor</span><strong>{{ report.reference_result.profit_factor }}</strong></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-lg-6">
+                            <div class="strategy-panel h-100">
+                                <div class="strategy-panel-header">Best Result</div>
+                                <div class="strategy-panel-body strategy-metrics">
+                                    <div><span>Net Profit</span><strong>{{ report.best_result.net_profit }}</strong></div>
+                                    <div><span>Return %</span><strong>{{ report.best_result.return_pct }}</strong></div>
+                                    <div><span>Trades</span><strong>{{ report.best_result.total_trades }}</strong></div>
+                                    <div><span>Win Rate %</span><strong>{{ report.best_result.win_rate_pct }}</strong></div>
+                                    <div><span>Profit Factor</span><strong>{{ report.best_result.profit_factor }}</strong></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="strategy-panel">
+                        <div class="strategy-panel-header">Top Configurations</div>
+                        <div class="strategy-panel-body table-responsive">
+                            <table id="strategyTopTable" class="table table-sm table-striped">
+                                <thead>
+                                    <tr>
+                                        {% if top_rows %}
+                                        {% for key in top_rows[0].keys() %}
+                                        <th>{{ key }}</th>
+                                        {% endfor %}
+                                        {% endif %}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for row in top_rows %}
+                                    <tr>
+                                        {% for key, value in row.items() %}
+                                        <td>{{ value }}</td>
+                                        {% endfor %}
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="strategy-panel">
+                        <div class="strategy-panel-body text-muted">No backtest report generated yet.</div>
+                    </div>
+                    {% endif %}
+                </div>
             </div>
-        </div>
-        <div class="card-footer d-flex gap-2">
-            <button type="submit" name="action" value="save" class="btn btn-outline-primary">Save Config</button>
-            <button type="submit" name="action" value="run" class="btn btn-primary">Run Backtest + Optimize</button>
         </div>
     </form>
-
-    <div class="card shadow-sm mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <span><i class="fa-solid fa-satellite-dish me-2"></i>Alpaca Live Data</span>
-            <button type="button" id="refreshLiveSnapshot" class="btn btn-sm btn-outline-primary">
-                <i class="fa-solid fa-rotate me-1"></i>Refresh
-            </button>
-        </div>
-        <div class="card-body table-responsive">
-            <div id="liveSnapshotMeta" class="small text-muted mb-2"></div>
-            <table class="table table-sm align-middle mb-0">
-                <thead>
-                    <tr>
-                        <th>Symbol</th>
-                        <th>Mode</th>
-                        <th>Price</th>
-                        <th>Source</th>
-                        <th>Status</th>
-                    </tr>
-                </thead>
-                <tbody id="liveSnapshotBody">
-                    <tr><td colspan="5" class="text-muted">No snapshot loaded.</td></tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-
-    {% if report %}
-    <div class="row g-3 mb-3">
-        <div class="col-12 col-md-6">
-            <div class="card shadow-sm h-100">
-                <div class="card-header">Reference Result</div>
-                <div class="card-body small">
-                    <div>Net Profit: <strong>{{ report.reference_result.net_profit }}</strong></div>
-                    <div>Return %: <strong>{{ report.reference_result.return_pct }}</strong></div>
-                    <div>Trades: <strong>{{ report.reference_result.total_trades }}</strong></div>
-                    <div>Win Rate %: <strong>{{ report.reference_result.win_rate_pct }}</strong></div>
-                    <div>Profit Factor: <strong>{{ report.reference_result.profit_factor }}</strong></div>
-                </div>
-            </div>
-        </div>
-        <div class="col-12 col-md-6">
-            <div class="card shadow-sm h-100">
-                <div class="card-header">Best Result</div>
-                <div class="card-body small">
-                    <div>Net Profit: <strong>{{ report.best_result.net_profit }}</strong></div>
-                    <div>Return %: <strong>{{ report.best_result.return_pct }}</strong></div>
-                    <div>Trades: <strong>{{ report.best_result.total_trades }}</strong></div>
-                    <div>Win Rate %: <strong>{{ report.best_result.win_rate_pct }}</strong></div>
-                    <div>Profit Factor: <strong>{{ report.best_result.profit_factor }}</strong></div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="card shadow-sm">
-        <div class="card-header">Top Configurations</div>
-        <div class="card-body table-responsive">
-            <table id="strategyTopTable" class="table table-sm table-striped">
-                <thead>
-                    <tr>
-                        {% if top_rows %}
-                        {% for key in top_rows[0].keys() %}
-                        <th>{{ key }}</th>
-                        {% endfor %}
-                        {% endif %}
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for row in top_rows %}
-                    <tr>
-                        {% for key, value in row.items() %}
-                        <td>{{ value }}</td>
-                        {% endfor %}
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    {% endif %}
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
 $(document).ready(function() {
-    let tradableSymbols = new Set(Array.from(document.querySelectorAll('#strategy-symbols option')).map((el) => el.value.toUpperCase()));
+    let tradableSymbols = new Set();
+    const tradableSymbolsUrl = "{{ url_for('api_tradable_symbols') }}";
+    const liveSnapshotUrl = "{{ url_for('api_admin_strategy_live_snapshot') }}";
+
+    if (window.bootstrap && window.bootstrap.Tooltip) {
+        document.querySelectorAll('[data-strategy-tip]').forEach((el) => {
+            window.bootstrap.Tooltip.getOrCreateInstance(el);
+        });
+    }
 
     function normalizeSymbol(value) {
         return String(value || '').toUpperCase().replace(/\//g, '').trim();
@@ -284,13 +434,7 @@ $(document).ready(function() {
 
     function escapeHtml(value) {
         return String(value ?? '').replace(/[&<>"']/g, function(char) {
-            return ({
-                '&': '&amp;',
-                '<': '&lt;',
-                '>': '&gt;',
-                '"': '&quot;',
-                "'": '&#39;'
-            })[char];
+            return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char];
         });
     }
 
@@ -300,12 +444,8 @@ $(document).ready(function() {
     }
 
     function bindUniverseRow(row) {
-        row.find('.universe-enabled-toggle').on('change', function() {
-            syncEnabledHidden(row);
-        });
-        row.find('.remove-universe-row').on('click', function() {
-            row.remove();
-        });
+        row.find('.universe-enabled-toggle').on('change', function() { syncEnabledHidden(row); });
+        row.find('.remove-universe-row').on('click', function() { row.remove(); });
         row.find('.universe-symbol').on('input', function() {
             const normalized = normalizeSymbol($(this).val());
             $(this).val(normalized);
@@ -317,20 +457,16 @@ $(document).ready(function() {
         });
     }
 
-    $('#universeTable tbody tr').each(function() {
-        bindUniverseRow($(this));
-    });
+    $('#universeTable tbody tr').each(function() { bindUniverseRow($(this)); });
 
-    fetch('/api/tradable_symbols')
+    fetch(tradableSymbolsUrl)
         .then((response) => response.ok ? response.json() : [])
         .then((symbols) => {
             if (!Array.isArray(symbols)) return;
             const datalist = $('#strategy-symbols');
             datalist.empty();
             tradableSymbols = new Set(symbols.map((symbol) => String(symbol).toUpperCase()));
-            symbols.forEach((symbol) => {
-                datalist.append(`<option value="${escapeHtml(symbol)}"></option>`);
-            });
+            symbols.forEach((symbol) => datalist.append(`<option value="${escapeHtml(symbol)}"></option>`));
         });
 
     $('#addUniverseRow').on('click', function() {
@@ -345,18 +481,9 @@ $(document).ready(function() {
                         <option value="disabled">Disabled</option>
                     </select>
                 </td>
-                <td>
-                    <input type="hidden" name="universe_enabled[]" value="1">
-                    <div class="form-check form-switch">
-                        <input class="form-check-input universe-enabled-toggle" type="checkbox" checked>
-                    </div>
-                </td>
+                <td><input type="hidden" name="universe_enabled[]" value="1"><div class="form-check form-switch"><input class="form-check-input universe-enabled-toggle" type="checkbox" checked></div></td>
                 <td><input type="text" name="universe_notes[]" class="form-control form-control-sm"></td>
-                <td class="text-end">
-                    <button type="button" class="btn btn-sm btn-outline-danger remove-universe-row" title="Remove symbol">
-                        <i class="fa-solid fa-trash"></i>
-                    </button>
-                </td>
+                <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger remove-universe-row" title="Remove symbol"><i class="fa-solid fa-trash"></i></button></td>
             </tr>
         `);
         $('#universeTable tbody').append(row);
@@ -368,7 +495,7 @@ $(document).ready(function() {
         const button = $(this);
         button.prop('disabled', true);
         $('#liveSnapshotMeta').text('Loading...');
-        $.get('/api/admin/strategy/live_snapshot')
+        $.get(liveSnapshotUrl)
             .done(function(data) {
                 $('#liveSnapshotMeta').text(`Source: ${data.data_source} | User: ${data.api_user} | Feed: ${data.feed}`);
                 const body = $('#liveSnapshotBody');
@@ -380,24 +507,14 @@ $(document).ready(function() {
                 data.rows.forEach(function(row) {
                     const price = row.price === null || row.price === undefined ? '-' : Number(row.price).toFixed(4);
                     const statusClass = row.status === 'ok' ? 'text-success' : 'text-warning';
-                    body.append(`
-                        <tr>
-                            <td>${escapeHtml(row.symbol)}</td>
-                            <td>${escapeHtml(row.mode)}</td>
-                            <td>${price}</td>
-                            <td>${escapeHtml(row.source)}</td>
-                            <td class="${statusClass}">${escapeHtml(row.status)}</td>
-                        </tr>
-                    `);
+                    body.append(`<tr><td>${escapeHtml(row.symbol)}</td><td>${escapeHtml(row.mode)}</td><td>${price}</td><td>${escapeHtml(row.source)}</td><td class="${statusClass}">${escapeHtml(row.status)}</td></tr>`);
                 });
             })
             .fail(function(xhr) {
                 const detail = xhr.responseJSON?.error || xhr.responseText || 'Snapshot failed';
                 $('#liveSnapshotMeta').text(detail);
             })
-            .always(function() {
-                button.prop('disabled', false);
-            });
+            .always(function() { button.prop('disabled', false); });
     });
 
     if ($('#strategyTopTable').length) {

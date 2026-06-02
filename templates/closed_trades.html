@@ -108,6 +108,8 @@
     let allClosedOrders = [];
     let closedOrdersTable;
     let leaderboardTable;
+    const closedOrdersUrl = "{{ url_for('api_closed_orders') }}";
+    const performanceLeaderboardUrl = "{{ url_for('api_admin_performance_leaderboard') }}";
 
     function toLocalTime(isoString) {
         if (!isoString) return "-";
@@ -123,7 +125,7 @@
 
     function fetchAndRenderTrades() {
         const userId = $('#userFilter').length ? $('#userFilter').val() : '{{ g.user.id }}';
-        $.get('/api/closed_orders', { user_id: userId }, function(data) {
+        $.get(closedOrdersUrl, { user_id: userId }, function(data) {
             if (!Array.isArray(data)) {
                 console.error('Closed orders API returned non-array response:', data);
                 allClosedOrders = [];
@@ -204,7 +206,7 @@
             leaderboardTable = $('#leaderboardTable').DataTable({
                 paging: false, searching: false, info: false, responsive: true, autoWidth: false, order: [[2, 'desc']]
             });
-            $.get('/api/admin/performance_leaderboard', function(data) {
+            $.get(performanceLeaderboardUrl, function(data) {
                 leaderboardTable.clear();
                 data.forEach((user, index) => {
                     leaderboardTable.row.add([

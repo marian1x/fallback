@@ -12,6 +12,7 @@ import hmac
 import secrets
 from urllib.parse import urlsplit
 from functools import wraps
+from zoneinfo import ZoneInfo
 
 from flask import (
     Flask, request, render_template, jsonify, session,
@@ -452,10 +453,46 @@ def load_strategy_top_rows(limit=20):
         return []
     return rows
 
+def local_strategy_datetime_to_utc_iso(date_value, time_value, cap_now=False):
+    raw_date = str(date_value or '').strip()
+    raw_time = str(time_value or '00:00').strip() or '00:00'
+    try:
+        local_dt = datetime.strptime(f"{raw_date} {raw_time}", "%Y-%m-%d %H:%M")
+        local_dt = local_dt.replace(tzinfo=ZoneInfo("Europe/Bucharest"))
+        utc_dt = local_dt.astimezone(timezone.utc)
+        if cap_now:
+            now_utc = datetime.now(timezone.utc)
+            if utc_dt > now_utc:
+                utc_dt = now_utc
+        return utc_dt.isoformat().replace("+00:00", "Z")
+    except Exception:
+        return None
+
+def exact_range(value, step='0.1'):
+    return f"{value}:{value}:{step}"
+
 def run_strategy_optimizer(config):
     venv_python = os.path.join(REPO_PATH, "venv", "bin", "python")
     report_path = STRATEGY_REPORT_FILE
     top_path = STRATEGY_TOP_FILE
+    start_iso = local_strategy_datetime_to_utc_iso(
+        config.get("backtest_start_date"),
+        config.get("backtest_start_time"),
+    )
+    end_iso = local_strategy_datetime_to_utc_iso(
+        config.get("backtest_end_date"),
+        config.get("backtest_end_time"),
+        cap_now=True,
+    )
+    optimize_enabled = bool(config.get("optimize_enabled"))
+    inner_len_range = str(config.get("inner_len_range", "8:40:1")) if optimize_enabled else exact_range(int(config.get("inner_kc_length", 33)), "1")
+    inner_mult_range = str(config.get("inner_mult_range", "0.6:1.8:0.1")) if optimize_enabled else exact_range(config.get("inner_kc_mult", 1.7))
+    outer_len_range = str(config.get("outer_len_range", "8:40:1")) if optimize_enabled else exact_range(int(config.get("outer_kc_length", 23)), "1")
+    outer_mult_range = str(config.get("outer_mult_range", "1:4:1")) if optimize_enabled else exact_range(config.get("outer_kc_mult", 3.0))
+    fixed_sl_range = str(config.get("fixed_sl_range", "1.0:5.0:0.1")) if optimize_enabled else exact_range(config.get("fixed_stop_loss_pct", 4.7))
+    fixed_tp_range = str(config.get("fixed_tp_range", "0.8:4.0:0.1")) if optimize_enabled else exact_range(config.get("fixed_take_profit_pct", 3.1))
+    forced_sl_range = str(config.get("forced_sl_range", "3.0:10.0:0.2")) if optimize_enabled else exact_range(config.get("forced_stop_loss_pct", 9.0))
+    forced_tp_range = str(config.get("forced_tp_range", "3.0:10.0:0.2")) if optimize_enabled else exact_range(config.get("forced_take_profit_pct", 10.0))
     command = [
         venv_python,
         "misc/pine_optimizer.py",
@@ -466,18 +503,25 @@ def run_strategy_optimizer(config):
         "--trials", str(int(config.get("trials", 200))),
         "--top-k", str(int(config.get("top_k", 20))),
         "--trade-direction", str(config.get("trade_direction", "Both")),
-        "--inner-len-range", str(config.get("inner_len_range", "8:40:1")),
-        "--inner-mult-range", str(config.get("inner_mult_range", "0.6:1.8:0.1")),
-        "--outer-len-range", str(config.get("outer_len_range", "8:40:1")),
-        "--outer-mult-range", str(config.get("outer_mult_range", "1:4:1")),
-        "--fixed-sl-range", str(config.get("fixed_sl_range", "1.0:5.0:0.1")),
-        "--fixed-tp-range", str(config.get("fixed_tp_range", "0.8:4.0:0.1")),
-        "--forced-sl-range", str(config.get("forced_sl_range", "3.0:10.0:0.2")),
-        "--forced-tp-range", str(config.get("forced_tp_range", "3.0:10.0:0.2")),
+        "--inner-len-range", inner_len_range,
+        "--inner-mult-range", inner_mult_range,
+        "--outer-len-range", outer_len_range,
+        "--outer-mult-range", outer_mult_range,
+        "--fixed-sl-range", fixed_sl_range,
+        "--fixed-tp-range", fixed_tp_range,
+        "--forced-sl-range", forced_sl_range,
+        "--forced-tp-range", forced_tp_range,
         "--trail-offset-range", str(config.get("trail_offset_range", "4:4:1")),
+        "--initial-capital", str(config.get("initial_capital", 8000)),
+        "--order-size", str(config.get("order_size", 2000)),
+        "--commission-pct", str(config.get("commission_pct", 0.04)),
         "--report-json", report_path,
         "--top-csv", top_path,
     ]
+    if start_iso:
+        command.extend(["--start", start_iso])
+    if end_iso:
+        command.extend(["--end", end_iso])
     alpaca_user = str(config.get("alpaca_user", "") or "").strip()
     if alpaca_user:
         command.extend(["--alpaca-user", alpaca_user])
@@ -664,7 +708,14 @@ def admin_strategy():
             except Exception:
                 return default
 
+        def as_float(value, default):
+            try:
+                return float(str(value).strip())
+            except Exception:
+                return default
+
         config['enabled'] = 'enabled' in request.form
+        config['optimize_enabled'] = 'optimize_enabled' in request.form
         config['alpaca_user'] = request.form.get('alpaca_user', '').strip()
         config['symbol'] = request.form.get('symbol', config.get('symbol', 'TSM')).strip().upper()
         config['timeframe'] = request.form.get('timeframe', config.get('timeframe', '30Min')).strip()
@@ -672,6 +723,29 @@ def admin_strategy():
         config['feed'] = request.form.get('feed', config.get('feed', 'iex')).strip()
         config['live_data_source'] = 'alpaca'
         config['trade_direction'] = request.form.get('trade_direction', config.get('trade_direction', 'Both')).strip()
+        config['inner_kc_length'] = max(1, as_int(request.form.get('inner_kc_length', config.get('inner_kc_length', 33)), 33))
+        config['inner_kc_mult'] = as_float(request.form.get('inner_kc_mult', config.get('inner_kc_mult', 1.7)), 1.7)
+        config['outer_kc_length'] = max(1, as_int(request.form.get('outer_kc_length', config.get('outer_kc_length', 23)), 23))
+        config['outer_kc_mult'] = as_float(request.form.get('outer_kc_mult', config.get('outer_kc_mult', 3.0)), 3.0)
+        config['backtest_start_date'] = request.form.get('backtest_start_date', config.get('backtest_start_date', '2020-01-01')).strip()
+        config['backtest_start_time'] = request.form.get('backtest_start_time', config.get('backtest_start_time', '02:00')).strip()
+        config['backtest_end_date'] = request.form.get('backtest_end_date', config.get('backtest_end_date', '2030-12-31')).strip()
+        config['backtest_end_time'] = request.form.get('backtest_end_time', config.get('backtest_end_time', '02:00')).strip()
+        config['fixed_stop_loss_pct'] = as_float(request.form.get('fixed_stop_loss_pct', config.get('fixed_stop_loss_pct', 4.7)), 4.7)
+        config['fixed_take_profit_pct'] = as_float(request.form.get('fixed_take_profit_pct', config.get('fixed_take_profit_pct', 3.1)), 3.1)
+        config['forced_stop_loss_pct'] = as_float(request.form.get('forced_stop_loss_pct', config.get('forced_stop_loss_pct', 9.0)), 9.0)
+        config['forced_take_profit_pct'] = as_float(request.form.get('forced_take_profit_pct', config.get('forced_take_profit_pct', 10.0)), 10.0)
+        config['initial_capital'] = as_float(request.form.get('initial_capital', config.get('initial_capital', 8000)), 8000)
+        config['base_currency'] = request.form.get('base_currency', config.get('base_currency', 'USD')).strip().upper() or 'USD'
+        config['order_size'] = as_float(request.form.get('order_size', config.get('order_size', 2000)), 2000)
+        config['pyramiding'] = max(0, as_int(request.form.get('pyramiding', config.get('pyramiding', 0)), 0))
+        config['commission_pct'] = as_float(request.form.get('commission_pct', config.get('commission_pct', 0.04)), 0.04)
+        config['verify_price_ticks'] = max(0, as_int(request.form.get('verify_price_ticks', config.get('verify_price_ticks', 0)), 0))
+        config['slippage_ticks'] = max(0, as_int(request.form.get('slippage_ticks', config.get('slippage_ticks', 0)), 0))
+        config['margin_long_pct'] = as_float(request.form.get('margin_long_pct', config.get('margin_long_pct', 100)), 100)
+        config['margin_short_pct'] = as_float(request.form.get('margin_short_pct', config.get('margin_short_pct', 100)), 100)
+        config['recalc_after_order_filled'] = 'recalc_after_order_filled' in request.form
+        config['recalc_on_every_tick'] = 'recalc_on_every_tick' in request.form
         config['trials'] = max(1, as_int(request.form.get('trials', config.get('trials', 200)), 200))
         config['top_k'] = max(1, as_int(request.form.get('top_k', config.get('top_k', 20)), 20))
         config['inner_len_range'] = request.form.get('inner_len_range', config.get('inner_len_range', '8:40:1')).strip()

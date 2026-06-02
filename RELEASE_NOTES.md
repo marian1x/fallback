@@ -1,5 +1,28 @@
 # Release Notes
 
+## Version 2.2.1 - 2026-06-02
+
+### UI / Navigation
+- Reworked the global navigation into grouped menus: Dashboard, Trades, Analytics, and Admin.
+- Removed Bootstrap tooltip bindings from global nav items to avoid dropdown/menu rendering issues.
+- Refreshed the global visual theme with stronger card hierarchy, cleaner dropdowns, improved mobile nav spacing, and consistent accent styling.
+
+### Strategy Lab
+- Redesigned **Admin -> Strategy Lab** with separate areas for:
+  - Strategy Tester,
+  - Bot Routing,
+  - Results.
+- Added TradingView-style Strategy Tester tabs:
+  - Inputs,
+  - Properties,
+  - Optimization.
+- Added TradingView-aligned settings for Keltner inputs, backtest range, SL/TP, capital, order size, commission, slippage, margin, and recalculation flags.
+- Added contextual tooltips on Strategy Lab tabs, actions, and field labels with examples and tradeoffs.
+- Backtest runs now use exact Strategy Tester values by default; optimizer range search runs only when optimization is enabled.
+
+### Routing / Reverse Proxy
+- Replaced hardcoded frontend `/api/...` calls with Flask-generated URLs so AJAX requests work correctly when the app is served under `/trading`.
+
 ## Version 2.2.0 - 2026-06-02
 
 ### Alpaca Integration / Execution

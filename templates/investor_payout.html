@@ -58,6 +58,8 @@
 
 {% block scripts %}
 <script>
+    const investorPayoutDataUrl = "{{ url_for('api_investor_payout_data') }}";
+
     function formatCurrency(value) {
         return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
     }
@@ -67,7 +69,7 @@
         tableBody.innerHTML = '<tr><td colspan="5" class="text-center">Loading data...</td></tr>';
         
         try {
-            const response = await fetch('/api/investor_payout_data');
+            const response = await fetch(investorPayoutDataUrl);
             const data = await response.json();
             
             if (!response.ok) {

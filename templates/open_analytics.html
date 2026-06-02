@@ -101,6 +101,7 @@
 <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
 <script>
 let openAnalyticsCharts = {};
+const openPositionsUrl = "{{ url_for('api_open_positions') }}";
 
 function destroyChart(chartId) {
     if (openAnalyticsCharts[chartId]) {
@@ -157,7 +158,7 @@ function formatDurationFromHours(hours) {
 }
 
 function fetchOpenAnalytics() {
-    $.get('/api/open_positions', function(data){
+    $.get(openPositionsUrl, function(data){
         const table = $('#openTradesTable').DataTable();
         table.clear();
         const enriched = data.map(r => {

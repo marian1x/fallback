@@ -29,6 +29,8 @@
 
 {% block scripts %}
 <script>
+    const adminDashboardSummaryUrl = "{{ url_for('api_admin_dashboard_summary') }}";
+
     function colorPL(valStr) {
         if (!valStr || valStr === 'N/A' || valStr === 'Error' || valStr === 'No API Keys') {
             return `<span class="text-muted">${valStr}</span>`;
@@ -40,7 +42,7 @@
     }
 
     function fetchAdminSummary() {
-        $.get('/api/admin/dashboard_summary', function(data) {
+        $.get(adminDashboardSummaryUrl, function(data) {
             const table = $('#usersSummaryTable').DataTable();
             table.clear();
 

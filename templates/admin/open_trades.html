@@ -45,7 +45,10 @@
 
 {% block scripts %}
 <script>
-document.addEventListener('DOMContentLoaded', function() {
+    const adminAllOpenPositionsUrl = "{{ url_for('api_admin_all_open_positions') }}";
+    const adminCloseTradesUrl = "{{ url_for('api_admin_close_trades') }}";
+
+    document.addEventListener('DOMContentLoaded', function() {
     const tableBody = document.querySelector('#adminOpenTradesTable tbody');
     const userFilter = document.getElementById('userFilter');
     const selectAllCheckbox = document.getElementById('selectAllCheckbox');
@@ -91,7 +94,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function fetchAndRenderTable(userId = '') {
-        let url = '/api/admin/all_open_positions';
+        let url = adminAllOpenPositionsUrl;
         if (userId) {
             url += `?user_id=${userId}`;
         }
@@ -124,7 +127,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        fetch('/api/admin/close_trades', {
+        fetch(adminCloseTradesUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ trades: tradesToClose })
