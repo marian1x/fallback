@@ -16,6 +16,7 @@
 ### Remote Worker
 - Added `--workers` to the Linux remote worker and Windows 11 agent so multiple queued symbols can be processed in parallel.
 - Added queue locking in the PI5 API to prevent multiple remote worker threads from claiming the same job.
+- Increased the dashboard upload limit for remote optimizer completion payloads through `DASHBOARD_MAX_CONTENT_LENGTH_BYTES` (default `16MB`) to avoid `413` errors for larger reports.
 
 ## Version 2.4.0 - 2026-06-02
 

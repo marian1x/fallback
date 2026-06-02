@@ -50,7 +50,10 @@ app.config.update(
     SECRET_KEY=os.getenv('FLASK_SECRET', 'a_very_strong_and_random_secret_key_please_change'),
     UPLOAD_FOLDER=os.path.join(app.instance_path, 'uploads'),
     BACKUP_FOLDER=os.path.join(app.instance_path, 'backups'),
-    MAX_CONTENT_LENGTH=int(os.getenv('MAX_CONTENT_LENGTH_BYTES', str(512 * 1024))),
+    MAX_CONTENT_LENGTH=int(os.getenv(
+        'DASHBOARD_MAX_CONTENT_LENGTH_BYTES',
+        os.getenv('MAX_CONTENT_LENGTH_BYTES', str(16 * 1024 * 1024)),
+    )),
     PREFERRED_URL_SCHEME='https',
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',

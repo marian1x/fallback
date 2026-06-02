@@ -201,6 +201,8 @@ This creates an outbound SSH tunnel from Windows to the PI5 and polls `http://12
 
 Performance note: `CPU Jobs` in Strategy Lab controls parallel processes inside one optimizer run. Agent `--workers` controls how many queued symbols run at the same time. Avoid setting both high at once because that can oversubscribe the mini-PC.
 
+Remote completion payloads can include full optimizer reports and best-trade lists. The dashboard accepts these through `DASHBOARD_MAX_CONTENT_LENGTH_BYTES` (default `16MB`). Keep the trading webhook limit separate and small via `MAX_WEBHOOK_CONTENT_LENGTH` / Nginx.
+
 ## 훅 Webhook Configuration
 
 To trigger trades, you need to configure your webhook provider (e.g., TradingView) to send a `POST` request to the bot's webhook URL:
