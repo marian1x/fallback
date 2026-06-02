@@ -37,3 +37,11 @@ def test_get_last_price_crypto(monkeypatch):
             assert exchange == 'CBSE'
             return MockTrade()
     assert bot.get_last_price(MockAPI(), 'BTC/USD') == 25000.0
+
+def test_equity_limit_price_uses_alpaca_tick_size():
+    assert bot._build_limit_price(14.29, 'buy', equity=True) == 14.33
+    assert bot._build_limit_price(300.99, 'sell', equity=True) == 300.23
+
+def test_sub_dollar_equity_limit_price_allows_four_decimals():
+    assert bot._round_equity_limit_price(0.456789, 'buy') == 0.4568
+    assert bot._round_equity_limit_price(0.456789, 'sell') == 0.4567

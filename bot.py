@@ -120,11 +120,25 @@ def is_outside_regular_hours(now_utc=None):
     minutes = ny.hour * 60 + ny.minute
     return minutes < (9 * 60 + 30) or minutes >= (16 * 60)
 
-def _build_limit_price(last_price, side):
+def _round_equity_limit_price(price, side):
+    tick = 0.0001 if abs(float(price)) < 1 else 0.01
+    units = float(price) / tick
+    if side == "buy":
+        rounded = math.ceil(units) * tick
+    else:
+        rounded = math.floor(units) * tick
+    decimals = 4 if tick == 0.0001 else 2
+    return round(rounded, decimals)
+
+def _build_limit_price(last_price, side, equity=False):
     slip = max(0.0, OUTSIDE_RTH_LIMIT_SLIPPAGE_BPS) / 10000.0
     if side == "buy":
-        return round(last_price * (1 + slip), 4)
-    return round(last_price * (1 - slip), 4)
+        price = last_price * (1 + slip)
+    else:
+        price = last_price * (1 - slip)
+    if equity:
+        return _round_equity_limit_price(price, side)
+    return round(price, 4)
 
 def _safe_float(value):
     try:
@@ -420,7 +434,7 @@ def _resolve_equity_order_params(symbol, action, amount, last_price, payload):
         if AUTO_LIMIT_OUTSIDE_RTH:
             order_type = "limit"
             if limit_price is None:
-                limit_price = _build_limit_price(last_price, action)
+                limit_price = _build_limit_price(last_price, action, equity=True)
         else:
             raise ValueError("Extended-hours orders must use limit type. Set order_type=limit.")
 
@@ -435,7 +449,9 @@ def _resolve_equity_order_params(symbol, action, amount, last_price, payload):
             tif = "day"
 
     if order_type == "limit" and limit_price is None:
-        limit_price = _build_limit_price(last_price, action)
+        limit_price = _build_limit_price(last_price, action, equity=True)
+    elif order_type == "limit":
+        limit_price = _round_equity_limit_price(limit_price, action)
 
     order_params = {
         "symbol": symbol,
