@@ -1,5 +1,20 @@
 # Release Notes
 
+## Version 2.6.0 - 2026-06-02
+
+### Local Strategy Engine
+- Added a live local strategy engine in `fallback.service` for Signal Universe symbols set to `Local` or `Both`.
+- The engine evaluates entries on fully closed Alpaca bars using each symbol's saved optimizer parameters.
+- Added Alpaca position checks before every local open/close decision to avoid duplicate or blind orders.
+- Added local order idempotency through deterministic `client_order_id` values for local entry signals.
+- Added persistent recovery state for failed order attempts in `instance/local_strategy_state.json`.
+- Added close-order recovery retries that continue until the position is no longer open or the order succeeds.
+- Added `local_strategy.log` for decisions, skips, order attempts, and recovery outcomes.
+
+### Safety Controls
+- Added `LOCAL_STRATEGY_ENGINE_AUTOSTART`, `LOCAL_STRATEGY_DRY_RUN`, `LOCAL_STRATEGY_POLL_SECONDS`, and recovery backoff env controls.
+- Local strategy orders reuse the existing bot risk gates and Alpaca order handling path.
+
 ## Version 2.5.0 - 2026-06-02
 
 ### Strategy Lab

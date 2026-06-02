@@ -157,6 +157,29 @@ Useful flags:
 
 Admins can also use the web UI at `Admin Tools -> Admin Strategy Lab` (`/admin/strategy`) to configure strategy runs, run a batch of symbols, inspect completed run configuration/trades, add a selected run to Signal Universe, and compare local vs TradingView signal routing per symbol.
 
+### Local Strategy Engine
+
+When `Local strategy enabled` is active in Strategy Lab, the bot service starts a conservative local strategy engine for symbols whose Signal Universe mode is `Local` or `Both`.
+
+Runtime behavior:
+
+- Evaluates entries only on fully closed Alpaca bars for each symbol's saved backtest timeframe.
+- Uses the saved optimizer parameters from Signal Universe.
+- Checks Alpaca position state before every open or close decision.
+- Sends local orders through the same risk-gated execution path used by webhook/manual trading.
+- Persists retry/recovery state in `instance/local_strategy_state.json`.
+- Logs decisions and recovery attempts to `local_strategy.log`.
+
+Useful env vars:
+
+- `LOCAL_STRATEGY_ENGINE_AUTOSTART=true`: start the local engine with `fallback.service`.
+- `LOCAL_STRATEGY_DRY_RUN=false`: log decisions without submitting orders when set to `true`.
+- `LOCAL_STRATEGY_POLL_SECONDS=15`: engine polling interval.
+- `LOCAL_STRATEGY_OPEN_RECOVERY_MAX_ATTEMPTS=3`: max retries for failed opens.
+- `LOCAL_STRATEGY_CLOSE_RECOVERY_MAX_ATTEMPTS=0`: close retries; `0` means keep retrying until obsolete/success.
+- `LOCAL_STRATEGY_RECOVERY_BASE_SECONDS=15`: first retry delay.
+- `LOCAL_STRATEGY_RECOVERY_MAX_SECONDS=300`: max retry delay.
+
 ### Remote Optimizer Worker
 
 For heavier optimization runs, Strategy Lab can queue the job on the PI5 and let another machine run the calculation. The PI5 downloads Alpaca OHLC bars and sends only historical bar data plus optimizer parameters to the worker. Alpaca credentials stay on the PI5.

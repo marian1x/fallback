@@ -10,10 +10,12 @@ import math
 import hmac
 import threading
 import time
+import sys
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from alpaca_api import AlpacaAPIError, LegacyCompatibleAlpacaClient, TradeUpdatesHub
+from local_strategy_engine import LocalStrategyEngine
 from models import db, User, Trade
 import strategy_config as strategy_store
 from utils import decrypt_data
@@ -57,11 +59,17 @@ OUTSIDE_RTH_LIMIT_SLIPPAGE_BPS = float(os.getenv("OUTSIDE_RTH_LIMIT_SLIPPAGE_BPS
 RECENT_SIGNAL_CACHE = {}
 RECENT_SIGNAL_LOCK = threading.Lock()
 TRADE_UPDATES = TradeUpdatesHub(logger=logging.getLogger("trades_logger"))
+LOCAL_STRATEGY_ENGINE = None
 
 @atexit.register
 def _shutdown_streams():
     try:
         TRADE_UPDATES.stop_all()
+    except Exception:
+        pass
+    try:
+        if LOCAL_STRATEGY_ENGINE:
+            LOCAL_STRATEGY_ENGINE.stop()
     except Exception:
         pass
 
@@ -71,6 +79,12 @@ handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
 logger = logging.getLogger('trades_logger')
 logger.setLevel(logging.INFO)
 logger.addHandler(handler)
+
+local_strategy_handler = RotatingFileHandler('local_strategy.log', maxBytes=200000, backupCount=5)
+local_strategy_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+local_strategy_logger = logging.getLogger('local_strategy_logger')
+local_strategy_logger.setLevel(logging.INFO)
+local_strategy_logger.addHandler(local_strategy_handler)
 
 if INTERNAL_API_KEY == "your-very-secret-internal-key":
     logger.warning("[SECURITY] INTERNAL_API_KEY is using a default value. Set a unique secret in .env.")
@@ -415,6 +429,9 @@ def _resolve_equity_order_params(symbol, action, amount, last_price, payload):
         "time_in_force": tif,
         "extended_hours": bool(extended_hours),
     }
+    client_order_id = str(payload.get("client_order_id", "") or "").strip()
+    if client_order_id:
+        order_params["client_order_id"] = client_order_id[:48]
 
     if action == "buy":
         order_params["notional"] = float(amount)
@@ -561,6 +578,9 @@ def process_trade_for_user(user, payload):
                     "qty": qty,
                     "time_in_force": tif,
                 }
+                client_order_id = str(payload.get("client_order_id", "") or "").strip()
+                if client_order_id:
+                    order_params["client_order_id"] = client_order_id[:48]
                 limit_price = _safe_float(payload.get("limit_price"))
                 if order_params["type"] == "limit":
                     order_params["limit_price"] = limit_price if limit_price else _build_limit_price(last_price, action.lower())
@@ -758,6 +778,27 @@ def webhook():
         "success_count": success_count,
         "results": results
     }), overall_status
+
+
+def start_local_strategy_engine_once():
+    global LOCAL_STRATEGY_ENGINE
+    if LOCAL_STRATEGY_ENGINE is not None:
+        return
+    if os.getenv("LOCAL_STRATEGY_ENGINE_AUTOSTART", "true").lower() not in ("1", "true", "yes", "y"):
+        logger.info("[LOCAL_STRATEGY] Autostart disabled by LOCAL_STRATEGY_ENGINE_AUTOSTART.")
+        return
+    if any("pytest" in arg for arg in sys.argv):
+        return
+    LOCAL_STRATEGY_ENGINE = LocalStrategyEngine(
+        flask_app=app,
+        execute_trade=process_trade_for_user,
+        base_url=BASE_URL,
+        logger=local_strategy_logger,
+    )
+    LOCAL_STRATEGY_ENGINE.start()
+
+
+start_local_strategy_engine_once()
 
 if __name__ == "__main__":
     app.run(host=HOST, port=PORT)
