@@ -514,8 +514,10 @@ def list_strategy_jobs(limit=8):
     for name in os.listdir(STRATEGY_JOBS_DIR):
         if not name.endswith(".json"):
             continue
+        if name.endswith("_report.json") or name.endswith(".tmp"):
+            continue
         job = load_strategy_job(name[:-5])
-        if job:
+        if job and isinstance(job, dict) and job.get('id') == name[:-5]:
             jobs.append(job)
     jobs.sort(key=lambda item: item.get('created_at_utc', ''), reverse=True)
     return jobs[:limit]

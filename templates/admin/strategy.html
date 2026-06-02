@@ -432,7 +432,7 @@
 
                 <div class="tab-pane fade" id="results-pane" role="tabpanel" aria-labelledby="results-tab">
                     <div class="row g-3 mb-3">
-                        <div class="col-12 col-xl-6">
+                        <div class="col-12 col-xl-4">
                             <div class="strategy-panel h-100">
                                 <div class="strategy-panel-header">Latest Backtest</div>
                                 <div class="strategy-panel-body">
@@ -455,13 +455,13 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="col-12 col-xl-6">
+                        <div class="col-12 col-xl-8">
                             <div class="strategy-panel h-100">
                                 <div class="strategy-panel-header">Optimizer Runs</div>
                                 <div class="strategy-panel-body">
                                     {% if all_jobs %}
-                                    <div class="table-responsive">
-                                        <table class="table table-sm align-middle mb-0">
+                                    <div class="table-responsive strategy-runs-wrap">
+                                        <table class="table table-sm align-middle mb-0 strategy-runs-table">
                                             <thead>
                                                 <tr>
                                                     <th>Stock</th>
@@ -471,14 +471,14 @@
                                                     <th>Return</th>
                                                     <th>Win</th>
                                                     <th>DD</th>
-                                                    <th class="text-end">Action</th>
+                                                    <th>Action</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
                                                 {% for job in all_jobs %}
                                                 <tr>
                                                     <td>
-                                                        <div class="d-flex align-items-center gap-2">
+                                                        <div class="d-flex align-items-center gap-1 flex-wrap">
                                                             <span>{{ job.symbol }}</span>
                                                             {% if job.signal_exact_match %}
                                                             <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle" data-strategy-tip title="Aceasta configuratie exacta a fost adaugata in Signal Universe.">In Signals</span>
@@ -493,7 +493,7 @@
                                                     <td>{{ job.summary.metrics.return_pct if job.summary else '-' }}{% if job.summary %}%{% endif %}</td>
                                                     <td>{{ job.summary.metrics.win_rate_pct if job.summary else '-' }}{% if job.summary %}%{% endif %}</td>
                                                     <td>{{ job.summary.metrics.max_drawdown_pct if job.summary else '-' }}{% if job.summary %}%{% endif %}</td>
-                                                    <td class="text-end text-nowrap">
+                                                    <td class="strategy-run-actions">
                                                         <button class="btn btn-sm btn-link px-1" type="button" data-bs-toggle="collapse" data-bs-target="#runDetails{{ loop.index }}">Details</button>
                                                         {% if job.status == 'completed' and job.summary %}
                                                             {% if job.signal_exact_match %}
@@ -651,7 +651,29 @@ $(document).ready(function() {
 
     if (window.bootstrap && window.bootstrap.Tooltip) {
         document.querySelectorAll('[data-strategy-tip]').forEach((el) => {
-            window.bootstrap.Tooltip.getOrCreateInstance(el);
+            const tip = window.bootstrap.Tooltip.getOrCreateInstance(el, {
+                trigger: 'hover focus',
+                delay: { show: 120, hide: 80 }
+            });
+            el.addEventListener('mouseleave', () => tip.hide());
+            el.addEventListener('blur', () => tip.hide());
+            el.addEventListener('click', () => tip.hide());
+        });
+        document.addEventListener('click', (event) => {
+            document.querySelectorAll('[data-strategy-tip]').forEach((el) => {
+                if (!el.contains(event.target)) {
+                    const tip = window.bootstrap.Tooltip.getInstance(el);
+                    if (tip) tip.hide();
+                }
+            });
+        });
+        document.querySelectorAll('[data-bs-toggle="pill"], [data-bs-toggle="tab"]').forEach((el) => {
+            el.addEventListener('shown.bs.tab', () => {
+                document.querySelectorAll('[data-strategy-tip]').forEach((tipEl) => {
+                    const tip = window.bootstrap.Tooltip.getInstance(tipEl);
+                    if (tip) tip.hide();
+                });
+            });
         });
     }
 
