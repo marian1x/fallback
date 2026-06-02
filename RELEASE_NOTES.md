@@ -1,5 +1,22 @@
 # Release Notes
 
+## Version 2.5.0 - 2026-06-02
+
+### Strategy Lab
+- Strategy Tester now accepts a comma/newline-separated list of stock symbols and creates a separate optimizer run for each symbol.
+- Results now show optimizer run history across local and remote jobs, including status, return, win rate, drawdown, and selected action.
+- Completed runs can be expanded to inspect the winning configuration and the generated trade list.
+- A selected completed run can be added directly to Signal Universe from Bot Routing.
+
+### Optimizer Performance
+- Added `--jobs` / `CPU Jobs` for multiprocessing inside a single optimizer run.
+- `0` means auto parallelism (`cpu_count - 1`); use `1` to force single-process behavior.
+- Updated scoring to rank combinations by return, win rate, profit factor, Sharpe, and explicit drawdown penalty.
+
+### Remote Worker
+- Added `--workers` to the Linux remote worker and Windows 11 agent so multiple queued symbols can be processed in parallel.
+- Added queue locking in the PI5 API to prevent multiple remote worker threads from claiming the same job.
+
 ## Version 2.4.0 - 2026-06-02
 
 ### Strategy Optimizer

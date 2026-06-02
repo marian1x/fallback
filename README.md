@@ -139,6 +139,7 @@ You can optimize the local Pine strategy parameters without TradingView using:
 source venv/bin/activate
 python3 misc/pine_optimizer.py \
   --trials 300 \
+  --jobs 0 \
   --session regular \
   --feed iex \
   --report-json misc/optimizer_report.json \
@@ -151,9 +152,10 @@ Useful flags:
 - `--feed iex|sip`: data feed selection (`iex` usually works on free plans).
 - `--bars-csv /path/to/bars.csv`: run backtests from local CSV data.
 - `--timeframes 5Min,10Min,15Min,30Min,1Hour,2Hour,1Day`: sweep chart intervals and rank the best global result.
+- `--jobs 0`: run optimizer trials in parallel (`0` means auto `cpu_count - 1`; use `1` for single-process).
 - `--top-k 20`: number of best configurations saved.
 
-Admins can also use the web UI at `Admin Tools -> Admin Strategy Lab` (`/admin/strategy`) to configure strategy runs, manage the signal universe, and compare local vs TradingView signal routing per symbol.
+Admins can also use the web UI at `Admin Tools -> Admin Strategy Lab` (`/admin/strategy`) to configure strategy runs, run a batch of symbols, inspect completed run configuration/trades, add a selected run to Signal Universe, and compare local vs TradingView signal routing per symbol.
 
 ### Remote Optimizer Worker
 
@@ -170,7 +172,8 @@ pip install -r requirements.txt
 export STRATEGY_WORKER_TOKEN="same_value_as_PI5_STRATEGY_WORKER_TOKEN"
 python misc/remote_optimizer_worker.py \
   --server https://salavat.home.ro/trading \
-  --token "$STRATEGY_WORKER_TOKEN"
+  --token "$STRATEGY_WORKER_TOKEN" \
+  --workers 1
 ```
 
 Set `STRATEGY_WORKER_TOKEN` in the PI5 `.env`. If not set, the dashboard falls back to `INTERNAL_API_KEY`.
@@ -181,7 +184,7 @@ For Windows 11, use the standalone agent:
 cd C:\path\to\fallback
 .\venv\Scripts\Activate.ps1
 $env:STRATEGY_WORKER_TOKEN="same_value_as_PI5_STRATEGY_WORKER_TOKEN"
-python misc\windows_strategy_agent.py --server https://salavat.home.ro/trading --token $env:STRATEGY_WORKER_TOKEN
+python misc\windows_strategy_agent.py --server https://salavat.home.ro/trading --token $env:STRATEGY_WORKER_TOKEN --workers 1
 ```
 
 If you want the agent to work through SSH instead of the public HTTPS URL, enable OpenSSH client on Windows and run:
@@ -190,10 +193,13 @@ If you want the agent to work through SSH instead of the public HTTPS URL, enabl
 python misc\windows_strategy_agent.py `
   --ssh-target pi5@salavat.home.ro `
   --local-port 8765 `
-  --token $env:STRATEGY_WORKER_TOKEN
+  --token $env:STRATEGY_WORKER_TOKEN `
+  --workers 1
 ```
 
 This creates an outbound SSH tunnel from Windows to the PI5 and polls `http://127.0.0.1:8765` locally.
+
+Performance note: `CPU Jobs` in Strategy Lab controls parallel processes inside one optimizer run. Agent `--workers` controls how many queued symbols run at the same time. Avoid setting both high at once because that can oversubscribe the mini-PC.
 
 ## 훅 Webhook Configuration
 

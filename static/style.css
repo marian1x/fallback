@@ -426,6 +426,12 @@ body.dark-mode .navbar-toggler-icon {
 body.dark-mode .strategy-json {
     background: rgba(0, 0, 0, 0.22);
 }
+.strategy-trades-scroll {
+    max-height: 320px;
+    overflow: auto;
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+}
 
 /* --- DataTables Mobile/Responsive --- */
 .dataTables_wrapper { width: 100%; max-width: 100%; }

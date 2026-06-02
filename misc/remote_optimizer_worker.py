@@ -14,7 +14,9 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -96,6 +98,35 @@ def run_job(job: dict, python_bin: str, work_dir: Path) -> dict:
     }
 
 
+def worker_loop(args, work_dir: Path, stop_event: threading.Event, worker_name: str) -> int:
+    processed = 0
+    while not stop_event.is_set():
+        try:
+            job = poll_job(args.server, args.token, worker_name, args.request_timeout)
+            if not job:
+                if args.once:
+                    return processed
+                stop_event.wait(max(1, args.poll_seconds))
+                continue
+
+            print(f"[{worker_name}] Running job {job['id']} for {job.get('symbol')} {job.get('timeframe')}", flush=True)
+            payload = run_job(job, args.python, work_dir)
+            complete_job(args.server, args.token, job["id"], payload, args.request_timeout)
+            processed += 1
+            print(f"[{worker_name}] Completed job {job['id']} with returncode={payload['returncode']}", flush=True)
+            if args.once:
+                return processed
+        except KeyboardInterrupt:
+            stop_event.set()
+            return processed
+        except Exception as exc:
+            print(f"[{worker_name}] Worker error: {exc}", file=sys.stderr, flush=True)
+            if args.once:
+                return processed
+            stop_event.wait(max(1, args.poll_seconds))
+    return processed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Poll PI5 Strategy Lab jobs and run optimizer remotely.")
     parser.add_argument("--server", required=True, help="Dashboard base URL, e.g. https://salavat.home.ro/trading")
@@ -105,6 +136,7 @@ def main() -> int:
     parser.add_argument("--work-dir", default=str(PROJECT_ROOT / ".remote_optimizer_work"))
     parser.add_argument("--poll-seconds", type=int, default=10)
     parser.add_argument("--request-timeout", type=int, default=30)
+    parser.add_argument("--workers", type=int, default=1, help="Parallel queue workers. Use with optimizer --jobs carefully.")
     parser.add_argument("--once", action="store_true", help="Process at most one job and exit.")
     args = parser.parse_args()
 
@@ -115,29 +147,25 @@ def main() -> int:
     work_dir = Path(args.work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    while True:
-        try:
-            job = poll_job(args.server, args.token, args.worker, args.request_timeout)
-            if not job:
-                if args.once:
+    worker_count = max(1, int(args.workers))
+    stop_event = threading.Event()
+    try:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = [
+                executor.submit(worker_loop, args, work_dir, stop_event, f"{args.worker}-{idx + 1}")
+                for idx in range(worker_count)
+            ]
+            if args.once:
+                processed = sum(f.result() for f in futures)
+                if processed == 0:
                     print("No job available.")
-                    return 0
-                time.sleep(max(1, args.poll_seconds))
-                continue
-
-            print(f"Running job {job['id']} for {job.get('symbol')} {job.get('timeframe')}")
-            payload = run_job(job, args.python, work_dir)
-            complete_job(args.server, args.token, job["id"], payload, args.request_timeout)
-            print(f"Completed job {job['id']} with returncode={payload['returncode']}")
-            if args.once:
                 return 0
-        except KeyboardInterrupt:
-            return 130
-        except Exception as exc:
-            print(f"Worker error: {exc}", file=sys.stderr)
-            if args.once:
-                return 1
-            time.sleep(max(1, args.poll_seconds))
+            for future in futures:
+                future.result()
+    except KeyboardInterrupt:
+        stop_event.set()
+        return 130
+    return 0
 
 
 if __name__ == "__main__":

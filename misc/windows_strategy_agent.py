@@ -12,7 +12,9 @@ import argparse
 import os
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from remote_optimizer_worker import complete_job, poll_job, run_job
@@ -51,6 +53,28 @@ def start_ssh_tunnel(args, log_file: Path) -> subprocess.Popen | None:
     return proc
 
 
+def agent_worker_loop(args, server: str, work_dir: Path, log_file: Path, stop_event: threading.Event, worker_name: str) -> int:
+    processed = 0
+    while not stop_event.is_set():
+        try:
+            job = poll_job(server, args.token, worker_name, args.request_timeout)
+            if not job:
+                stop_event.wait(max(1, args.poll_seconds))
+                continue
+            log(f"[{worker_name}] Running job {job['id']} for {job.get('symbol')} {job.get('timeframe')}", log_file)
+            payload = run_job(job, args.python, work_dir)
+            complete_job(server, args.token, job["id"], payload, args.request_timeout)
+            processed += 1
+            log(f"[{worker_name}] Completed job {job['id']} returncode={payload['returncode']}", log_file)
+        except KeyboardInterrupt:
+            stop_event.set()
+            return processed
+        except Exception as exc:
+            log(f"[{worker_name}] Worker error: {exc}", log_file)
+            stop_event.wait(max(1, args.poll_seconds))
+    return processed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Windows Strategy Lab remote optimizer agent.")
     parser.add_argument("--server", default="https://salavat.home.ro/trading")
@@ -60,6 +84,7 @@ def main() -> int:
     parser.add_argument("--work-dir", default=str(PROJECT_ROOT / ".remote_optimizer_work"))
     parser.add_argument("--poll-seconds", type=int, default=10)
     parser.add_argument("--request-timeout", type=int, default=30)
+    parser.add_argument("--workers", type=int, default=1, help="Parallel queue workers for multiple queued symbols.")
     parser.add_argument("--log-file", default=str(PROJECT_ROOT / "strategy_agent.log"))
     parser.add_argument("--ssh-target", default="", help="Optional SSH target, e.g. pi5@salavat.home.ro")
     parser.add_argument("--ssh-key", default="", help="Optional SSH private key path")
@@ -82,25 +107,28 @@ def main() -> int:
         ssh_proc = start_ssh_tunnel(args, log_file)
         if ssh_proc:
             server = f"http://127.0.0.1:{args.local_port}"
-        log(f"Agent started. Server={server} Worker={args.worker}", log_file)
-
-        while True:
+        worker_count = max(1, int(args.workers))
+        log(f"Agent started. Server={server} Worker={args.worker} Workers={worker_count}", log_file)
+        stop_event = threading.Event()
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = [
+                executor.submit(agent_worker_loop, args, server, work_dir, log_file, stop_event, f"{args.worker}-{idx + 1}")
+                for idx in range(worker_count)
+            ]
             if ssh_proc and ssh_proc.poll() is not None:
                 raise RuntimeError("SSH tunnel exited.")
             try:
-                job = poll_job(server, args.token, args.worker, args.request_timeout)
-                if not job:
-                    time.sleep(max(1, args.poll_seconds))
-                    continue
-                log(f"Running job {job['id']} for {job.get('symbol')} {job.get('timeframe')}", log_file)
-                payload = run_job(job, args.python, work_dir)
-                complete_job(server, args.token, job["id"], payload, args.request_timeout)
-                log(f"Completed job {job['id']} returncode={payload['returncode']}", log_file)
+                while True:
+                    if ssh_proc and ssh_proc.poll() is not None:
+                        raise RuntimeError("SSH tunnel exited.")
+                    time.sleep(5)
             except KeyboardInterrupt:
+                stop_event.set()
                 return 130
-            except Exception as exc:
-                log(f"Worker error: {exc}", log_file)
-                time.sleep(max(1, args.poll_seconds))
+            finally:
+                stop_event.set()
+                for future in futures:
+                    future.result()
     finally:
         if ssh_proc and ssh_proc.poll() is None:
             ssh_proc.terminate()

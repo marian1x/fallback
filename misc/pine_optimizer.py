@@ -20,9 +20,11 @@ import argparse
 import csv
 import json
 import math
+import os
 import random
 import re
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -87,6 +89,13 @@ class BacktestResult:
     max_drawdown_pct: float
     avg_bars_per_trade: float
     score: float
+    trades: List[Dict[str, object]]
+
+
+_WORKER_DF: Optional[pd.DataFrame] = None
+_WORKER_CFG: Optional[BacktestConfig] = None
+_WORKER_START: Optional[datetime] = None
+_WORKER_END: Optional[datetime] = None
 
 
 def _safe_float(value: object, default: float) -> float:
@@ -647,6 +656,8 @@ def backtest(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, star
 
     trade_returns: List[float] = []
     trade_bars: List[int] = []
+    trades: List[Dict[str, object]] = []
+    entry_time: Optional[pd.Timestamp] = None
 
     for i in range(1, len(df)):
         ts = idx[i]
@@ -673,6 +684,7 @@ def backtest(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, star
                     entry_price = c[i]
                     qty = q
                     entry_index = i
+                    entry_time = idx[i]
                     trail_active = False
                     trail_stop = None
                     entered_this_bar = True
@@ -766,11 +778,24 @@ def backtest(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, star
                 equity_marks.append(equity)
                 trade_returns.append(pnl_pct)
                 trade_bars.append(i - entry_index)
+                trades.append({
+                    "entry_time": entry_time.isoformat() if entry_time is not None else None,
+                    "exit_time": ts.isoformat(),
+                    "side": "long" if position > 0 else "short",
+                    "entry_price": round(float(entry_price), 6),
+                    "exit_price": round(float(exit_price), 6),
+                    "qty": int(qty),
+                    "pnl": round(float(pnl), 2),
+                    "pnl_pct": round(float(pnl_pct), 4),
+                    "reason": exit_reason,
+                    "bars_held": int(i - entry_index),
+                })
 
                 position = 0
                 entry_price = 0.0
                 qty = 0
                 entry_index = -1
+                entry_time = None
                 trail_active = False
                 trail_stop = None
 
@@ -793,6 +818,18 @@ def backtest(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, star
         equity_marks.append(equity)
         trade_returns.append(pnl_pct)
         trade_bars.append(len(df) - 1 - entry_index)
+        trades.append({
+            "entry_time": entry_time.isoformat() if entry_time is not None else None,
+            "exit_time": idx[-1].isoformat(),
+            "side": "long" if position > 0 else "short",
+            "entry_price": round(float(entry_price), 6),
+            "exit_price": round(float(final_price), 6),
+            "qty": int(qty),
+            "pnl": round(float(pnl), 2),
+            "pnl_pct": round(float(pnl_pct), 4),
+            "reason": "Final Close",
+            "bars_held": int(len(df) - 1 - entry_index),
+        })
 
     total_trades = winners + losers
     net_profit = equity - cfg.initial_capital
@@ -813,7 +850,15 @@ def backtest(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, star
 
     avg_bars = float(np.mean(trade_bars)) if trade_bars else 0.0
 
-    score = net_profit * max(profit_factor, 0.01) / (1.0 + max_dd_pct)
+    score = (
+        return_pct
+        + (win_rate * 0.35)
+        + (min(profit_factor, 10.0) * 4.0)
+        + (sharpe * 2.0)
+        - (max_dd_pct * 1.5)
+    )
+    if total_trades < 3:
+        score -= 25.0
 
     return BacktestResult(
         params=params,
@@ -832,6 +877,7 @@ def backtest(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, star
         max_drawdown_pct=max_dd_pct,
         avg_bars_per_trade=avg_bars,
         score=score,
+        trades=trades,
     )
 
 
@@ -894,6 +940,30 @@ def result_row_for_timeframe(timeframe: str, res: BacktestResult) -> Dict[str, o
     return row
 
 
+def init_backtest_worker(df: pd.DataFrame, cfg: BacktestConfig, start_utc: datetime, end_utc: datetime) -> None:
+    global _WORKER_DF, _WORKER_CFG, _WORKER_START, _WORKER_END
+    _WORKER_DF = df
+    _WORKER_CFG = cfg
+    _WORKER_START = start_utc
+    _WORKER_END = end_utc
+
+
+def safe_backtest_worker(params: StrategyParams) -> Optional[BacktestResult]:
+    try:
+        if _WORKER_DF is None or _WORKER_CFG is None or _WORKER_START is None or _WORKER_END is None:
+            raise RuntimeError("Backtest worker was not initialized.")
+        return backtest(_WORKER_DF, params, _WORKER_CFG, _WORKER_START, _WORKER_END)
+    except Exception:
+        return None
+
+
+def resolve_optimizer_jobs(requested: int) -> int:
+    if requested > 0:
+        return requested
+    cpu_count = os.cpu_count() or 1
+    return max(1, cpu_count - 1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Optimize Keltner Pine strategy parameters locally.")
     parser.add_argument("--pine", type=Path, default=DEFAULT_PINE)
@@ -913,6 +983,7 @@ def main() -> None:
     parser.add_argument("--commission-pct", type=float, default=None)
     parser.add_argument("--tick-size", type=float, default=None)
     parser.add_argument("--trials", type=int, default=250)
+    parser.add_argument("--jobs", type=int, default=1, help="Parallel optimizer processes. Use 0 for auto cpu_count-1.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--trade-direction", type=str, default="Both", choices=["Both", "Long Only", "Short Only"])
@@ -997,6 +1068,9 @@ def main() -> None:
     reference_timeframe = None
     reference_result = None
     bars_count_by_timeframe: Dict[str, int] = {}
+    optimizer_jobs = resolve_optimizer_jobs(args.jobs)
+    if optimizer_jobs > 1:
+        print(f"Optimizer parallelism: {optimizer_jobs} processes")
 
     for tf_index, tf_label in enumerate(timeframes):
         tf_bars = resample_bars(bars, tf_label)
@@ -1040,21 +1114,47 @@ def main() -> None:
               f"PF={base_result.profit_factor:.3f} | trades={base_result.total_trades} | "
               f"win={base_result.win_rate_pct:.2f}%")
 
-        for i in range(args.trials):
+        sampled_params: List[StrategyParams] = []
+        for _ in range(args.trials):
             p = sample_params(rng, params_template, ranges, args.trade_direction)
             key = tuple(asdict(p).items())
             if key in seen:
                 continue
             seen.add(key)
-            try:
-                res = backtest(tf_bars, p, cfg, start_utc, end_utc)
-                all_results.append((tf_label, res))
-            except Exception:
-                continue
+            sampled_params.append(p)
 
-            if (i + 1) % 25 == 0:
+        if optimizer_jobs <= 1 or len(sampled_params) <= 1:
+            result_iter = (safe_backtest_worker(p) for p in sampled_params)
+            init_backtest_worker(tf_bars, cfg, start_utc, end_utc)
+            for i, res in enumerate(result_iter, start=1):
+                if res is not None:
+                    all_results.append((tf_label, res))
+                if i % 25 == 0:
+                    best_tf, best_res = max(all_results, key=lambda item: item[1].score)
+                    print(f"[{tf_label}] Trial {i:4d}/{len(sampled_params)}: global best={best_tf} "
+                          f"score={best_res.score:.4f}, net={best_res.net_profit:.2f}, "
+                          f"PF={best_res.profit_factor:.3f}, trades={best_res.total_trades}")
+        else:
+            chunksize = max(1, len(sampled_params) // (optimizer_jobs * 8))
+            with ProcessPoolExecutor(
+                max_workers=optimizer_jobs,
+                initializer=init_backtest_worker,
+                initargs=(tf_bars, cfg, start_utc, end_utc),
+            ) as executor:
+                for i, res in enumerate(executor.map(safe_backtest_worker, sampled_params, chunksize=chunksize), start=1):
+                    if res is not None:
+                        all_results.append((tf_label, res))
+                    if i % 25 == 0:
+                        best_tf, best_res = max(all_results, key=lambda item: item[1].score)
+                        print(f"[{tf_label}] Trial {i:4d}/{len(sampled_params)}: global best={best_tf} "
+                              f"score={best_res.score:.4f}, net={best_res.net_profit:.2f}, "
+                              f"PF={best_res.profit_factor:.3f}, trades={best_res.total_trades}")
+
+        if sampled_params:
+            best_tf, best_res = max(all_results, key=lambda item: item[1].score)
+            if len(sampled_params) % 25 != 0:
                 best_tf, best_res = max(all_results, key=lambda item: item[1].score)
-                print(f"[{tf_label}] Trial {i+1:4d}/{args.trials}: global best={best_tf} "
+                print(f"[{tf_label}] Trial {len(sampled_params):4d}/{len(sampled_params)}: global best={best_tf} "
                       f"score={best_res.score:.4f}, net={best_res.net_profit:.2f}, "
                       f"PF={best_res.profit_factor:.3f}, trades={best_res.total_trades}")
 
@@ -1089,6 +1189,7 @@ def main() -> None:
         "reference_metrics": ref_data,
         "reference_result": result_row_for_timeframe(reference_timeframe or best_timeframe, reference_result or best),
         "best_result": result_row_for_timeframe(best_timeframe, best),
+        "best_trades": best.trades,
         "top_results": [result_row_for_timeframe(tf_label, res) for tf_label, res in top],
     }
 

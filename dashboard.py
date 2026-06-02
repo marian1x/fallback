@@ -87,6 +87,7 @@ os.makedirs(STRATEGY_JOBS_DIR, exist_ok=True)
 
 LOGIN_ATTEMPTS = {}
 LOGIN_ATTEMPTS_LOCK = threading.Lock()
+STRATEGY_JOB_LOCK = threading.Lock()
 CSRF_EXEMPT_ENDPOINTS = {'webhook', 'record_trade_internal', 'api_strategy_remote_next', 'api_strategy_remote_complete'}
 
 # --- Enhanced Logging Setup ---
@@ -476,6 +477,14 @@ def strategy_job_bars_path(job_id):
     safe_id = ''.join(ch for ch in str(job_id) if ch.isalnum() or ch in ('-', '_'))
     return os.path.join(STRATEGY_JOBS_DIR, f"{safe_id}_bars.csv")
 
+def strategy_job_report_path(job_id):
+    safe_id = ''.join(ch for ch in str(job_id) if ch.isalnum() or ch in ('-', '_'))
+    return os.path.join(STRATEGY_JOBS_DIR, f"{safe_id}_report.json")
+
+def strategy_job_top_path(job_id):
+    safe_id = ''.join(ch for ch in str(job_id) if ch.isalnum() or ch in ('-', '_'))
+    return os.path.join(STRATEGY_JOBS_DIR, f"{safe_id}_top.csv")
+
 def save_strategy_job(job):
     os.makedirs(STRATEGY_JOBS_DIR, exist_ok=True)
     path = strategy_job_path(job.get('id', 'unknown'))
@@ -507,6 +516,40 @@ def list_strategy_jobs(limit=8):
             jobs.append(job)
     jobs.sort(key=lambda item: item.get('created_at_utc', ''), reverse=True)
     return jobs[:limit]
+
+def load_strategy_job_report(job_id):
+    path = strategy_job_report_path(job_id)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        app.logger.error(f"[STRATEGY] Failed to load job report {job_id}: {e}")
+        return None
+
+def enrich_strategy_jobs(jobs):
+    enriched = []
+    for job in jobs:
+        item = dict(job)
+        report = load_strategy_job_report(item.get('id'))
+        if isinstance(report, dict):
+            item['report'] = report
+            item['best_trades'] = report.get('best_trades') or []
+            item['top_results'] = report.get('top_results') or []
+        enriched.append(item)
+    return enriched
+
+def parse_strategy_symbols(raw_value):
+    symbols = []
+    seen = set()
+    normalized = str(raw_value or '').replace(';', ',').replace('\n', ',').replace('\r', ',')
+    for chunk in normalized.split(','):
+        symbol = strategy_store.normalize_symbol(chunk)
+        if symbol and symbol not in seen:
+            symbols.append(symbol)
+            seen.add(symbol)
+    return symbols
 
 def summarize_strategy_report(report, source='local', job_id=None):
     if not isinstance(report, dict):
@@ -679,6 +722,7 @@ def build_strategy_optimizer_args(config, report_path, top_path, bars_csv_path=N
         "--session", str(config.get("session", "regular")),
         "--feed", str(config.get("feed", "iex")),
         "--trials", str(int(config.get("trials", 200))),
+        "--jobs", str(int(config.get("optimizer_jobs", 0))),
         "--top-k", str(int(config.get("top_k", 20))),
         "--trade-direction", str(config.get("trade_direction", "Both")),
         "--inner-len-range", inner_len_range,
@@ -707,9 +751,9 @@ def build_strategy_optimizer_args(config, report_path, top_path, bars_csv_path=N
         args.extend(["--alpaca-user", alpaca_user])
     return args
 
-def run_strategy_optimizer(config):
+def run_strategy_optimizer(config, report_path, top_path):
     venv_python = os.path.join(REPO_PATH, "venv", "bin", "python")
-    command = [venv_python] + build_strategy_optimizer_args(config, STRATEGY_REPORT_FILE, STRATEGY_TOP_FILE)
+    command = [venv_python] + build_strategy_optimizer_args(config, report_path, top_path)
     return run_command(command, cwd=REPO_PATH, timeout=900)
 
 def fetch_strategy_bars_csv(config):
@@ -750,15 +794,12 @@ def fetch_strategy_bars_csv(config):
     df[columns].to_csv(buf, index=False)
     return buf.getvalue()
 
-def create_remote_strategy_job(config):
+def create_strategy_job(config, compute_target):
     job_id = uuid.uuid4().hex
-    bars_csv = fetch_strategy_bars_csv(config)
-    bars_path = strategy_job_bars_path(job_id)
-    with open(bars_path, "w", encoding="utf-8") as f:
-        f.write(bars_csv)
     job = {
         'id': job_id,
-        'status': 'queued',
+        'status': 'queued' if compute_target == 'remote' else 'running',
+        'compute_target': compute_target,
         'created_at_utc': datetime.now(timezone.utc).isoformat(),
         'updated_at_utc': datetime.now(timezone.utc).isoformat(),
         'symbol': strategy_store.normalize_symbol(config.get('symbol', '')),
@@ -767,13 +808,21 @@ def create_remote_strategy_job(config):
         'feed': config.get('feed'),
         'optimize_enabled': bool(config.get('optimize_enabled')),
         'trials': int(config.get('trials', 200)),
+        'optimizer_jobs': int(config.get('optimizer_jobs', 0)),
         'top_k': int(config.get('top_k', 20)),
-        'optimizer_args': build_strategy_optimizer_args(config, "__REPORT_JSON__", "__TOP_CSV__", bars_csv_path="__BARS_CSV__"),
-        'bars_csv_file': os.path.basename(bars_path),
+        'config': config.copy(),
         'summary': None,
         'stdout': '',
         'stderr': '',
     }
+    if compute_target == 'remote':
+        bars_csv = fetch_strategy_bars_csv(config)
+        bars_path = strategy_job_bars_path(job_id)
+        with open(bars_path, "w", encoding="utf-8") as f:
+            f.write(bars_csv)
+        job['bars_csv_file'] = os.path.basename(bars_path)
+        job['optimizer_args'] = build_strategy_optimizer_args(config, "__REPORT_JSON__", "__TOP_CSV__", bars_csv_path="__BARS_CSV__")
+
     save_strategy_job(job)
     return job
 
@@ -1000,6 +1049,7 @@ def admin_strategy():
         config['recalc_after_order_filled'] = 'recalc_after_order_filled' in request.form
         config['recalc_on_every_tick'] = 'recalc_on_every_tick' in request.form
         config['trials'] = max(1, as_int(request.form.get('trials', config.get('trials', 200)), 200))
+        config['optimizer_jobs'] = max(0, as_int(request.form.get('optimizer_jobs', config.get('optimizer_jobs', 0)), 0))
         config['top_k'] = max(1, as_int(request.form.get('top_k', config.get('top_k', 20)), 20))
         config['timeframe_minutes'] = request.form.get('timeframe_minutes', config.get('timeframe_minutes', '5,10,15,30')).strip()
         config['timeframe_hours_start'] = max(1, as_int(request.form.get('timeframe_hours_start', config.get('timeframe_hours_start', 1)), 1))
@@ -1050,27 +1100,75 @@ def admin_strategy():
                 flash(f"Added {summary['symbol']} to Signal Universe with latest backtest result.", "success")
             else:
                 flash("No valid backtest result available to add.", "warning")
-        elif action == 'run':
-            if config.get('compute_target') == 'remote':
-                try:
-                    job = create_remote_strategy_job(config)
-                    flash(f"Remote optimization job queued for {job['symbol']} ({job['timeframe']}). Start the worker on your mini-PC.", "info")
-                except Exception as e:
-                    app.logger.error("[STRATEGY_REMOTE] Failed to queue remote job: %s", e)
-                    flash(f"Remote job failed to queue: {e}", "danger")
+        elif action == 'add_job_result':
+            job_id = request.form.get('job_id', '').strip()
+            job = load_strategy_job(job_id)
+            report = load_strategy_job_report(job_id)
+            source = job.get('compute_target', 'local') if isinstance(job, dict) else 'local'
+            summary = summarize_strategy_report(report, source=source, job_id=job_id)
+            if summary and upsert_universe_backtest(config, summary, mode='local'):
+                config['last_backtest'] = summary
+                save_strategy_config(config)
+                flash(f"Added {summary['symbol']} to Signal Universe from selected optimizer run.", "success")
             else:
-                ok, out, err = run_strategy_optimizer(config)
-                if ok:
-                    report = load_strategy_report()
-                    summary = apply_strategy_report_to_config(config, report, source='local')
-                    if summary:
-                        save_strategy_config(config)
-                    app.logger.info("[STRATEGY] Strategy optimizer run successful. Output=%s", out)
-                    flash("Strategy run completed. Report updated.", "success")
-                else:
-                    app.logger.error("[STRATEGY] Strategy optimizer failed. Error=%s Output=%s", err, out)
-                    detail = err or out or "Unknown error"
-                    flash(f"Strategy run failed: {detail}", "danger")
+                flash("Selected optimizer run has no valid completed report.", "warning")
+        elif action == 'run':
+            symbols = parse_strategy_symbols(request.form.get('symbol', ''))
+            if not symbols:
+                flash("No valid symbols provided for run.", "warning")
+                return redirect(url_for('admin_strategy'))
+
+            compute_target = config.get('compute_target', 'local')
+            jobs_queued = []
+            jobs_completed = []
+            jobs_failed = []
+
+            for sym in symbols:
+                run_config = config.copy()
+                run_config['symbol'] = sym
+
+                try:
+                    job = create_strategy_job(run_config, compute_target)
+                    if compute_target == 'remote':
+                        jobs_queued.append(sym)
+                    else:
+                        report_path = strategy_job_report_path(job['id'])
+                        top_path = strategy_job_top_path(job['id'])
+                        ok, out, err = run_strategy_optimizer(run_config, report_path, top_path)
+
+                        job['status'] = 'completed' if ok else 'failed'
+                        job['stdout'] = out[-20000:]
+                        job['stderr'] = err[-20000:]
+                        job['updated_at_utc'] = datetime.now(timezone.utc).isoformat()
+                        job['completed_at_utc'] = datetime.now(timezone.utc).isoformat()
+
+                        if ok and os.path.exists(report_path):
+                            with open(report_path, "r", encoding="utf-8") as f:
+                                report = json.load(f)
+                            with open(STRATEGY_REPORT_FILE, "w", encoding="utf-8") as f:
+                                json.dump(report, f, indent=2)
+                            if os.path.exists(top_path):
+                                with open(top_path, "r", encoding="utf-8") as src, open(STRATEGY_TOP_FILE, "w", encoding="utf-8") as dst:
+                                    dst.write(src.read())
+                            job['summary'] = summarize_strategy_report(report, source='local', job_id=job['id'])
+                            config['last_backtest'] = job['summary']
+                            jobs_completed.append(sym)
+                        else:
+                            job['error'] = err or out or "Unknown error"
+                            jobs_failed.append(sym)
+
+                        save_strategy_job(job)
+                except Exception as e:
+                    app.logger.error("[STRATEGY] Failed to process %s: %s", sym, e)
+                    jobs_failed.append(sym)
+
+            if jobs_queued:
+                flash(f"Remote optimization jobs queued for {', '.join(jobs_queued)}.", "info")
+            if jobs_completed:
+                save_strategy_config(config)
+                flash(f"Strategy run completed for {', '.join(jobs_completed)}.", "success")
+            if jobs_failed:
+                flash(f"Strategy run failed for {', '.join(jobs_failed)}.", "danger")
         else:
             flash("Strategy configuration saved.", "success")
         return redirect(url_for('admin_strategy'))
@@ -1084,7 +1182,7 @@ def admin_strategy():
         report=report,
         top_rows=top_rows,
         users=users,
-        remote_jobs=list_strategy_jobs(limit=8),
+        all_jobs=enrich_strategy_jobs(list_strategy_jobs(limit=50)),
         tradable_symbols=[],
     )
 
@@ -1141,17 +1239,18 @@ def api_strategy_remote_next():
     if not is_strategy_worker_authorized():
         return jsonify({'error': 'unauthorized'}), 401
     worker_name = request.args.get('worker') or request.headers.get('X-Strategy-Worker') or 'remote-worker'
-    queued = [job for job in list_strategy_jobs(limit=200) if job.get('status') == 'queued']
-    queued.sort(key=lambda item: item.get('created_at_utc', ''))
-    if not queued:
-        return jsonify({'job': None})
-    job = queued[0]
-    now_iso = datetime.now(timezone.utc).isoformat()
-    job['status'] = 'running'
-    job['worker'] = worker_name
-    job['started_at_utc'] = now_iso
-    job['updated_at_utc'] = now_iso
-    save_strategy_job(job)
+    with STRATEGY_JOB_LOCK:
+        queued = [job for job in list_strategy_jobs(limit=200) if job.get('status') == 'queued']
+        queued.sort(key=lambda item: item.get('created_at_utc', ''))
+        if not queued:
+            return jsonify({'job': None})
+        job = queued[0]
+        now_iso = datetime.now(timezone.utc).isoformat()
+        job['status'] = 'running'
+        job['worker'] = worker_name
+        job['started_at_utc'] = now_iso
+        job['updated_at_utc'] = now_iso
+        save_strategy_job(job)
     bars_csv = job.get('bars_csv', '')
     if not bars_csv:
         bars_path = strategy_job_bars_path(job['id'])
@@ -1194,15 +1293,21 @@ def api_strategy_remote_complete(job_id):
     job['completed_at_utc'] = now_iso
 
     if returncode == 0 and isinstance(report, dict):
+        report_path = strategy_job_report_path(job_id)
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
         with open(STRATEGY_REPORT_FILE, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
         if top_csv:
+            top_path = strategy_job_top_path(job_id)
+            with open(top_path, "w", encoding="utf-8") as f:
+                f.write(top_csv)
             with open(STRATEGY_TOP_FILE, "w", encoding="utf-8") as f:
                 f.write(top_csv)
         config = load_strategy_config()
-        summary = apply_strategy_report_to_config(config, report, source='remote', job_id=job_id)
-        if summary:
-            save_strategy_config(config)
+        summary = summarize_strategy_report(report, source='remote', job_id=job_id)
+        config['last_backtest'] = summary
+        save_strategy_config(config)
         job['summary'] = summary
         job['status'] = 'completed'
         save_strategy_job(job)
@@ -1370,7 +1475,7 @@ def admin_user_management():
         current_user=g.user,
         password_min_length=PASSWORD_MIN_LENGTH
     )
-    
+
 @app.route('/admin/all_open_trades')
 @superuser_required
 def admin_all_open_trades():
@@ -1570,7 +1675,7 @@ def api_tradable_symbols():
             update_symbols_task()
             # Give the task a moment to run
             time.sleep(2)
-        
+
         with open(symbols_file, 'r') as f:
             symbols = json.load(f)
         return jsonify(symbols)
@@ -1744,7 +1849,7 @@ def api_admin_dashboard_summary():
             user_data['equity'] = 'No API Keys'
         summary_data.append(user_data)
     return jsonify(summary_data)
-    
+
 @app.route('/api/admin/performance_leaderboard')
 @superuser_required
 def api_admin_performance_leaderboard():
@@ -1753,7 +1858,7 @@ def api_admin_performance_leaderboard():
     for trade in closed_trades:
         if trade.user_id not in user_stats:
             user_stats[trade.user_id] = {
-                'username': trade.user.username, 'total_pl': 0, 
+                'username': trade.user.username, 'total_pl': 0,
                 'wins': 0, 'losses': 0, 'total_trades': 0
             }
         stats = user_stats[trade.user_id]
@@ -1774,11 +1879,11 @@ def api_admin_performance_leaderboard():
 @superuser_required
 def api_admin_all_open_positions():
     user_filter_id = request.args.get('user_id')
-    
+
     query = User.query
     if user_filter_id:
         query = query.filter(User.id == user_filter_id)
-        
+
     users_with_keys = [u for u in query.all() if u.encrypted_alpaca_key]
     all_positions = []
 
@@ -1826,7 +1931,7 @@ def api_admin_close_trades():
         if not api:
             errors.append(f"Could not initialize API for user {user.username}")
             continue
-        
+
         try:
             api_symbol = symbol.replace('/', '')
             position_to_close = api.get_position(api_symbol)
@@ -1854,7 +1959,7 @@ def api_admin_close_trades():
 
     if errors:
         return jsonify({'status': 'partial_success', 'closed': closed_count, 'errors': errors}), 207
-    
+
     return jsonify({'status': 'success', 'closed': closed_count})
 
 @app.route('/api/open_positions')
@@ -2039,7 +2144,7 @@ def init_db():
         if not User.query.filter_by(username=ADMIN_USER).first():
             if not ADMIN_PASS:
                 raise ValueError("ADMIN_PASSWORD must be set in .env on first run to create superuser")
-            
+
             superuser = User(
                 username=ADMIN_USER, email=f"{ADMIN_USER}@example.com",
                 password_hash=generate_password_hash(ADMIN_PASS),
@@ -2048,7 +2153,7 @@ def init_db():
             db.session.add(superuser)
             db.session.commit()
             app.logger.info(f"[SYSTEM] Superuser '{ADMIN_USER}' created.")
-            
+
 # --- NEW: Investor Payout Feature (File-Based) ---
 
 # Read the toggle from .env file
@@ -2089,7 +2194,7 @@ def admin_investor_config():
                         investor_data[user.username] = amount
                 except ValueError:
                     pass # Ignore invalid numbers
-        
+
         try:
             with open(INVESTORS_FILE, 'w') as f:
                 json.dump(investor_data, f, indent=4)

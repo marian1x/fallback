@@ -50,8 +50,8 @@
                             <div class="strategy-target-card mb-4">
                                 <div class="row g-3 align-items-end">
                                     <div class="col-12 col-md-3">
-                                        <label class="form-label">Backtest Stock {{ tip('Stock-ul pentru care rulezi backtestul sau optimizarea. Exemplu: TSM, AAPL, MSFT.') }}</label>
-                                        <input type="text" name="symbol" class="form-control universe-symbol" value="{{ config.symbol }}" required list="strategy-symbols">
+                                        <label class="form-label">Backtest Stocks {{ tip('Un stock sau o lista de stocks separate prin virgula sau rand nou. Exemplu: TSM, AAPL, MSFT. Se creeaza un optimizer run separat pentru fiecare.') }}</label>
+                                        <textarea name="symbol" class="form-control universe-symbol" rows="1" required list="strategy-symbols">{{ config.symbol }}</textarea>
                                     </div>
                                     <div class="col-6 col-md-2">
                                         <label class="form-label">Chart Interval {{ tip('Intervalul de chart folosit pentru barele Alpaca. 1Min este mai greu; 1Day/1Week sunt mai rapide, dar mai putin precise pentru intraday.') }}</label>
@@ -269,6 +269,10 @@
                                                     <label class="form-label">Top K {{ tip('Number of best configurations saved in the results table.') }}</label>
                                                     <input type="number" min="1" name="top_k" class="form-control" value="{{ config.top_k }}">
                                                 </div>
+                                                <div class="col-6 col-lg-3">
+                                                    <label class="form-label">CPU Jobs {{ tip('Procese paralele pentru un optimizer run. 0 = auto, foloseste cpu_count - 1. Pentru Mini-PC recomand 0 sau 6-10, in functie de temperaturi.') }}</label>
+                                                    <input type="number" min="0" name="optimizer_jobs" class="form-control" value="{{ config.optimizer_jobs }}">
+                                                </div>
                                                 <div class="col-12 col-lg-3">
                                                     <label class="form-label">Trade Direction {{ tip('Both tests long and short entries. Long Only and Short Only isolate one side.') }}</label>
                                                     <select name="trade_direction" class="form-select">
@@ -453,30 +457,105 @@
                         </div>
                         <div class="col-12 col-xl-6">
                             <div class="strategy-panel h-100">
-                                <div class="strategy-panel-header">Remote Jobs</div>
+                                <div class="strategy-panel-header">Optimizer Runs</div>
                                 <div class="strategy-panel-body">
-                                    {% if remote_jobs %}
+                                    {% if all_jobs %}
                                     <div class="table-responsive">
                                         <table class="table table-sm align-middle mb-0">
-                                            <thead><tr><th>Stock</th><th>Interval</th><th>Status</th><th>Worker</th><th>Updated</th></tr></thead>
+                                            <thead>
+                                                <tr>
+                                                    <th>Stock</th>
+                                                    <th>Interval</th>
+                                                    <th>Compute</th>
+                                                    <th>Status</th>
+                                                    <th>Return</th>
+                                                    <th>Win</th>
+                                                    <th>DD</th>
+                                                    <th class="text-end">Action</th>
+                                                </tr>
+                                            </thead>
                                             <tbody>
-                                                {% for job in remote_jobs %}
+                                                {% for job in all_jobs %}
                                                 <tr>
                                                     <td>{{ job.symbol }}</td>
-                                                    <td>{{ job.timeframe }}</td>
+                                                    <td>{{ job.summary.timeframe if job.summary else job.timeframe }}</td>
+                                                    <td>{{ job.compute_target or '-' }}</td>
                                                     <td><span class="badge bg-neutral">{{ job.status }}</span></td>
-                                                    <td>{{ job.worker or '-' }}</td>
-                                                    <td class="small">{{ job.updated_at_utc or job.created_at_utc }}</td>
+                                                    <td>{{ job.summary.metrics.return_pct if job.summary else '-' }}{% if job.summary %}%{% endif %}</td>
+                                                    <td>{{ job.summary.metrics.win_rate_pct if job.summary else '-' }}{% if job.summary %}%{% endif %}</td>
+                                                    <td>{{ job.summary.metrics.max_drawdown_pct if job.summary else '-' }}{% if job.summary %}%{% endif %}</td>
+                                                    <td class="text-end text-nowrap">
+                                                        <button class="btn btn-sm btn-link px-1" type="button" data-bs-toggle="collapse" data-bs-target="#runDetails{{ loop.index }}">Details</button>
+                                                        {% if job.status == 'completed' and job.summary %}
+                                                        <button class="btn btn-sm btn-outline-primary px-2" type="submit" name="action" value="add_job_result" onclick="document.getElementById('selectedJobId').value='{{ job.id }}'">Add to Signals</button>
+                                                        {% endif %}
+                                                    </td>
+                                                </tr>
+                                                <tr>
+                                                    <td colspan="8" class="p-0 border-0">
+                                                        <div class="collapse strategy-detail-collapse" id="runDetails{{ loop.index }}">
+                                                            <div class="p-3">
+                                                                <div class="small text-muted mb-2">
+                                                                    Job {{ job.id }} | Worker {{ job.worker or '-' }} | Updated {{ job.updated_at_utc or job.created_at_utc }}
+                                                                </div>
+                                                                {% if job.summary %}
+                                                                <div class="strategy-metrics mb-3">
+                                                                    <div><span>Net Profit</span><strong>{{ job.summary.metrics.net_profit }}</strong></div>
+                                                                    <div><span>Return %</span><strong>{{ job.summary.metrics.return_pct }}</strong></div>
+                                                                    <div><span>Win Rate %</span><strong>{{ job.summary.metrics.win_rate_pct }}</strong></div>
+                                                                    <div><span>Drawdown %</span><strong>{{ job.summary.metrics.max_drawdown_pct }}</strong></div>
+                                                                    <div><span>Profit Factor</span><strong>{{ job.summary.metrics.profit_factor }}</strong></div>
+                                                                    <div><span>Trades</span><strong>{{ job.summary.metrics.total_trades }}</strong></div>
+                                                                </div>
+                                                                <div class="row g-3">
+                                                                    <div class="col-12 col-xl-6">
+                                                                        <div class="small fw-semibold mb-1">Winning Configuration</div>
+                                                                        <pre class="strategy-json mb-0">{{ job.summary|tojson(indent=2) }}</pre>
+                                                                    </div>
+                                                                    <div class="col-12 col-xl-6">
+                                                                        <div class="small fw-semibold mb-1">Best Trades</div>
+                                                                        {% if job.best_trades %}
+                                                                        <div class="table-responsive strategy-trades-scroll">
+                                                                            <table class="table table-sm table-striped mb-0">
+                                                                                <thead><tr><th>Entry</th><th>Exit</th><th>Side</th><th>Qty</th><th>PNL</th><th>Reason</th></tr></thead>
+                                                                                <tbody>
+                                                                                    {% for trade in job.best_trades %}
+                                                                                    <tr>
+                                                                                        <td class="small">{{ trade.entry_time }}</td>
+                                                                                        <td class="small">{{ trade.exit_time }}</td>
+                                                                                        <td>{{ trade.side }}</td>
+                                                                                        <td>{{ trade.qty }}</td>
+                                                                                        <td>{{ trade.pnl }}</td>
+                                                                                        <td class="small">{{ trade.reason }}</td>
+                                                                                    </tr>
+                                                                                    {% endfor %}
+                                                                                </tbody>
+                                                                            </table>
+                                                                        </div>
+                                                                        {% else %}
+                                                                        <div class="text-muted small">No trade list stored for this run.</div>
+                                                                        {% endif %}
+                                                                    </div>
+                                                                </div>
+                                                                {% elif job.error %}
+                                                                <pre class="strategy-json mb-0">{{ job.error }}</pre>
+                                                                {% else %}
+                                                                <div class="text-muted small">Run is not completed yet.</div>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                    </td>
                                                 </tr>
                                                 {% endfor %}
                                             </tbody>
                                         </table>
                                     </div>
                                     {% else %}
-                                    <div class="text-muted">No remote jobs queued yet.</div>
+                                    <div class="text-muted">No optimizer runs yet.</div>
                                     {% endif %}
+                                    <input type="hidden" id="selectedJobId" name="job_id" value="">
                                     <div class="small text-muted mt-3">
-                                        Worker command: <code>python misc/remote_optimizer_worker.py --server https://salavat.home.ro/trading --token $STRATEGY_WORKER_TOKEN</code>
+                                        Windows agent: <code>python misc/windows_strategy_agent.py --server https://salavat.home.ro/trading --token %STRATEGY_WORKER_TOKEN% --workers 4</code>
                                     </div>
                                 </div>
                             </div>

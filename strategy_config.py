@@ -63,6 +63,7 @@ def get_default_strategy_config() -> Dict:
         "timeframe_days_step": 1,
         "last_backtest": None,
         "trials": 200,
+        "optimizer_jobs": 0,
         "top_k": 20,
         "trade_direction": "Both",
         "inner_len_range": "8:40:1",
