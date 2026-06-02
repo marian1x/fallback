@@ -7,6 +7,7 @@
         <button id="refreshBtn" class="btn btn-sm btn-outline-secondary"><i class="fas fa-sync-alt me-1"></i> Refresh</button>
     </div>
     <p>This report shows the real-time profit/loss distribution based on each user's investment share.</p>
+    <p class="text-muted">Pooled trading account: <strong id="pool-user">-</strong></p>
 
     <div class="row">
         <div class="col-md-4">
@@ -79,6 +80,7 @@
 
             document.getElementById('summary-total-investment').textContent = formatCurrency(data.total_investment);
             document.getElementById('summary-live-equity').textContent = formatCurrency(data.live_equity);
+            document.getElementById('pool-user').textContent = data.pool_user || '-';
             
             const plElement = document.getElementById('summary-total-pl');
             plElement.textContent = formatCurrency(data.total_pl);

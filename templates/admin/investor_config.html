@@ -4,6 +4,7 @@
 <div class="container mt-4">
     <h2><i class="fas fa-hand-holding-usd me-2"></i>Investor Configuration</h2>
     <p>Set the investment amount for each user participating in the pooled fund. This data is stored separately and does not affect the main database.</p>
+    <p class="text-muted">Pooled trading account: <strong>{{ pooled_trading_user.username if pooled_trading_user else 'not configured' }}</strong></p>
     
     <div class="card data-card">
         <div class="card-body">

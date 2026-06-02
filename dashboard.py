@@ -72,6 +72,7 @@ BASE_URL = os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
 BOT_WEBHOOK = os.getenv('TRADING_BOT_URL', 'http://127.0.0.1:5000/webhook')
 WEBHOOK_SECRET = os.getenv('WEBHOOK_SECRET', '').strip()
 WEBHOOK_SECRET_HEADER = os.getenv('WEBHOOK_SECRET_HEADER', 'X-Webhook-Secret').strip() or 'X-Webhook-Secret'
+POOLED_TRADING_USERNAME = os.getenv('POOLED_TRADING_USERNAME', ADMIN_USER).strip() or ADMIN_USER
 RESTART_COMMAND = os.getenv('RESTART_COMMAND', '').strip()
 if not RESTART_COMMAND and os.name == 'posix':
     RESTART_COMMAND = 'sudo systemctl restart fallback_dashboard.service'
@@ -292,6 +293,12 @@ def get_admin_dashboard_target_user(payload=None, required=False):
     if required:
         return None
     return regular_users_query().order_by(User.username).first()
+
+def get_pooled_trading_user():
+    user = User.query.filter_by(username=POOLED_TRADING_USERNAME).first()
+    if user:
+        return user
+    return User.query.filter_by(is_superuser=True).order_by(User.id).first()
 
 def get_user_keypair(user):
     key = decrypt_data(user.encrypted_alpaca_key)
@@ -992,11 +999,13 @@ def dashboard():
     if g.user.is_superuser:
         all_users = regular_users_query().order_by(User.username).all()
         selected_user = all_users[0] if all_users else None
+        pooled_user = get_pooled_trading_user()
         return render_template(
             'dashboard.html',
             current_user=g.user,
             all_users=all_users,
             selected_trading_user=selected_user,
+            pooled_trading_user=pooled_user,
             per_trade_amount=selected_user.per_trade_amount if selected_user else 0,
         )
     return render_template('dashboard.html', current_user=g.user, per_trade_amount=g.user.per_trade_amount)
@@ -1578,6 +1587,57 @@ def admin_backup_db():
         app.logger.error(f"[DATABASE] Backup failed for admin '{g.user.username}': {e}")
         return redirect(url_for('admin_db_management'))
 
+@app.route('/admin/reset_trade_history', methods=['POST'])
+@superuser_required
+def admin_reset_trade_history():
+    confirm_text = (request.form.get('confirm_text') or '').strip()
+    if confirm_text != 'RESET_TRADES':
+        flash('Trade history reset cancelled. Type RESET_TRADES exactly to confirm.', 'warning')
+        return redirect(url_for('admin_db_management'))
+
+    clear_local_state = request.form.get('clear_local_strategy_state') == '1'
+    try:
+        backup_name = f"pre-trade-reset-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.db"
+        db_path_str = app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
+        db_path = os.path.join(app.instance_path, db_path_str) if 'instance' not in db_path_str else os.path.join(os.path.dirname(app.instance_path), db_path_str)
+        backup_path = os.path.join(app.config['BACKUP_FOLDER'], backup_name)
+        os.makedirs(app.config['BACKUP_FOLDER'], exist_ok=True)
+        if os.path.exists(db_path):
+            import shutil
+            shutil.copy2(db_path, backup_path)
+
+        deleted = Trade.query.delete()
+        db.session.commit()
+
+        local_state_removed = False
+        if clear_local_state:
+            local_state_path = os.path.join(app.instance_path, 'local_strategy_state.json')
+            if os.path.exists(local_state_path):
+                os.remove(local_state_path)
+                local_state_removed = True
+            if BOT_SERVICE_NAME:
+                def restart_bot_after_state_reset():
+                    ok, out, err = run_command(["sudo", "systemctl", "restart", BOT_SERVICE_NAME], cwd=REPO_PATH, timeout=60)
+                    if ok:
+                        app.logger.info(f"[SYSTEM] Bot service restarted after local strategy state reset. Output: {out}")
+                    else:
+                        app.logger.error(f"[SYSTEM] Bot service restart after local strategy state reset failed: {err}")
+                threading.Thread(target=restart_bot_after_state_reset, daemon=True).start()
+
+        app.logger.warning(
+            f"[DATABASE] Admin '{g.user.username}' reset trade history. deleted={deleted} "
+            f"backup='{backup_path}' clear_local_state={clear_local_state} removed_state={local_state_removed}"
+        )
+        flash(
+            f"Trade history reset complete: {deleted} records deleted. Backup created: {backup_name}.",
+            'success'
+        )
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"[DATABASE] Trade history reset failed for admin '{g.user.username}': {e}", exc_info=True)
+        flash(f'Trade history reset failed: {e}', 'danger')
+    return redirect(url_for('admin_db_management'))
+
 @app.route('/admin/users')
 @superuser_required
 def admin_user_management():
@@ -2089,7 +2149,11 @@ def api_open_positions():
     out = []
     if g.user.is_superuser:
         user_filter_id = request.args.get('user_id')
-        if user_filter_id:
+        dashboard_scope = str(request.args.get('dashboard_scope', 'single') or 'single').strip().lower()
+        if dashboard_scope == 'pool':
+            pool_user = get_pooled_trading_user()
+            users = [pool_user] if pool_user else []
+        elif user_filter_id:
             target_user = get_regular_user_by_id(user_filter_id)
             users = [target_user] if target_user else []
         else:
@@ -2144,7 +2208,24 @@ def api_closed_orders():
 @app.route('/api/account')
 @login_required
 def api_account():
-    target_user = get_admin_dashboard_target_user() if g.user.is_superuser else g.user
+    if g.user.is_superuser and str(request.args.get('dashboard_scope', '')).strip().lower() == 'all_users':
+        total_equity = 0.0
+        total_cash = 0.0
+        for user in regular_users_query().order_by(User.username).all():
+            api = get_user_api(user)
+            if not api:
+                continue
+            try:
+                acct = api.get_account()
+                total_equity += float(acct.equity)
+                total_cash += float(acct.cash)
+            except Exception as e:
+                app.logger.warning(f"[API_FAIL] Could not fetch aggregate account for {user.username}: {e}")
+        return jsonify({'equity': total_equity, 'cash': total_cash})
+    if g.user.is_superuser and str(request.args.get('dashboard_scope', '')).strip().lower() == 'pool':
+        target_user = get_pooled_trading_user()
+    else:
+        target_user = get_admin_dashboard_target_user() if g.user.is_superuser else g.user
     if not target_user:
         return jsonify({'equity': 0, 'cash': 0})
     api = get_user_api(target_user)
@@ -2158,12 +2239,28 @@ def api_account():
 @login_required
 def proxy_trade_internal():
     payload = request.get_json(silent=True) or {}
-    target_user = get_admin_dashboard_target_user(payload, required=True) if g.user.is_superuser else g.user
+    dashboard_scope = str(payload.get('dashboard_scope', 'single')).strip().lower() or 'single'
+    if dashboard_scope not in ('single', 'all_users', 'pool'):
+        return jsonify({'error': 'invalid_request', 'detail': 'dashboard_scope must be single, all_users or pool'}), 400
+    if not g.user.is_superuser and dashboard_scope != 'single':
+        return jsonify({'error': 'forbidden', 'detail': 'Only Admin can route orders to all users or pool account.'}), 403
+
+    if g.user.is_superuser and dashboard_scope == 'pool':
+        target_user = get_pooled_trading_user()
+    else:
+        target_user = get_admin_dashboard_target_user(payload, required=True) if g.user.is_superuser else g.user
     if not target_user:
         return jsonify({'error': 'invalid_request', 'detail': 'Admin must select a non-admin trading user.'}), 400
-    payload['user'] = target_user.tradingview_user
-    payload['dashboard_user_id'] = target_user.id
-    payload['dashboard_username'] = target_user.username
+    if dashboard_scope == 'all_users':
+        payload.pop('dashboard_user_id', None)
+        payload.pop('dashboard_username', None)
+        payload['user'] = 'DashboardAllUsers'
+    else:
+        payload['user'] = target_user.tradingview_user
+        payload['dashboard_user_id'] = target_user.id
+        payload['dashboard_username'] = target_user.username
+    payload['dashboard_scope'] = dashboard_scope
+    payload['pooled_trade_request'] = dashboard_scope == 'pool'
     payload['dashboard_request'] = True
     symbol = payload.get('symbol')
     action = payload.get('action')
@@ -2173,7 +2270,7 @@ def proxy_trade_internal():
     limit_price = payload.get('limit_price')
     extended_hours_raw = payload.get('extended_hours')
     app.logger.info(
-        f"[TRADE_MANUAL_REQUEST] operator='{g.user.username}' target_user='{target_user.username}' symbol='{symbol}' action='{action}' amount='{amount}' "
+        f"[TRADE_MANUAL_REQUEST] operator='{g.user.username}' scope='{dashboard_scope}' target_user='{target_user.username}' symbol='{symbol}' action='{action}' amount='{amount}' "
         f"order_type='{order_type}' tif='{time_in_force}' extended_hours='{extended_hours_raw}'"
     )
     if not symbol or not action:
@@ -2209,6 +2306,7 @@ def proxy_trade_internal():
         headers = {}
         if WEBHOOK_SECRET:
             headers[WEBHOOK_SECRET_HEADER] = WEBHOOK_SECRET
+        headers['X-Internal-API-Key'] = INTERNAL_API_KEY
         r = requests.post(BOT_WEBHOOK, json=payload, headers=headers, timeout=10)
         if not r.ok:
             detail = r.text
@@ -2339,7 +2437,7 @@ def admin_investor_config():
 
     if request.method == 'POST':
         investor_data = {}
-        all_users = User.query.order_by(User.username).all()
+        all_users = regular_users_query().order_by(User.username).all()
         for user in all_users:
             amount_str = request.form.get(f'investment_{user.username}')
             if amount_str:
@@ -2359,9 +2457,14 @@ def admin_investor_config():
 
         return redirect(url_for('admin_investor_config'))
 
-    all_users = User.query.order_by(User.is_superuser.desc(), User.username).all()
+    all_users = regular_users_query().order_by(User.username).all()
     investor_data = get_investor_data()
-    return render_template('admin/investor_config.html', all_users=all_users, investor_data=investor_data)
+    return render_template(
+        'admin/investor_config.html',
+        all_users=all_users,
+        investor_data=investor_data,
+        pooled_trading_user=get_pooled_trading_user()
+    )
 
 @app.route('/investor_payout') # MODIFIED: Now accessible to all logged-in users
 @login_required
@@ -2377,14 +2480,13 @@ def api_investor_payout_data():
     if not ENABLE_INVESTOR_VIEW:
         return jsonify({'error': 'Feature not enabled'}), 403
 
-    # CRITICAL: This API must always use the admin's keys to get the total account value.
-    admin_user = User.query.filter_by(is_superuser=True).first()
-    if not admin_user:
-        return jsonify({'error': 'Admin account not found.'}), 500
+    pool_user = get_pooled_trading_user()
+    if not pool_user:
+        return jsonify({'error': 'Pooled trading account not found.'}), 500
 
-    api = get_user_api(admin_user)
+    api = get_user_api(pool_user)
     if not api:
-        return jsonify({'error': 'Admin Alpaca API keys are not configured.'}), 500
+        return jsonify({'error': 'Pooled trading account Alpaca API keys are not configured.'}), 500
 
     try:
         account = api.get_account()
@@ -2417,6 +2519,7 @@ def api_investor_payout_data():
         'total_investment': total_investment,
         'live_equity': live_equity,
         'total_pl': total_pl,
+        'pool_user': pool_user.username,
         'investors': sorted(payout_data, key=lambda x: x['investment'], reverse=True)
     })
 

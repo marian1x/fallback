@@ -44,6 +44,7 @@ INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "your-very-secret-internal-key"
 ENABLE_TV_BROADCAST = os.getenv("ENABLE_TV_BROADCAST", "false").lower() in ("1", "true", "yes", "y")
 TV_BROADCAST_USER = os.getenv("TV_BROADCAST_USER", "Test").strip()
 TV_BROADCAST_INCLUDE_SUPERUSER = os.getenv("TV_BROADCAST_INCLUDE_SUPERUSER", "false").lower() in ("1", "true", "yes", "y")
+POOLED_TRADING_USERNAME = os.getenv("POOLED_TRADING_USERNAME", os.getenv("ADMIN_USERNAME", "admin")).strip() or os.getenv("ADMIN_USERNAME", "admin")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
 WEBHOOK_SECRET_HEADER = os.getenv("WEBHOOK_SECRET_HEADER", "X-Webhook-Secret").strip() or "X-Webhook-Secret"
 MIN_TRADE_AMOUNT = float(os.getenv("MIN_TRADE_AMOUNT", "1"))
@@ -174,6 +175,15 @@ def _secure_compare(provided, expected):
         return hmac.compare_digest(str(provided), str(expected))
     except Exception:
         return False
+
+def _is_internal_dashboard_proxy():
+    return _secure_compare(request.headers.get("X-Internal-API-Key"), INTERNAL_API_KEY)
+
+def get_pooled_trading_user():
+    user = User.query.filter_by(username=POOLED_TRADING_USERNAME).first()
+    if user:
+        return user
+    return User.query.filter_by(is_superuser=True).order_by(User.id).first()
 
 def _cache_duplicate_signal(user_id, symbol, action):
     if SIGNAL_DEDUP_WINDOW_SEC <= 0:
@@ -720,13 +730,51 @@ def webhook():
     tradingview_user = (payload.get("user") or "").strip()
     dashboard_user_id = payload.get("dashboard_user_id")
     dashboard_username = (payload.get("dashboard_username") or "").strip()
+    dashboard_scope = str(payload.get("dashboard_scope", "single") or "single").strip().lower()
+    if dashboard_scope not in ("single", "all_users", "pool"):
+        return jsonify({"error": "Invalid dashboard_scope"}), 400
     
     if not tradingview_user and not dashboard_user_id and not dashboard_username:
         logger.error("[TRADE_REJECTED] 'user' field is missing from webhook.")
         return jsonify({"error": "Webhook missing 'user' identifier"}), 400
 
     with app.app_context():
-        if dashboard_user_id or dashboard_username:
+        if _is_dashboard_request(payload):
+            privileged_scope = dashboard_scope in ("all_users", "pool") or _parse_bool(payload.get("pooled_trade_request"), default=False)
+            if privileged_scope and not _is_internal_dashboard_proxy():
+                logger.warning(
+                    f"[SECURITY] Rejected privileged dashboard scope='{dashboard_scope}' from ip={request.remote_addr}"
+                )
+                return jsonify({"error": "Unauthorized dashboard routing scope"}), 401
+
+            user = None
+            if dashboard_scope == "all_users":
+                target_users = (
+                    User.query
+                    .filter_by(is_superuser=False, is_trading_restricted=False)
+                    .filter(User.encrypted_alpaca_key.isnot(None))
+                    .order_by(User.username)
+                    .all()
+                )
+            elif dashboard_scope == "pool":
+                user = get_pooled_trading_user()
+                target_users = [user] if user else []
+            elif dashboard_user_id:
+                try:
+                    user = db.session.get(User, int(dashboard_user_id))
+                except (TypeError, ValueError):
+                    user = None
+                target_users = [user] if user and not user.is_superuser else []
+            else:
+                target_users = []
+            if dashboard_scope == "single" and not target_users and dashboard_username:
+                user = User.query.filter_by(username=dashboard_username).first()
+                if user and not user.is_superuser:
+                    target_users = [user]
+            if dashboard_scope == "pool" and target_users:
+                payload["pooled_trade_request"] = True
+            logger.info(f"[WEBHOOK_DASHBOARD] Scope={dashboard_scope} targeting {len(target_users)} user(s).")
+        elif dashboard_user_id or dashboard_username:
             user = None
             if dashboard_user_id:
                 try:

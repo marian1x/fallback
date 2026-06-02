@@ -37,6 +37,34 @@
                     </form>
                 </div>
             </div>
+
+            <div class="card shadow-sm mb-4 border-warning">
+                <div class="card-header text-warning">
+                    <i class="fa-solid fa-rotate-left me-2"></i>Reset Trade History Only
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">
+                        Deletes only recorded trades from the dashboard database so local strategy evaluation can start from zero.
+                        Users, API keys, strategy settings and Investor Payout configuration are kept.
+                    </p>
+                    <p class="text-warning mb-2">
+                        Close real Alpaca positions first if you want a clean operational reset. This does not close broker positions.
+                    </p>
+                    <form action="{{ url_for('admin_reset_trade_history') }}" method="post" onsubmit="return confirm('Reset dashboard trade history only? A database backup will be created first.');">
+                        <div class="mb-2">
+                            <label for="confirmText" class="form-label small">Type RESET_TRADES to confirm</label>
+                            <input id="confirmText" name="confirm_text" class="form-control" autocomplete="off" required>
+                        </div>
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" value="1" id="clearLocalState" name="clear_local_strategy_state" checked>
+                            <label class="form-check-label" for="clearLocalState">
+                                Also clear local strategy runtime state/recovery file
+                            </label>
+                        </div>
+                        <button type="submit" class="btn btn-warning w-100"><i class="fa-solid fa-trash-clock me-2"></i>Reset Trade History</button>
+                    </form>
+                </div>
+            </div>
             
             <div class="card shadow-sm">
                 <div class="card-header text-danger">

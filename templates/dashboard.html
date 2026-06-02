@@ -16,14 +16,19 @@
         <div class="card-body d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3">
             <div>
                 <div class="fw-semibold"><i class="fa-solid fa-user-check me-2"></i>{{ _('Trading user') }}</div>
-                <div class="small text-muted">{{ _('Admin is only the operator. Orders and dashboard data use the selected non-admin user.') }}</div>
+                <div class="small text-muted">{{ _('Admin is only the operator. Choose whether orders go to one user, all users, or the pooled account.') }}</div>
             </div>
-            <div class="admin-trading-user-select">
-                <select id="adminTargetUser" class="form-select" data-bs-toggle="tooltip" title="{{ _('Select the user account that will own manual orders and displayed positions.') }}">
-                    {% for u in all_users %}
-                    <option value="{{ u.id }}" data-per-trade-amount="{{ u.per_trade_amount }}" {% if selected_trading_user and selected_trading_user.id == u.id %}selected{% endif %}>{{ u.username }}</option>
-                    {% endfor %}
+            <div class="d-flex flex-column flex-md-row gap-2 admin-routing-controls">
+                <select id="adminTradeScope" class="form-select" data-bs-toggle="tooltip" title="{{ _('Selected user trades one account. All users sends the same order to every active non-admin user. Pooled account trades one shared account used by Investor Payout.') }}">
+                    <option value="single" selected>{{ _('Selected user') }}</option>
+                    <option value="all_users">{{ _('All users') }}</option>
+                    <option value="pool">{{ _('Pooled account') }}{% if pooled_trading_user %}: {{ pooled_trading_user.username }}{% endif %}</option>
                 </select>
+                <select id="adminTargetUser" class="form-select" data-bs-toggle="tooltip" title="{{ _('Select the user account that will own manual orders and displayed positions.') }}">
+                        {% for u in all_users %}
+                        <option value="{{ u.id }}" data-per-trade-amount="{{ u.per_trade_amount }}" {% if selected_trading_user and selected_trading_user.id == u.id %}selected{% endif %}>{{ u.username }}</option>
+                        {% endfor %}
+                    </select>
             </div>
         </div>
     </div>
@@ -190,21 +195,37 @@
     const proxyTradeUrl = "{{ url_for('proxy_trade_internal') }}";
     const logClientEventUrl = "{{ url_for('log_client_event') }}";
     const isAdminSession = {{ 'true' if current_user.is_superuser else 'false' }};
+    const pooledTradingUserId = "{{ pooled_trading_user.id if current_user.is_superuser and pooled_trading_user else '' }}";
+
+    function selectedTradeScope() {
+        return isAdminSession ? ($('#adminTradeScope').val() || 'single') : 'single';
+    }
 
     function selectedTradingUserId() {
-        return isAdminSession ? ($('#adminTargetUser').val() || '') : '';
+        if (!isAdminSession) return '';
+        const scope = selectedTradeScope();
+        if (scope === 'pool') return pooledTradingUserId || '';
+        if (scope === 'all_users') return '';
+        return $('#adminTargetUser').val() || '';
     }
 
     function withSelectedUser(url) {
         const userId = selectedTradingUserId();
-        if (!userId) return url;
+        const params = new URLSearchParams();
+        params.set('dashboard_scope', selectedTradeScope());
+        if (userId) params.set('user_id', userId);
         const separator = url.includes('?') ? '&' : '?';
-        return `${url}${separator}user_id=${encodeURIComponent(userId)}`;
+        return `${url}${separator}${params.toString()}`;
     }
 
     function selectedUserPayload() {
+        const scope = selectedTradeScope();
         const userId = selectedTradingUserId();
-        return userId ? { dashboard_target_user_id: userId } : {};
+        const payload = { dashboard_scope: scope };
+        if (scope === 'single' && userId) {
+            payload.dashboard_target_user_id = userId;
+        }
+        return payload;
     }
 
     function colorPL(val, isBadge = false, tp = null, sl = null) {
@@ -521,6 +542,22 @@
         orderTypeSelect.on('change', syncOrderInputs);
         syncOrderInputs();
 
+        function syncAdminRoutingControls() {
+            const scope = selectedTradeScope();
+            $('#adminTargetUser').prop('disabled', scope !== 'single');
+            if (scope === 'single') {
+                const selected = $('#adminTargetUser').find('option:selected');
+                const amount = selected.data('per-trade-amount');
+                if (amount !== undefined && amount !== null && amount !== '') {
+                    $('#amountInput').val(amount);
+                }
+            }
+            localStorage.removeItem('bracketOrders');
+            setTradeActionStatus('');
+            fetchOpenPositions();
+            fetchAccountSummary();
+        }
+
         $('#adminTargetUser').on('change', function() {
             const selected = $(this).find('option:selected');
             const amount = selected.data('per-trade-amount');
@@ -532,6 +569,8 @@
             fetchOpenPositions();
             fetchAccountSummary();
         });
+        $('#adminTradeScope').on('change', syncAdminRoutingControls);
+        syncAdminRoutingControls();
 
         fetchOpenPositions();
         fetchAccountSummary();
@@ -684,8 +723,11 @@
     });
 </script>
 <style>
-.admin-trading-user-select {
-    min-width: min(100%, 320px);
+.admin-routing-controls {
+    min-width: min(100%, 560px);
+}
+.admin-routing-controls .form-select {
+    min-width: min(100%, 220px);
 }
 .form-control.is-invalid {
     border-color: var(--loss-color-text);
