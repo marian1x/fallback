@@ -23,6 +23,7 @@ import math
 import random
 import re
 import sys
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -368,6 +369,93 @@ def filter_session(df: pd.DataFrame, mode: str) -> pd.DataFrame:
     if mode == "extended":
         return df[~regular_mask]
     raise ValueError(f"Unknown session mode: {mode}")
+
+def normalize_timeframe_token(value: str) -> str:
+    token = str(value or "").strip().lower().replace(" ", "")
+    m = re.fullmatch(r"(\d+)(min|m|minute|minutes|hour|h|hours|day|d|days|week|w|weeks)", token)
+    if not m:
+        raise ValueError(f"Unsupported timeframe: {value}")
+    amount = int(m.group(1))
+    unit = m.group(2)
+    if amount < 1:
+        raise ValueError("Timeframe amount must be >= 1")
+    if unit in ("min", "m", "minute", "minutes"):
+        return f"{amount}Min"
+    if unit in ("hour", "h", "hours"):
+        return f"{amount}Hour"
+    if unit in ("day", "d", "days"):
+        return f"{amount}Day"
+    if unit in ("week", "w", "weeks"):
+        return f"{amount}Week"
+    raise ValueError(f"Unsupported timeframe: {value}")
+
+def timeframe_seconds(label: str) -> int:
+    normalized = normalize_timeframe_token(label)
+    m = re.fullmatch(r"(\d+)(Min|Hour|Day|Week)", normalized)
+    amount = int(m.group(1))
+    unit = m.group(2)
+    multipliers = {"Min": 60, "Hour": 3600, "Day": 86400, "Week": 604800}
+    return amount * multipliers[unit]
+
+def parse_timeframes_arg(value: Optional[str], fallback: str) -> List[str]:
+    raw = value or fallback
+    labels = [normalize_timeframe_token(part) for part in str(raw).split(",") if part.strip()]
+    if not labels:
+        labels = [normalize_timeframe_token(fallback)]
+    out = []
+    seen = set()
+    for label in labels:
+        if label not in seen:
+            out.append(label)
+            seen.add(label)
+    out.sort(key=timeframe_seconds)
+    return out
+
+def choose_fetch_timeframe(labels: List[str]) -> str:
+    minute_amounts = []
+    has_hour = False
+    has_day_or_week = False
+    for label in labels:
+        m = re.fullmatch(r"(\d+)(Min|Hour|Day|Week)", normalize_timeframe_token(label))
+        amount = int(m.group(1))
+        unit = m.group(2)
+        if unit == "Min":
+            minute_amounts.append(amount)
+        elif unit == "Hour":
+            has_hour = True
+        else:
+            has_day_or_week = True
+    if minute_amounts:
+        from math import gcd
+        base = minute_amounts[0]
+        for amount in minute_amounts[1:]:
+            base = gcd(base, amount)
+        return f"{max(1, base)}Min"
+    if has_hour:
+        return "1Hour"
+    if has_day_or_week:
+        return "1Day"
+    return labels[0]
+
+def timeframe_to_pandas_rule(label: str) -> str:
+    normalized = normalize_timeframe_token(label)
+    m = re.fullmatch(r"(\d+)(Min|Hour|Day|Week)", normalized)
+    amount = int(m.group(1))
+    unit = m.group(2)
+    suffix = {"Min": "min", "Hour": "h", "Day": "D", "Week": "W"}[unit]
+    return f"{amount}{suffix}"
+
+def resample_bars(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    rule = timeframe_to_pandas_rule(timeframe)
+    agg = {
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum",
+    }
+    out = df.sort_index().resample(rule, label="right", closed="right").agg(agg)
+    return out.dropna(subset=["open", "high", "low", "close"])
 
 
 def ema(series: pd.Series, length: int) -> pd.Series:
@@ -800,6 +888,11 @@ def result_row(res: BacktestResult) -> Dict[str, object]:
     row.update(asdict(res.params))
     return row
 
+def result_row_for_timeframe(timeframe: str, res: BacktestResult) -> Dict[str, object]:
+    row = {"timeframe": timeframe}
+    row.update(result_row(res))
+    return row
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Optimize Keltner Pine strategy parameters locally.")
@@ -810,6 +903,7 @@ def main() -> None:
     parser.add_argument("--feed", type=str, default="iex", help="Alpaca feed (iex/sip). For free plans use iex.")
     parser.add_argument("--symbol", type=str, default=None)
     parser.add_argument("--timeframe", type=str, default=None)
+    parser.add_argument("--timeframes", type=str, default=None, help="Comma-separated sweep, e.g. 5Min,10Min,1Hour,2Day")
     parser.add_argument("--session", type=str, default="regular", choices=["regular", "extended", "all"])
     parser.add_argument("--start", type=str, default=None, help="UTC ISO start override, e.g. 2023-01-03T00:00:00Z")
     parser.add_argument("--end", type=str, default=None, help="UTC ISO end override")
@@ -858,6 +952,8 @@ def main() -> None:
 
     symbol = (args.symbol or symbol_from_ref).split(":")[-1].upper()
     timeframe = args.timeframe or tf_from_ref
+    timeframes = parse_timeframes_arg(args.timeframes, timeframe)
+    fetch_timeframe = choose_fetch_timeframe(timeframes)
 
     if args.start:
         start_utc = pd.Timestamp(args.start, tz="UTC").to_pydatetime()
@@ -878,16 +974,12 @@ def main() -> None:
     else:
         bars = fetch_bars_alpaca(
             symbol=symbol,
-            timeframe=timeframe,
+            timeframe=fetch_timeframe,
             start_utc=start_utc,
             end_utc=end_utc,
             username=args.alpaca_user,
             feed=args.feed,
         )
-
-    bars = filter_session(bars, args.session)
-    if bars.empty:
-        raise SystemExit(f"No bars left after applying session filter '{args.session}'.")
 
     ranges = {
         "inner_kc_length": parse_range(args.inner_len_range, is_int=True),
@@ -900,83 +992,111 @@ def main() -> None:
         "forced_take_profit_pct": parse_range(args.forced_tp_range, is_int=False),
         "trailing_offset_ticks": parse_range(args.trail_offset_range, is_int=True),
     }
-    if all(len(values) == 1 for values in ranges.values()):
-        base_params = StrategyParams(
-            trade_direction=args.trade_direction,
-            inner_kc_length=int(ranges["inner_kc_length"][0]),
-            inner_kc_mult=float(ranges["inner_kc_mult"][0]),
-            outer_kc_length=int(ranges["outer_kc_length"][0]),
-            outer_kc_mult=float(ranges["outer_kc_mult"][0]),
-            fixed_stop_loss_pct=float(ranges["fixed_stop_loss_pct"][0]),
-            fixed_take_profit_pct=float(ranges["fixed_take_profit_pct"][0]),
-            forced_stop_loss_pct=float(ranges["forced_stop_loss_pct"][0]),
-            forced_take_profit_pct=float(ranges["forced_take_profit_pct"][0]),
-            trailing_offset_ticks=int(ranges["trailing_offset_ticks"][0]),
-            tick_size=base_params.tick_size,
-        )
 
-    rng = random.Random(args.seed)
-    seen = set()
-    results: List[BacktestResult] = []
+    all_results: List[Tuple[str, BacktestResult]] = []
+    reference_timeframe = None
+    reference_result = None
+    bars_count_by_timeframe: Dict[str, int] = {}
 
-    # Evaluate reference config first.
-    base_params.trade_direction = args.trade_direction
-    base_result = backtest(bars, base_params, cfg, start_utc, end_utc)
-    results.append(base_result)
-    seen.add(tuple(asdict(base_params).items()))
-
-    print(f"Reference/backbone result: net={base_result.net_profit:.2f} USD | PF={base_result.profit_factor:.3f} | "
-          f"trades={base_result.total_trades} | win={base_result.win_rate_pct:.2f}%")
-
-    for i in range(args.trials):
-        p = sample_params(rng, base_params, ranges, args.trade_direction)
-        key = tuple(asdict(p).items())
-        if key in seen:
+    for tf_index, tf_label in enumerate(timeframes):
+        tf_bars = resample_bars(bars, tf_label)
+        tf_bars = filter_session(tf_bars, args.session)
+        bars_count_by_timeframe[tf_label] = int(len(tf_bars))
+        if tf_bars.empty:
+            print(f"Skipping {tf_label}: no bars after session filter '{args.session}'.")
             continue
-        seen.add(key)
 
+        params_template = deepcopy(base_params)
+        if all(len(values) == 1 for values in ranges.values()):
+            params_template = StrategyParams(
+                trade_direction=args.trade_direction,
+                inner_kc_length=int(ranges["inner_kc_length"][0]),
+                inner_kc_mult=float(ranges["inner_kc_mult"][0]),
+                outer_kc_length=int(ranges["outer_kc_length"][0]),
+                outer_kc_mult=float(ranges["outer_kc_mult"][0]),
+                fixed_stop_loss_pct=float(ranges["fixed_stop_loss_pct"][0]),
+                fixed_take_profit_pct=float(ranges["fixed_take_profit_pct"][0]),
+                forced_stop_loss_pct=float(ranges["forced_stop_loss_pct"][0]),
+                forced_take_profit_pct=float(ranges["forced_take_profit_pct"][0]),
+                trailing_offset_ticks=int(ranges["trailing_offset_ticks"][0]),
+                tick_size=params_template.tick_size,
+            )
+
+        rng = random.Random(args.seed + tf_index)
+        seen = set()
+        params_template.trade_direction = args.trade_direction
         try:
-            res = backtest(bars, p, cfg, start_utc, end_utc)
-            results.append(res)
-        except Exception:
+            base_result = backtest(tf_bars, params_template, cfg, start_utc, end_utc)
+        except Exception as exc:
+            print(f"Skipping {tf_label}: {exc}")
             continue
+        all_results.append((tf_label, base_result))
+        if reference_result is None:
+            reference_result = base_result
+            reference_timeframe = tf_label
+        seen.add(tuple(asdict(params_template).items()))
 
-        if (i + 1) % 25 == 0:
-            best = max(results, key=lambda r: r.score)
-            print(f"Trial {i+1:4d}/{args.trials}: best score={best.score:.4f}, net={best.net_profit:.2f}, "
-                  f"PF={best.profit_factor:.3f}, trades={best.total_trades}")
+        print(f"[{tf_label}] Reference/backbone result: net={base_result.net_profit:.2f} USD | "
+              f"PF={base_result.profit_factor:.3f} | trades={base_result.total_trades} | "
+              f"win={base_result.win_rate_pct:.2f}%")
 
-    results.sort(key=lambda r: r.score, reverse=True)
-    top = results[: max(1, args.top_k)]
+        for i in range(args.trials):
+            p = sample_params(rng, params_template, ranges, args.trade_direction)
+            key = tuple(asdict(p).items())
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                res = backtest(tf_bars, p, cfg, start_utc, end_utc)
+                all_results.append((tf_label, res))
+            except Exception:
+                continue
+
+            if (i + 1) % 25 == 0:
+                best_tf, best_res = max(all_results, key=lambda item: item[1].score)
+                print(f"[{tf_label}] Trial {i+1:4d}/{args.trials}: global best={best_tf} "
+                      f"score={best_res.score:.4f}, net={best_res.net_profit:.2f}, "
+                      f"PF={best_res.profit_factor:.3f}, trades={best_res.total_trades}")
+
+    if not all_results:
+        raise SystemExit(f"No bars left after applying session filter '{args.session}' for any timeframe.")
+
+    all_results.sort(key=lambda item: item[1].score, reverse=True)
+    top = all_results[: max(1, args.top_k)]
 
     args.top_csv.parent.mkdir(parents=True, exist_ok=True)
     with args.top_csv.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(result_row(top[0]).keys()))
+        writer = csv.DictWriter(f, fieldnames=list(result_row_for_timeframe(top[0][0], top[0][1]).keys()))
         writer.writeheader()
-        for r in top:
-            writer.writerow(result_row(r))
+        for tf_label, res in top:
+            writer.writerow(result_row_for_timeframe(tf_label, res))
 
+    best_timeframe, best = top[0]
     report = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "symbol_input": raw_symbol,
         "symbol_used": symbol,
-        "timeframe": timeframe,
+        "timeframe": best_timeframe if len(timeframes) == 1 else "sweep",
+        "timeframes": timeframes,
+        "best_timeframe": best_timeframe,
+        "fetch_timeframe": fetch_timeframe,
         "date_range_utc": {"start": start_utc.isoformat(), "end": end_utc.isoformat()},
-        "bars_count": int(len(bars)),
+        "bars_count": int(bars_count_by_timeframe.get(best_timeframe, 0)),
+        "bars_count_by_timeframe": bars_count_by_timeframe,
         "session_filter": args.session,
         "config": asdict(cfg),
         "reference_properties": {k: str(v) for k, v in ref_props.items()},
         "reference_metrics": ref_data,
-        "reference_result": result_row(base_result),
-        "best_result": result_row(top[0]),
-        "top_results": [result_row(r) for r in top],
+        "reference_result": result_row_for_timeframe(reference_timeframe or best_timeframe, reference_result or best),
+        "best_result": result_row_for_timeframe(best_timeframe, best),
+        "top_results": [result_row_for_timeframe(tf_label, res) for tf_label, res in top],
     }
 
     args.report_json.parent.mkdir(parents=True, exist_ok=True)
     args.report_json.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
-    best = top[0]
     print("\n=== Best combination ===")
+    print(f"Timeframe: {best_timeframe}")
     print(f"Score: {best.score:.4f}")
     print(f"Net profit: {best.net_profit:.2f} USD ({best.return_pct:.2f}%)")
     print(f"Profit factor: {best.profit_factor:.3f} | Sharpe: {best.sharpe:.3f}")

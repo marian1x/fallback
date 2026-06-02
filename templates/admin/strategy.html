@@ -232,6 +232,34 @@
                                                 <input class="form-check-input" type="checkbox" name="optimize_enabled" id="optimizeEnabled" {% if config.optimize_enabled %}checked{% endif %}>
                                                 <label class="form-check-label" for="optimizeEnabled">Enable parameter optimization {{ tip('Off: run exact TW-style settings. On: run random search using the ranges below.') }}</label>
                                             </div>
+                                            <div class="strategy-target-card mb-3">
+                                                <div class="form-check form-switch mb-3">
+                                                    <input class="form-check-input" type="checkbox" name="timeframe_sweep_enabled" id="timeframeSweepEnabled" {% if config.timeframe_sweep_enabled %}checked{% endif %}>
+                                                    <label class="form-check-label" for="timeframeSweepEnabled">Optimize chart interval range {{ tip('Testeaza pe rand intervalele de minute, ore si zile. Best result va include timeframe-ul castigator.') }}</label>
+                                                </div>
+                                                <div class="row g-3">
+                                                    <div class="col-12 col-lg-4">
+                                                        <label class="form-label">Minute intervals {{ tip('Lista separata prin virgula. Exemplu: 5,10,15,30 inseamna 5Min, 10Min, 15Min, 30Min.') }}</label>
+                                                        <input type="text" name="timeframe_minutes" class="form-control" value="{{ config.timeframe_minutes }}">
+                                                    </div>
+                                                    <div class="col-12 col-lg-4">
+                                                        <label class="form-label">Hours range {{ tip('Range-ul orelor. Exemplu 1-24 step 1 ruleaza 1Hour, 2Hour ... 24Hour. 24Hour este resamplat local.') }}</label>
+                                                        <div class="d-flex gap-2">
+                                                            <input type="number" name="timeframe_hours_start" class="form-control" value="{{ config.timeframe_hours_start }}" min="1">
+                                                            <input type="number" name="timeframe_hours_end" class="form-control" value="{{ config.timeframe_hours_end }}" min="1">
+                                                            <input type="number" name="timeframe_hours_step" class="form-control" value="{{ config.timeframe_hours_step }}" min="1">
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-12 col-lg-4">
+                                                        <label class="form-label">Days range {{ tip('Range-ul zilelor. Exemplu 1-5 step 1 ruleaza 1Day, 2Day ... 5Day prin resampling local.') }}</label>
+                                                        <div class="d-flex gap-2">
+                                                            <input type="number" name="timeframe_days_start" class="form-control" value="{{ config.timeframe_days_start }}" min="1">
+                                                            <input type="number" name="timeframe_days_end" class="form-control" value="{{ config.timeframe_days_end }}" min="1">
+                                                            <input type="number" name="timeframe_days_step" class="form-control" value="{{ config.timeframe_days_step }}" min="1">
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
                                             <div class="row g-3">
                                                 <div class="col-6 col-lg-3">
                                                     <label class="form-label">Trials {{ tip('Number of random combinations to test. Higher values take longer.') }}</label>

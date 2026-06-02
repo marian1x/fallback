@@ -526,7 +526,7 @@ def summarize_strategy_report(report, source='local', job_id=None):
     ]
     return {
         'symbol': strategy_store.normalize_symbol(report.get('symbol_used') or report.get('symbol_input') or ''),
-        'timeframe': report.get('timeframe'),
+        'timeframe': best.get('timeframe') or report.get('best_timeframe') or report.get('timeframe'),
         'session': report.get('session_filter'),
         'run_at_utc': report.get('generated_at_utc') or datetime.now(timezone.utc).isoformat(),
         'source': source,
@@ -586,6 +586,72 @@ def local_strategy_datetime_to_utc_iso(date_value, time_value, cap_now=False):
 def exact_range(value, step='0.1'):
     return f"{value}:{value}:{step}"
 
+def build_strategy_timeframes(config):
+    if not bool(config.get('timeframe_sweep_enabled')):
+        return [str(config.get('timeframe', '30Min'))]
+    out = []
+    seen = set()
+
+    def add(label):
+        if label not in seen:
+            out.append(label)
+            seen.add(label)
+
+    for raw in str(config.get('timeframe_minutes', '5,10,15,30')).split(','):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            minutes = int(float(raw))
+            if minutes > 0:
+                add(f"{minutes}Min")
+        except Exception:
+            continue
+
+    def add_numeric_range(prefix, start_key, end_key, step_key, default_start, default_end, default_step):
+        try:
+            start = int(config.get(start_key, default_start))
+            end = int(config.get(end_key, default_end))
+            step = int(config.get(step_key, default_step))
+        except Exception:
+            start, end, step = default_start, default_end, default_step
+        step = max(1, step)
+        if end < start:
+            start, end = end, start
+        for value in range(max(1, start), max(1, end) + 1, step):
+            add(f"{value}{prefix}")
+
+    add_numeric_range('Hour', 'timeframe_hours_start', 'timeframe_hours_end', 'timeframe_hours_step', 1, 24, 1)
+    add_numeric_range('Day', 'timeframe_days_start', 'timeframe_days_end', 'timeframe_days_step', 1, 5, 1)
+    return out or [str(config.get('timeframe', '30Min'))]
+
+def strategy_fetch_timeframe(config):
+    timeframes = build_strategy_timeframes(config)
+    minute_values = []
+    has_hour = False
+    has_day = False
+    for label in timeframes:
+        if label.endswith('Min'):
+            try:
+                minute_values.append(int(label[:-3]))
+            except Exception:
+                pass
+        elif label.endswith('Hour'):
+            has_hour = True
+        elif label.endswith('Day') or label.endswith('Week'):
+            has_day = True
+    if minute_values:
+        import math
+        base = minute_values[0]
+        for value in minute_values[1:]:
+            base = math.gcd(base, value)
+        return f"{max(1, base)}Min"
+    if has_hour:
+        return "1Hour"
+    if has_day:
+        return "1Day"
+    return timeframes[0]
+
 def build_strategy_optimizer_args(config, report_path, top_path, bars_csv_path=None):
     start_iso = local_strategy_datetime_to_utc_iso(
         config.get("backtest_start_date"),
@@ -609,6 +675,7 @@ def build_strategy_optimizer_args(config, report_path, top_path, bars_csv_path=N
         "misc/pine_optimizer.py",
         "--symbol", str(config.get("symbol", "TSM")),
         "--timeframe", str(config.get("timeframe", "30Min")),
+        "--timeframes", ",".join(build_strategy_timeframes(config)),
         "--session", str(config.get("session", "regular")),
         "--feed", str(config.get("feed", "iex")),
         "--trials", str(int(config.get("trials", 200))),
@@ -659,7 +726,7 @@ def fetch_strategy_bars_csv(config):
     symbol = strategy_store.normalize_symbol(config.get("symbol", ""))
     bars = api.get_bars(
         symbol,
-        str(config.get("timeframe", "30Min")),
+        strategy_fetch_timeframe(config),
         start=start_iso,
         end=end_iso,
         adjustment="raw",
@@ -899,6 +966,7 @@ def admin_strategy():
 
         config['enabled'] = 'enabled' in request.form
         config['optimize_enabled'] = 'optimize_enabled' in request.form
+        config['timeframe_sweep_enabled'] = 'timeframe_sweep_enabled' in request.form
         compute_target = request.form.get('compute_target', config.get('compute_target', 'local')).strip().lower()
         config['compute_target'] = compute_target if compute_target in ('local', 'remote') else 'local'
         config['alpaca_user'] = request.form.get('alpaca_user', '').strip()
@@ -933,6 +1001,13 @@ def admin_strategy():
         config['recalc_on_every_tick'] = 'recalc_on_every_tick' in request.form
         config['trials'] = max(1, as_int(request.form.get('trials', config.get('trials', 200)), 200))
         config['top_k'] = max(1, as_int(request.form.get('top_k', config.get('top_k', 20)), 20))
+        config['timeframe_minutes'] = request.form.get('timeframe_minutes', config.get('timeframe_minutes', '5,10,15,30')).strip()
+        config['timeframe_hours_start'] = max(1, as_int(request.form.get('timeframe_hours_start', config.get('timeframe_hours_start', 1)), 1))
+        config['timeframe_hours_end'] = max(1, as_int(request.form.get('timeframe_hours_end', config.get('timeframe_hours_end', 24)), 24))
+        config['timeframe_hours_step'] = max(1, as_int(request.form.get('timeframe_hours_step', config.get('timeframe_hours_step', 1)), 1))
+        config['timeframe_days_start'] = max(1, as_int(request.form.get('timeframe_days_start', config.get('timeframe_days_start', 1)), 1))
+        config['timeframe_days_end'] = max(1, as_int(request.form.get('timeframe_days_end', config.get('timeframe_days_end', 5)), 5))
+        config['timeframe_days_step'] = max(1, as_int(request.form.get('timeframe_days_step', config.get('timeframe_days_step', 1)), 1))
         config['inner_len_range'] = request.form.get('inner_len_range', config.get('inner_len_range', '8:40:1')).strip()
         config['inner_mult_range'] = request.form.get('inner_mult_range', config.get('inner_mult_range', '0.6:1.8:0.1')).strip()
         config['outer_len_range'] = request.form.get('outer_len_range', config.get('outer_len_range', '8:40:1')).strip()

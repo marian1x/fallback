@@ -99,6 +99,15 @@ def _parse_adjustment(value: str) -> Adjustment:
 
 def _parse_timeframe(value: str) -> TimeFrame:
     token = str(value or "").strip().lower()
+    import re
+    m = re.fullmatch(r"(\d+)(min|m|minute|minutes|hour|h|hours)", token)
+    if m:
+        amount = int(m.group(1))
+        unit = m.group(2)
+        if unit in ("min", "m", "minute", "minutes"):
+            return TimeFrame(amount, TimeFrameUnit.Minute)
+        if unit in ("hour", "h", "hours"):
+            return TimeFrame(amount, TimeFrameUnit.Hour)
     if token in ("1min", "1m"):
         return TimeFrame(1, TimeFrameUnit.Minute)
     if token in ("5min", "5m"):
