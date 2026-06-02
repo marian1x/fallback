@@ -477,7 +477,16 @@
                                             <tbody>
                                                 {% for job in all_jobs %}
                                                 <tr>
-                                                    <td>{{ job.symbol }}</td>
+                                                    <td>
+                                                        <div class="d-flex align-items-center gap-2">
+                                                            <span>{{ job.symbol }}</span>
+                                                            {% if job.signal_exact_match %}
+                                                            <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle" data-strategy-tip title="Aceasta configuratie exacta a fost adaugata in Signal Universe.">In Signals</span>
+                                                            {% elif job.signal_symbol_match %}
+                                                            <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle" data-strategy-tip title="Acest simbol exista deja in Signal Universe, dar cu alta configuratie/backtest.">Symbol in Signals</span>
+                                                            {% endif %}
+                                                        </div>
+                                                    </td>
                                                     <td>{{ job.summary.timeframe if job.summary else job.timeframe }}</td>
                                                     <td>{{ job.compute_target or '-' }}</td>
                                                     <td><span class="badge bg-neutral">{{ job.status }}</span></td>
@@ -487,7 +496,13 @@
                                                     <td class="text-end text-nowrap">
                                                         <button class="btn btn-sm btn-link px-1" type="button" data-bs-toggle="collapse" data-bs-target="#runDetails{{ loop.index }}">Details</button>
                                                         {% if job.status == 'completed' and job.summary %}
-                                                        <button class="btn btn-sm btn-outline-primary px-2" type="submit" name="action" value="add_job_result" onclick="document.getElementById('selectedJobId').value='{{ job.id }}'">Add to Signals</button>
+                                                            {% if job.signal_exact_match %}
+                                                            <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">Already added</span>
+                                                            {% elif job.signal_symbol_match %}
+                                                            <button class="btn btn-sm btn-outline-primary px-2" type="submit" name="action" value="add_job_result" onclick="document.getElementById('selectedJobId').value='{{ job.id }}'">Update Signals</button>
+                                                            {% else %}
+                                                            <button class="btn btn-sm btn-outline-primary px-2" type="submit" name="action" value="add_job_result" onclick="document.getElementById('selectedJobId').value='{{ job.id }}'">Add to Signals</button>
+                                                            {% endif %}
                                                         {% endif %}
                                                     </td>
                                                 </tr>

@@ -531,10 +531,29 @@ def load_strategy_job_report(job_id):
         app.logger.error(f"[STRATEGY] Failed to load job report {job_id}: {e}")
         return None
 
-def enrich_strategy_jobs(jobs):
+def enrich_strategy_jobs(jobs, config=None):
+    universe = strategy_store.normalize_universe((config or {}).get('universe'))
+    signal_job_ids = set()
+    signal_symbols = {}
+    for entry in universe:
+        backtest = entry.get('backtest') if isinstance(entry, dict) else None
+        if not isinstance(backtest, dict):
+            continue
+        symbol = strategy_store.normalize_symbol(entry.get('symbol', ''))
+        if symbol:
+            signal_symbols[symbol] = entry
+        job_id = str(backtest.get('job_id') or '').strip()
+        if job_id:
+            signal_job_ids.add(job_id)
+
     enriched = []
     for job in jobs:
         item = dict(job)
+        job_id = str(item.get('id') or '').strip()
+        symbol = strategy_store.normalize_symbol(item.get('symbol', ''))
+        item['signal_exact_match'] = job_id in signal_job_ids
+        item['signal_symbol_match'] = symbol in signal_symbols
+        item['signal_universe_entry'] = signal_symbols.get(symbol)
         report = load_strategy_job_report(item.get('id'))
         if isinstance(report, dict):
             item['report'] = report
@@ -553,6 +572,27 @@ def parse_strategy_symbols(raw_value):
             symbols.append(symbol)
             seen.add(symbol)
     return symbols
+
+def find_active_strategy_job(config, compute_target):
+    symbol = strategy_store.normalize_symbol(config.get('symbol', ''))
+    timeframe = str(config.get('timeframe', '') or '')
+    session_name = str(config.get('session', '') or '')
+    feed = str(config.get('feed', '') or '')
+    for job in list_strategy_jobs(limit=500):
+        if job.get('status') not in ('queued', 'running'):
+            continue
+        if job.get('compute_target') != compute_target:
+            continue
+        if strategy_store.normalize_symbol(job.get('symbol', '')) != symbol:
+            continue
+        if str(job.get('timeframe', '') or '') != timeframe:
+            continue
+        if str(job.get('session', '') or '') != session_name:
+            continue
+        if str(job.get('feed', '') or '') != feed:
+            continue
+        return job
+    return None
 
 def summarize_strategy_report(report, source='local', job_id=None):
     if not isinstance(report, dict):
@@ -1125,12 +1165,17 @@ def admin_strategy():
             jobs_queued = []
             jobs_completed = []
             jobs_failed = []
+            jobs_skipped = []
 
             for sym in symbols:
                 run_config = config.copy()
                 run_config['symbol'] = sym
 
                 try:
+                    active_job = find_active_strategy_job(run_config, compute_target)
+                    if active_job:
+                        jobs_skipped.append(sym)
+                        continue
                     job = create_strategy_job(run_config, compute_target)
                     if compute_target == 'remote':
                         jobs_queued.append(sym)
@@ -1170,6 +1215,8 @@ def admin_strategy():
             if jobs_completed:
                 save_strategy_config(config)
                 flash(f"Strategy run completed for {', '.join(jobs_completed)}.", "success")
+            if jobs_skipped:
+                flash(f"Skipped duplicate active jobs for {', '.join(jobs_skipped)}.", "warning")
             if jobs_failed:
                 flash(f"Strategy run failed for {', '.join(jobs_failed)}.", "danger")
         else:
@@ -1185,7 +1232,7 @@ def admin_strategy():
         report=report,
         top_rows=top_rows,
         users=users,
-        all_jobs=enrich_strategy_jobs(list_strategy_jobs(limit=50)),
+        all_jobs=enrich_strategy_jobs(list_strategy_jobs(limit=50), config),
         tradable_symbols=[],
     )
 
