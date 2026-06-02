@@ -24,6 +24,7 @@ import requests
 
 from alpaca_api import LegacyCompatibleAlpacaClient
 from models import db, Trade, User
+import strategy_config as strategy_store
 from trade_db import record_open_trade, record_closed_trade
 from utils import encrypt_data, decrypt_data
 
@@ -72,7 +73,6 @@ if not REPO_PATH or not os.path.isdir(REPO_PATH):
     REPO_PATH = os.path.abspath(os.path.dirname(__file__))
 LAST_GOOD_COMMIT_FILE = os.path.join(app.instance_path, 'last_good_commit.txt')
 VERSION_COUNTER_FILE = os.path.join(app.instance_path, 'version_counter.txt')
-STRATEGY_CONFIG_FILE = os.path.join(app.instance_path, 'strategy_config.json')
 STRATEGY_REPORT_FILE = os.path.join(app.instance_path, 'strategy_last_report.json')
 STRATEGY_TOP_FILE = os.path.join(app.instance_path, 'strategy_last_top.csv')
 LOGIN_RATE_LIMIT_WINDOW_SEC = int(os.getenv('LOGIN_RATE_LIMIT_WINDOW_SEC', '600'))
@@ -369,47 +369,62 @@ def ensure_last_good_commit():
         write_last_good_commit(current["hash"])
 
 def get_default_strategy_config():
-    return {
-        "enabled": False,
-        "alpaca_user": "",
-        "symbol": "TSM",
-        "timeframe": "30Min",
-        "session": "regular",
-        "feed": "sip",
-        "trials": 200,
-        "top_k": 20,
-        "trade_direction": "Both",
-        "inner_len_range": "8:40:1",
-        "inner_mult_range": "0.6:1.8:0.1",
-        "outer_len_range": "8:40:1",
-        "outer_mult_range": "1:4:1",
-        "fixed_sl_range": "1.0:5.0:0.1",
-        "fixed_tp_range": "0.8:4.0:0.1",
-        "forced_sl_range": "3.0:10.0:0.2",
-        "forced_tp_range": "3.0:10.0:0.2",
-        "trail_offset_range": "4:4:1",
-    }
+    return strategy_store.get_default_strategy_config()
 
 def load_strategy_config():
-    data = get_default_strategy_config()
-    if not os.path.exists(STRATEGY_CONFIG_FILE):
-        return data
     try:
-        with open(STRATEGY_CONFIG_FILE, "r", encoding="utf-8") as f:
-            file_data = json.load(f)
-        if isinstance(file_data, dict):
-            data.update(file_data)
+        return strategy_store.load_strategy_config()
     except Exception as e:
         app.logger.error(f"[STRATEGY] Failed to load strategy config: {e}")
-    return data
+        return get_default_strategy_config()
 
 def save_strategy_config(cfg):
     try:
-        os.makedirs(os.path.dirname(STRATEGY_CONFIG_FILE), exist_ok=True)
-        with open(STRATEGY_CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2)
+        strategy_store.save_strategy_config(cfg)
     except Exception as e:
         app.logger.error(f"[STRATEGY] Failed to save strategy config: {e}")
+
+def load_cached_tradable_symbols():
+    symbols_file = os.path.join(app.instance_path, 'tradable_symbols.json')
+    if not os.path.exists(symbols_file):
+        update_symbols_task()
+    try:
+        with open(symbols_file, 'r', encoding='utf-8') as f:
+            symbols = json.load(f)
+        if isinstance(symbols, list):
+            return sorted({str(s).upper() for s in symbols if s})
+    except Exception as e:
+        app.logger.warning(f"[STRATEGY] Could not read tradable symbols cache: {e}")
+    return []
+
+def parse_strategy_universe_from_form(form):
+    symbols = form.getlist('universe_symbol[]')
+    modes = form.getlist('universe_mode[]')
+    enabled_values = form.getlist('universe_enabled[]')
+    notes = form.getlist('universe_notes[]')
+    entries = []
+    for idx, raw_symbol in enumerate(symbols):
+        symbol = strategy_store.normalize_symbol(raw_symbol)
+        if not symbol:
+            continue
+        mode = modes[idx] if idx < len(modes) else 'both'
+        enabled_value = enabled_values[idx] if idx < len(enabled_values) else '1'
+        note = notes[idx] if idx < len(notes) else ''
+        entries.append({
+            'symbol': symbol,
+            'mode': mode,
+            'enabled': str(enabled_value).lower() in ('1', 'true', 'yes', 'on'),
+            'notes': note,
+        })
+    return strategy_store.normalize_universe(entries)
+
+def get_strategy_api_user(config):
+    username = str(config.get('alpaca_user', '') or '').strip()
+    if username:
+        user = User.query.filter_by(username=username).first()
+        if user:
+            return user
+    return User.query.filter_by(is_superuser=True).first() or User.query.first()
 
 def load_strategy_report():
     if not os.path.exists(STRATEGY_REPORT_FILE):
@@ -655,6 +670,7 @@ def admin_strategy():
         config['timeframe'] = request.form.get('timeframe', config.get('timeframe', '30Min')).strip()
         config['session'] = request.form.get('session', config.get('session', 'regular')).strip()
         config['feed'] = request.form.get('feed', config.get('feed', 'iex')).strip()
+        config['live_data_source'] = 'alpaca'
         config['trade_direction'] = request.form.get('trade_direction', config.get('trade_direction', 'Both')).strip()
         config['trials'] = max(1, as_int(request.form.get('trials', config.get('trials', 200)), 200))
         config['top_k'] = max(1, as_int(request.form.get('top_k', config.get('top_k', 20)), 20))
@@ -667,6 +683,18 @@ def admin_strategy():
         config['forced_sl_range'] = request.form.get('forced_sl_range', config.get('forced_sl_range', '3.0:10.0:0.2')).strip()
         config['forced_tp_range'] = request.form.get('forced_tp_range', config.get('forced_tp_range', '3.0:10.0:0.2')).strip()
         config['trail_offset_range'] = request.form.get('trail_offset_range', config.get('trail_offset_range', '4:4:1')).strip()
+        universe = parse_strategy_universe_from_form(request.form)
+        tradable_symbols = set(load_cached_tradable_symbols())
+        invalid_symbols = []
+        if tradable_symbols:
+            valid_universe = []
+            for item in universe:
+                if item['symbol'] in tradable_symbols:
+                    valid_universe.append(item)
+                else:
+                    invalid_symbols.append(item['symbol'])
+            universe = valid_universe
+        config['universe'] = universe
 
         save_strategy_config(config)
         app.logger.info(
@@ -676,6 +704,8 @@ def admin_strategy():
             config['symbol'],
             config['timeframe'],
         )
+        if invalid_symbols:
+            flash(f"Skipped symbols not found in Alpaca tradable list: {', '.join(invalid_symbols[:12])}", "warning")
 
         if action == 'run':
             ok, out, err = run_strategy_optimizer(config)
@@ -699,7 +729,51 @@ def admin_strategy():
         report=report,
         top_rows=top_rows,
         users=users,
+        tradable_symbols=[],
     )
+
+@app.route('/api/admin/strategy/live_snapshot')
+@superuser_required
+def api_admin_strategy_live_snapshot():
+    config = load_strategy_config()
+    api_user = get_strategy_api_user(config)
+    if not api_user:
+        return jsonify({'error': 'no_api_user'}), 400
+    api = get_user_api(api_user)
+    if not api:
+        return jsonify({'error': 'api_not_configured'}), 400
+
+    rows = []
+    for item in strategy_store.normalize_universe(config.get('universe')):
+        symbol = item['symbol']
+        if not item.get('enabled', True) or not strategy_store.local_allowed_for_symbol(symbol, config):
+            continue
+        try:
+            trade = api.get_latest_trade(symbol)
+            price = float(getattr(trade, 'price', getattr(trade, 'p', 0.0)) or 0.0)
+            rows.append({
+                'symbol': symbol,
+                'mode': item.get('mode', 'both'),
+                'price': price,
+                'source': 'Alpaca',
+                'status': 'ok',
+            })
+        except Exception as e:
+            app.logger.warning(f"[STRATEGY] Live snapshot failed for {symbol}: {e}")
+            rows.append({
+                'symbol': symbol,
+                'mode': item.get('mode', 'both'),
+                'price': None,
+                'source': 'Alpaca',
+                'status': str(e),
+            })
+
+    return jsonify({
+        'api_user': api_user.username,
+        'feed': config.get('feed', 'sip'),
+        'data_source': 'Alpaca',
+        'rows': rows,
+    })
 
 def backfill_admin_trades_for_shared_keys():
     admin_user = User.query.filter_by(is_superuser=True).first()

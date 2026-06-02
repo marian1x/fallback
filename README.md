@@ -152,6 +152,8 @@ Useful flags:
 - `--bars-csv /path/to/bars.csv`: run backtests from local CSV data.
 - `--top-k 20`: number of best configurations saved.
 
+Admins can also use the web UI at `Admin Tools -> Admin Strategy Lab` (`/admin/strategy`) to configure strategy runs, manage the signal universe, and compare local vs TradingView signal routing per symbol.
+
 ## 훅 Webhook Configuration
 
 To trigger trades, you need to configure your webhook provider (e.g., TradingView) to send a `POST` request to the bot's webhook URL:

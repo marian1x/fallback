@@ -22,6 +22,11 @@
   - strategy configuration storage,
   - local backtest + optimization runs,
   - reference vs best metrics and top combinations table.
+- Added Strategy Universe management:
+  - per-symbol mode: `Local`, `TradingView`, `Both`, or `Disabled`,
+  - Alpaca tradable-symbol validation,
+  - live Alpaca price snapshot for symbols configured as `Local` or `Both`.
+- TradingView webhooks are now filtered by Strategy Universe mode; symbols marked `Local` are ignored by TW execution.
 - Added hover guidance tooltips for navigation/menu items to explain each section.
 
 ### Strategy Optimizer Fidelity

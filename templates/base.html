@@ -61,7 +61,7 @@
               <ul class="dropdown-menu dropdown-menu-dark">
                 <li><a class="dropdown-item" href="{{ url_for('admin_user_management') }}" data-bs-toggle="tooltip" title="Creeaza, editeaza, restrictioneaza sau reseteaza parole utilizatori.">User Management</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('admin_health_dashboard') }}" data-bs-toggle="tooltip" title="Monitorizare servicii, loguri si starea generala a platformei.">System Health</a></li>
-                <li><a class="dropdown-item" href="{{ url_for('admin_strategy') }}" data-bs-toggle="tooltip" title="Configureaza strategia locala si ruleaza backtesting/optimizare fara TradingView.">Strategy Lab</a></li>
+                <li><a class="dropdown-item" href="{{ url_for('admin_strategy') }}" data-bs-toggle="tooltip" title="Configureaza strategia locala, universe-ul de simboluri si ruleaza backtesting/optimizare.">Admin Strategy Lab</a></li>
                 <li><a class="dropdown-item" href="{{ url_for('user_config') }}" data-bs-toggle="tooltip" title="Configureaza credentialele tale si setarile implicite de trading.">My Config</a></li>
                 {% if ENABLE_INVESTOR_VIEW %}
                 <li><a class="dropdown-item" href="{{ url_for('admin_investor_config') }}" data-bs-toggle="tooltip" title="Seteaza contributia fiecarui investitor pentru raportare.">Investor Config</a></li>

@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from alpaca_api import AlpacaAPIError, LegacyCompatibleAlpacaClient, TradeUpdatesHub
 from models import db, User, Trade
+import strategy_config as strategy_store
 from utils import decrypt_data
 
 # --- Initialization ---
@@ -117,6 +118,12 @@ def _safe_float(value):
         return float(value)
     except (TypeError, ValueError):
         return None
+
+def _is_dashboard_request(payload):
+    return _parse_bool(payload.get("dashboard_request"), default=False)
+
+def _is_local_strategy_request(payload):
+    return _parse_bool(payload.get("local_strategy_request"), default=False)
 
 def get_last_price(api_client, symbol):
     try:
@@ -443,8 +450,23 @@ def process_trade_for_user(user, payload):
     except (TypeError, ValueError):
         return False, 400, {"error": "Invalid amount"}, None
 
-    api = LegacyCompatibleAlpacaClient(api_key, api_secret, BASE_URL)
     api_symbol = symbol.replace('/', '')
+
+    if not _is_dashboard_request(payload) and not _is_local_strategy_request(payload):
+        cfg = strategy_store.load_strategy_config()
+        if not strategy_store.tradingview_allowed_for_symbol(api_symbol, cfg):
+            mode = strategy_store.strategy_mode_for_symbol(api_symbol, cfg)
+            logger.info(
+                f"[TRADE_MODE] Ignored TradingView signal for user='{user.username}' "
+                f"symbol='{api_symbol}' because strategy mode is '{mode}'."
+            )
+            return True, 200, {
+                "result": "tw_ignored_by_strategy_mode",
+                "symbol": api_symbol,
+                "mode": mode,
+            }, None
+
+    api = LegacyCompatibleAlpacaClient(api_key, api_secret, BASE_URL)
     duplicate, retry_after = _cache_duplicate_signal(user.id, api_symbol, action)
     if duplicate:
         logger.warning(

@@ -56,6 +56,10 @@
                     </select>
                 </div>
                 <div class="col-6 col-md-1">
+                    <label class="form-label small">Live Data</label>
+                    <input type="text" class="form-control" value="Alpaca" disabled>
+                </div>
+                <div class="col-6 col-md-1">
                     <label class="form-label small">Trials</label>
                     <input type="number" min="1" name="trials" class="form-control" value="{{ config.trials }}">
                 </div>
@@ -115,6 +119,64 @@
                 </div>
             </div>
 
+            <div class="mt-4">
+                <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2 mb-2">
+                    <h6 class="mb-0"><i class="fa-solid fa-list-check me-2"></i>Signal Universe</h6>
+                    <button type="button" id="addUniverseRow" class="btn btn-sm btn-outline-primary">
+                        <i class="fa-solid fa-plus me-1"></i>Add Stock
+                    </button>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle" id="universeTable">
+                        <thead>
+                            <tr>
+                                <th style="min-width: 160px;">Symbol</th>
+                                <th style="min-width: 140px;">Mode</th>
+                                <th style="min-width: 90px;">Active</th>
+                                <th style="min-width: 180px;">Notes</th>
+                                <th class="text-end">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in config.universe %}
+                            <tr>
+                                <td>
+                                    <input type="text" name="universe_symbol[]" class="form-control form-control-sm universe-symbol" value="{{ item.symbol }}" list="strategy-symbols" required>
+                                </td>
+                                <td>
+                                    <select name="universe_mode[]" class="form-select form-select-sm">
+                                        <option value="local" {% if item.mode == 'local' %}selected{% endif %}>Local</option>
+                                        <option value="tw" {% if item.mode == 'tw' %}selected{% endif %}>TradingView</option>
+                                        <option value="both" {% if item.mode == 'both' %}selected{% endif %}>Both</option>
+                                        <option value="disabled" {% if item.mode == 'disabled' %}selected{% endif %}>Disabled</option>
+                                    </select>
+                                </td>
+                                <td>
+                                    <input type="hidden" name="universe_enabled[]" value="{{ '1' if item.enabled else '0' }}">
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input universe-enabled-toggle" type="checkbox" {% if item.enabled %}checked{% endif %}>
+                                    </div>
+                                </td>
+                                <td>
+                                    <input type="text" name="universe_notes[]" class="form-control form-control-sm" value="{{ item.notes }}">
+                                </td>
+                                <td class="text-end">
+                                    <button type="button" class="btn btn-sm btn-outline-danger remove-universe-row" title="Remove symbol">
+                                        <i class="fa-solid fa-trash"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <datalist id="strategy-symbols">
+                    {% for symbol in tradable_symbols %}
+                    <option value="{{ symbol }}"></option>
+                    {% endfor %}
+                </datalist>
+            </div>
+
             <div class="form-check mt-3">
                 <input class="form-check-input" type="checkbox" name="enabled" id="strategyEnabled" {% if config.enabled %}checked{% endif %}>
                 <label class="form-check-label" for="strategyEnabled">
@@ -127,6 +189,32 @@
             <button type="submit" name="action" value="run" class="btn btn-primary">Run Backtest + Optimize</button>
         </div>
     </form>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="fa-solid fa-satellite-dish me-2"></i>Alpaca Live Data</span>
+            <button type="button" id="refreshLiveSnapshot" class="btn btn-sm btn-outline-primary">
+                <i class="fa-solid fa-rotate me-1"></i>Refresh
+            </button>
+        </div>
+        <div class="card-body table-responsive">
+            <div id="liveSnapshotMeta" class="small text-muted mb-2"></div>
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Mode</th>
+                        <th>Price</th>
+                        <th>Source</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="liveSnapshotBody">
+                    <tr><td colspan="5" class="text-muted">No snapshot loaded.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
 
     {% if report %}
     <div class="row g-3 mb-3">
@@ -188,6 +276,130 @@
 {% block scripts %}
 <script>
 $(document).ready(function() {
+    let tradableSymbols = new Set(Array.from(document.querySelectorAll('#strategy-symbols option')).map((el) => el.value.toUpperCase()));
+
+    function normalizeSymbol(value) {
+        return String(value || '').toUpperCase().replace(/\//g, '').trim();
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, function(char) {
+            return ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            })[char];
+        });
+    }
+
+    function syncEnabledHidden(row) {
+        const checked = row.find('.universe-enabled-toggle').is(':checked');
+        row.find('input[name="universe_enabled[]"]').val(checked ? '1' : '0');
+    }
+
+    function bindUniverseRow(row) {
+        row.find('.universe-enabled-toggle').on('change', function() {
+            syncEnabledHidden(row);
+        });
+        row.find('.remove-universe-row').on('click', function() {
+            row.remove();
+        });
+        row.find('.universe-symbol').on('input', function() {
+            const normalized = normalizeSymbol($(this).val());
+            $(this).val(normalized);
+            if (tradableSymbols.size && normalized && !tradableSymbols.has(normalized)) {
+                this.setCustomValidity('Symbol is not in the Alpaca tradable list.');
+            } else {
+                this.setCustomValidity('');
+            }
+        });
+    }
+
+    $('#universeTable tbody tr').each(function() {
+        bindUniverseRow($(this));
+    });
+
+    fetch('/api/tradable_symbols')
+        .then((response) => response.ok ? response.json() : [])
+        .then((symbols) => {
+            if (!Array.isArray(symbols)) return;
+            const datalist = $('#strategy-symbols');
+            datalist.empty();
+            tradableSymbols = new Set(symbols.map((symbol) => String(symbol).toUpperCase()));
+            symbols.forEach((symbol) => {
+                datalist.append(`<option value="${escapeHtml(symbol)}"></option>`);
+            });
+        });
+
+    $('#addUniverseRow').on('click', function() {
+        const row = $(`
+            <tr>
+                <td><input type="text" name="universe_symbol[]" class="form-control form-control-sm universe-symbol" list="strategy-symbols" required></td>
+                <td>
+                    <select name="universe_mode[]" class="form-select form-select-sm">
+                        <option value="local">Local</option>
+                        <option value="tw">TradingView</option>
+                        <option value="both" selected>Both</option>
+                        <option value="disabled">Disabled</option>
+                    </select>
+                </td>
+                <td>
+                    <input type="hidden" name="universe_enabled[]" value="1">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input universe-enabled-toggle" type="checkbox" checked>
+                    </div>
+                </td>
+                <td><input type="text" name="universe_notes[]" class="form-control form-control-sm"></td>
+                <td class="text-end">
+                    <button type="button" class="btn btn-sm btn-outline-danger remove-universe-row" title="Remove symbol">
+                        <i class="fa-solid fa-trash"></i>
+                    </button>
+                </td>
+            </tr>
+        `);
+        $('#universeTable tbody').append(row);
+        bindUniverseRow(row);
+        row.find('.universe-symbol').trigger('focus');
+    });
+
+    $('#refreshLiveSnapshot').on('click', function() {
+        const button = $(this);
+        button.prop('disabled', true);
+        $('#liveSnapshotMeta').text('Loading...');
+        $.get('/api/admin/strategy/live_snapshot')
+            .done(function(data) {
+                $('#liveSnapshotMeta').text(`Source: ${data.data_source} | User: ${data.api_user} | Feed: ${data.feed}`);
+                const body = $('#liveSnapshotBody');
+                body.empty();
+                if (!data.rows || !data.rows.length) {
+                    body.append('<tr><td colspan="5" class="text-muted">No local/both symbols configured.</td></tr>');
+                    return;
+                }
+                data.rows.forEach(function(row) {
+                    const price = row.price === null || row.price === undefined ? '-' : Number(row.price).toFixed(4);
+                    const statusClass = row.status === 'ok' ? 'text-success' : 'text-warning';
+                    body.append(`
+                        <tr>
+                            <td>${escapeHtml(row.symbol)}</td>
+                            <td>${escapeHtml(row.mode)}</td>
+                            <td>${price}</td>
+                            <td>${escapeHtml(row.source)}</td>
+                            <td class="${statusClass}">${escapeHtml(row.status)}</td>
+                        </tr>
+                    `);
+                });
+            })
+            .fail(function(xhr) {
+                const detail = xhr.responseJSON?.error || xhr.responseText || 'Snapshot failed';
+                $('#liveSnapshotMeta').text(detail);
+            })
+            .always(function() {
+                button.prop('disabled', false);
+            });
+    });
+
     if ($('#strategyTopTable').length) {
         $('#strategyTopTable').DataTable({
             pageLength: 10,
