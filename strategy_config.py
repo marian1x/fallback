@@ -13,6 +13,9 @@ DEFAULT_STRATEGY_CONFIG_FILE = os.path.join(PROJECT_ROOT, "instance", "strategy_
 STRATEGY_CONFIG_FILE = os.getenv("STRATEGY_CONFIG_FILE", DEFAULT_STRATEGY_CONFIG_FILE)
 
 SIGNAL_MODES = {"local", "tw", "both", "disabled"}
+STRATEGY_CHOICES = {"keltner", "macd_sma"}
+OPTIMIZER_ENGINES = {"random", "tpe"}
+ACCELERATOR_CHOICES = {"auto", "cpu", "gpu"}
 
 
 def normalize_symbol(symbol: str) -> str:
@@ -24,11 +27,14 @@ def get_default_strategy_config() -> Dict:
         "enabled": False,
         "alpaca_user": "",
         "symbol": "TSM",
+        "strategy": "keltner",
         "timeframe": "30Min",
         "session": "regular",
         "feed": "sip",
         "live_data_source": "alpaca",
         "compute_target": "local",
+        "optimizer_engine": "tpe",
+        "accelerator": "auto",
         "inner_kc_length": 33,
         "inner_kc_mult": 1.7,
         "outer_kc_length": 23,
@@ -75,9 +81,20 @@ def get_default_strategy_config() -> Dict:
         "forced_sl_range": "3.0:10.0:0.2",
         "forced_tp_range": "3.0:10.0:0.2",
         "trail_offset_range": "4:4:1",
+        "macd_fast_length": 12,
+        "macd_slow_length": 26,
+        "macd_signal_length": 9,
+        "macd_sma_length": 200,
+        "max_intraday_loss_pct": 50,
+        "macd_fast_range": "8:20:1",
+        "macd_slow_range": "20:40:1",
+        "macd_signal_range": "5:15:1",
+        "macd_sma_range": "100:250:10",
+        "max_intraday_loss_range": "50:50:1",
         "universe": [
             {
                 "symbol": "TSM",
+                "strategy": "keltner",
                 "mode": "both",
                 "enabled": True,
                 "notes": "Baseline comparison",
@@ -106,8 +123,12 @@ def normalize_universe(raw_entries) -> List[Dict]:
         backtest = item.get("backtest")
         if not isinstance(backtest, dict):
             backtest = None
+        strategy = str(item.get("strategy") or (backtest or {}).get("strategy") or "keltner").strip().lower()
+        if strategy not in STRATEGY_CHOICES:
+            strategy = "keltner"
         entries.append({
             "symbol": symbol,
+            "strategy": strategy,
             "mode": mode,
             "enabled": enabled,
             "notes": notes,
@@ -129,6 +150,12 @@ def load_strategy_config() -> Dict:
     except Exception:
         return data
     data["universe"] = normalize_universe(data.get("universe"))
+    if str(data.get("strategy", "")).strip().lower() not in STRATEGY_CHOICES:
+        data["strategy"] = "keltner"
+    if str(data.get("optimizer_engine", "")).strip().lower() not in OPTIMIZER_ENGINES:
+        data["optimizer_engine"] = "tpe"
+    if str(data.get("accelerator", "")).strip().lower() not in ACCELERATOR_CHOICES:
+        data["accelerator"] = "auto"
     return data
 
 
@@ -137,6 +164,15 @@ def save_strategy_config(cfg: Dict) -> None:
     if isinstance(cfg, dict):
         data.update(cfg)
     data["universe"] = normalize_universe(data.get("universe"))
+    data["strategy"] = str(data.get("strategy", "keltner")).strip().lower()
+    if data["strategy"] not in STRATEGY_CHOICES:
+        data["strategy"] = "keltner"
+    data["optimizer_engine"] = str(data.get("optimizer_engine", "tpe")).strip().lower()
+    if data["optimizer_engine"] not in OPTIMIZER_ENGINES:
+        data["optimizer_engine"] = "tpe"
+    data["accelerator"] = str(data.get("accelerator", "auto")).strip().lower()
+    if data["accelerator"] not in ACCELERATOR_CHOICES:
+        data["accelerator"] = "auto"
     os.makedirs(os.path.dirname(STRATEGY_CONFIG_FILE), exist_ok=True)
     with open(STRATEGY_CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)

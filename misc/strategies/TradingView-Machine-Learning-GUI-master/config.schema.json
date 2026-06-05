@@ -1,0 +1,149 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://hyperview.dev/config.schema.json",
+    "title": "HyperView Configuration",
+    "description": "Configuration file for the HyperView backtesting and optimization engine.",
+    "type": "object",
+    "properties": {
+        "$schema": {
+            "type": "string",
+            "description": "Path or URL to the JSON schema for editor validation and autocompletion."
+        },
+        "bot_name": {
+            "type": "string",
+            "description": "Identifier for this HyperView instance. Used in logs and result file headers.",
+            "default": "hyperview",
+            "minLength": 1
+        },
+        "timeframe": {
+            "type": "string",
+            "description": "Candle timeframe for data download, backtesting, and optimization.",
+            "default": "1h",
+            "minLength": 1
+        },
+        "session": {
+            "type": "string",
+            "description": "Market session type for candle data.",
+            "enum": ["regular", "extended"],
+            "default": "regular"
+        },
+        "mode": {
+            "type": "string",
+            "description": "Default trade direction mode for backtesting and optimization.",
+            "enum": ["long", "short", "both"],
+            "default": "long"
+        },
+        "strategy": {
+            "type": "string",
+            "description": "Name of the strategy class to use for backtesting and optimization. Must match a registered strategy_name.",
+            "minLength": 1
+        },
+        "initial_capital": {
+            "type": "number",
+            "description": "Starting capital (in currency units) for backtesting and optimization.",
+            "default": 100000,
+            "exclusiveMinimum": 0
+        },
+        "data_dir": {
+            "type": "string",
+            "description": "Directory where downloaded candle data is stored.",
+            "default": "data",
+            "minLength": 1
+        },
+        "output_dir": {
+            "type": "string",
+            "description": "Directory where optimization results and reports are written.",
+            "default": "results",
+            "minLength": 1
+        },
+        "strategy_path": {
+            "type": "string",
+            "description": "Directory containing strategy modules. Strategies are auto-discovered from Python files in this directory.",
+            "default": "strategy",
+            "minLength": 1
+        },
+        "dataformat": {
+            "type": "string",
+            "description": "Storage format for candle data files.",
+            "enum": ["csv"],
+            "default": "csv"
+        },
+        "add_config_files": {
+            "type": "array",
+            "description": "Additional config files to load and merge, in order. Paths are resolved relative to this config file's directory. Later files override earlier values.",
+            "items": {
+                "type": "string",
+                "minLength": 1
+            },
+            "default": []
+        },
+        "pairlist": {
+            "type": "array",
+            "description": "List of trading pairs in 'EXCHANGE:SYMBOL' format (e.g. 'NASDAQ:AAPL', 'COINBASE:BTCUSD').",
+            "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_]+:[A-Za-z0-9_.]+$",
+                "minLength": 1
+            },
+            "default": []
+        },
+        "optimization": {
+            "type": "object",
+            "description": "Parameters controlling hyperparameter optimization runs.",
+            "properties": {
+                "n_trials": {
+                    "type": "integer",
+                    "description": "Number of trials for Bayesian (Optuna TPE) optimization.",
+                    "default": 200,
+                    "minimum": 1
+                },
+                "objective": {
+                    "type": "string",
+                    "description": "Metric to optimize.",
+                    "enum": [
+                        "net_profit_pct",
+                        "profit_factor",
+                        "win_rate_pct",
+                        "max_drawdown_pct",
+                        "trade_count"
+                    ],
+                    "default": "net_profit_pct"
+                },
+                "top_n": {
+                    "type": "integer",
+                    "description": "Number of top results to report.",
+                    "default": 10,
+                    "minimum": 1
+                },
+                "sl_range": {
+                    "$ref": "#/$defs/range",
+                    "description": "Stop-loss percentage search range."
+                },
+                "tp_range": {
+                    "$ref": "#/$defs/range",
+                    "description": "Take-profit percentage search range."
+                }
+            },
+            "additionalProperties": false
+        }
+    },
+    "$defs": {
+        "range": {
+            "type": "object",
+            "description": "Numeric range with min and max bounds. Grid resolution is determined automatically by the optimizer.",
+            "properties": {
+                "min": {
+                    "type": "number",
+                    "description": "Lower bound (inclusive)."
+                },
+                "max": {
+                    "type": "number",
+                    "description": "Upper bound (inclusive)."
+                }
+            },
+            "required": ["min", "max"],
+            "additionalProperties": false
+        }
+    },
+    "additionalProperties": false
+}

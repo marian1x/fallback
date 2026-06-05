@@ -23,17 +23,25 @@ from typing import Callable, Dict, Optional
 import pandas as pd
 
 from alpaca_api import AlpacaAPIError, LegacyCompatibleAlpacaClient
+from llm_trade_validator import create_llm_trade_validator
 from misc.pine_optimizer import (
     choose_fetch_timeframe,
+    crossed_above,
+    crossed_below,
     filter_session,
     keltner_channel,
     normalize_timeframe_token,
     resample_bars,
+    sma,
     timeframe_seconds,
 )
 from models import User, db
 import strategy_config as strategy_store
 from utils import decrypt_data
+
+
+class TransientStrategyAPIError(RuntimeError):
+    pass
 
 
 class LocalStrategyEngine:
@@ -55,12 +63,20 @@ class LocalStrategyEngine:
         self.recovery_max_seconds = int(os.getenv("LOCAL_STRATEGY_RECOVERY_MAX_SECONDS", "300"))
         self.open_recovery_max_attempts = int(os.getenv("LOCAL_STRATEGY_OPEN_RECOVERY_MAX_ATTEMPTS", "3"))
         self.close_recovery_max_attempts = int(os.getenv("LOCAL_STRATEGY_CLOSE_RECOVERY_MAX_ATTEMPTS", "0"))
+        self.api_failure_cooldown_seconds = int(os.getenv("LOCAL_STRATEGY_API_FAILURE_COOLDOWN_SECONDS", "120"))
+        self.log_throttle_seconds = int(os.getenv("LOCAL_STRATEGY_LOG_THROTTLE_SECONDS", "900"))
+        self.min_backtest_trades = int(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_TRADES", "30"))
+        self.min_backtest_win_rate_pct = float(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_WIN_RATE_PCT", "55"))
+        self.min_backtest_profit_factor = float(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_PROFIT_FACTOR", "1.3"))
+        self.max_backtest_drawdown_pct = float(os.getenv("LOCAL_STRATEGY_MAX_BACKTEST_DRAWDOWN_PCT", "8"))
+        self.min_backtest_net_profit = float(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_NET_PROFIT", "0"))
         self.dry_run = os.getenv("LOCAL_STRATEGY_DRY_RUN", "false").lower() in ("1", "true", "yes", "y")
         self.state_path = os.path.join(self.app.instance_path, "local_strategy_state.json")
         self.stop_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
         self.state_lock = threading.Lock()
         self.state = {"symbols": {}, "recoveries": []}
+        self.llm_validator = create_llm_trade_validator(self.app.instance_path, self.logger)
 
     def start(self) -> None:
         if self.thread and self.thread.is_alive():
@@ -98,6 +114,37 @@ class LocalStrategyEngine:
         except Exception as exc:
             self.logger.error("[LOCAL_STRATEGY] Failed to save state: %s", exc)
 
+    def api_cooldown_active(self) -> bool:
+        due = self._parse_state_time(self.state.get("api_cooldown_until_utc"))
+        if not due:
+            return False
+        now = datetime.now(timezone.utc)
+        if now < due:
+            return True
+        with self.state_lock:
+            self.state.pop("api_cooldown_until_utc", None)
+            self.state.pop("api_cooldown_reason", None)
+        self.save_state()
+        return False
+
+    def defer_api_cooldown(self, reason: str) -> None:
+        until = datetime.now(timezone.utc) + timedelta(seconds=max(1, self.api_failure_cooldown_seconds))
+        with self.state_lock:
+            self.state["api_cooldown_until_utc"] = until.isoformat()
+            self.state["api_cooldown_reason"] = str(reason)[:500]
+        self.save_state()
+
+    def log_symbol_throttled(self, symbol: str, key: str, level: int, message: str, *args, interval: Optional[int] = None) -> None:
+        st = self.symbol_state(symbol)
+        now = datetime.now(timezone.utc)
+        state_key = f"last_log_{key}_utc"
+        last = self._parse_state_time(st.get(state_key))
+        if last and (now - last).total_seconds() < (interval or self.log_throttle_seconds):
+            return
+        st[state_key] = now.isoformat()
+        self.logger.log(level, message, *args)
+        self.save_state()
+
     def run_forever(self) -> None:
         while not self.stop_event.is_set():
             started = time.time()
@@ -121,7 +168,19 @@ class LocalStrategyEngine:
         if not api:
             return
 
-        self.process_recoveries(user, api)
+        if self.api_cooldown_active():
+            return
+
+        try:
+            self.process_recoveries(user, api)
+        except TransientStrategyAPIError as exc:
+            self.defer_api_cooldown(str(exc))
+            self.logger.warning(
+                "[LOCAL_STRATEGY] Alpaca/API transient failure during recovery; cooling down %ss: %s",
+                self.api_failure_cooldown_seconds,
+                exc,
+            )
+            return
 
         for entry in strategy_store.normalize_universe(cfg.get("universe")):
             if not entry.get("enabled", True):
@@ -131,10 +190,25 @@ class LocalStrategyEngine:
                 continue
             backtest = entry.get("backtest")
             if not isinstance(backtest, dict):
-                self.logger.info("[LOCAL_STRATEGY] %s skipped: no saved backtest config.", symbol)
+                self.log_symbol_throttled(
+                    symbol,
+                    "no_backtest",
+                    logging.INFO,
+                    "[LOCAL_STRATEGY] %s skipped: no saved backtest config.",
+                    symbol,
+                )
                 continue
             try:
                 self.evaluate_symbol(user, api, cfg, entry, backtest)
+            except TransientStrategyAPIError as exc:
+                self.defer_api_cooldown(str(exc))
+                self.logger.warning(
+                    "[LOCAL_STRATEGY] %s transient Alpaca/API failure; cooling down %ss: %s",
+                    symbol,
+                    self.api_failure_cooldown_seconds,
+                    exc,
+                )
+                break
             except Exception as exc:
                 self.logger.exception("[LOCAL_STRATEGY] %s evaluation failed: %s", symbol, exc)
 
@@ -189,6 +263,7 @@ class LocalStrategyEngine:
     def params_from_backtest(self, cfg: Dict, backtest: Dict) -> Dict:
         params = backtest.get("params") if isinstance(backtest.get("params"), dict) else {}
         return {
+            "strategy": str(backtest.get("strategy") or cfg.get("strategy", "keltner")).strip().lower(),
             "trade_direction": params.get("trade_direction") or cfg.get("trade_direction", "Both"),
             "inner_kc_length": int(params.get("inner_kc_length", cfg.get("inner_kc_length", 33))),
             "inner_kc_mult": float(params.get("inner_kc_mult", cfg.get("inner_kc_mult", 1.7))),
@@ -200,13 +275,50 @@ class LocalStrategyEngine:
             "forced_take_profit_pct": float(params.get("forced_take_profit_pct", cfg.get("forced_take_profit_pct", 10.0))),
             "trailing_offset_ticks": int(params.get("trailing_offset_ticks", 4)),
             "tick_size": float(params.get("tick_size", 0.01)),
+            "macd_fast_length": int(params.get("macd_fast_length", cfg.get("macd_fast_length", 12))),
+            "macd_slow_length": int(params.get("macd_slow_length", cfg.get("macd_slow_length", 26))),
+            "macd_signal_length": int(params.get("macd_signal_length", cfg.get("macd_signal_length", 9))),
+            "macd_sma_length": int(params.get("macd_sma_length", cfg.get("macd_sma_length", 200))),
+            "max_intraday_loss_pct": float(params.get("max_intraday_loss_pct", cfg.get("max_intraday_loss_pct", 50))),
         }
+
+    def backtest_entry_rejection_reason(self, backtest: Dict) -> Optional[str]:
+        metrics = backtest.get("metrics") if isinstance(backtest.get("metrics"), dict) else {}
+        total_trades = self._metric_float(metrics, "total_trades")
+        win_rate = self._metric_float(metrics, "win_rate_pct")
+        profit_factor = self._metric_float(metrics, "profit_factor")
+        max_drawdown = self._metric_float(metrics, "max_drawdown_pct")
+        net_profit = self._metric_float(metrics, "net_profit")
+        if net_profit is not None and net_profit < self.min_backtest_net_profit:
+            return f"backtest net profit {net_profit:.2f} < {self.min_backtest_net_profit:.2f}"
+        if total_trades is not None and total_trades < self.min_backtest_trades:
+            return f"backtest trades {total_trades:.0f} < {self.min_backtest_trades}"
+        if win_rate is not None and win_rate < self.min_backtest_win_rate_pct:
+            return f"backtest win rate {win_rate:.2f}% < {self.min_backtest_win_rate_pct:.2f}%"
+        if profit_factor is not None and profit_factor < self.min_backtest_profit_factor:
+            return f"backtest profit factor {profit_factor:.3f} < {self.min_backtest_profit_factor:.3f}"
+        if max_drawdown is not None and max_drawdown > self.max_backtest_drawdown_pct:
+            return f"backtest max drawdown {max_drawdown:.2f}% > {self.max_backtest_drawdown_pct:.2f}%"
+        return None
+
+    def _metric_float(self, metrics: Dict, key: str) -> Optional[float]:
+        value = metrics.get(key)
+        try:
+            if value is None or (isinstance(value, float) and math.isnan(value)):
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     def fetch_closed_bars(self, api: LegacyCompatibleAlpacaClient, symbol: str, timeframe: str, feed: str, session: str) -> pd.DataFrame:
         normalized_tf = normalize_timeframe_token(timeframe)
         fetch_tf = choose_fetch_timeframe([normalized_tf])
         now = datetime.now(timezone.utc)
-        lookback_seconds = max(timeframe_seconds(normalized_tf) * self.bars_lookback, 5 * 24 * 3600)
+        session_multiplier = 4 if str(session or "").lower() == "regular" else 2
+        lookback_seconds = max(
+            timeframe_seconds(normalized_tf) * self.bars_lookback * session_multiplier,
+            10 * 24 * 3600,
+        )
         start = now - timedelta(seconds=lookback_seconds)
         bars = api.get_bars(
             symbol,
@@ -229,6 +341,21 @@ class LocalStrategyEngine:
     def evaluate_symbol(self, user: User, api: LegacyCompatibleAlpacaClient, cfg: Dict, entry: Dict, backtest: Dict) -> None:
         symbol = entry["symbol"]
         params = self.params_from_backtest(cfg, backtest)
+        row_strategy = str(entry.get("strategy") or "").strip().lower()
+        if row_strategy:
+            params["strategy"] = row_strategy
+        if params.get("strategy") not in {"keltner", "macd_sma"}:
+            self.log_symbol_throttled(
+                symbol,
+                "unsupported_strategy",
+                logging.WARNING,
+                "[LOCAL_STRATEGY] %s skipped: strategy '%s' is not implemented in local execution.",
+                symbol,
+                params.get("strategy"),
+            )
+            self.defer_next_entry_check(symbol, str(backtest.get("timeframe") or cfg.get("timeframe", "30Min")))
+            self.save_state()
+            return
         timeframe = normalize_timeframe_token(backtest.get("timeframe") or cfg.get("timeframe", "30Min"))
         feed = str(cfg.get("feed", "iex"))
         session = str(backtest.get("session") or cfg.get("session", "regular"))
@@ -236,18 +363,64 @@ class LocalStrategyEngine:
         position = self.get_position(api, symbol)
         if position is None and self.entry_check_deferred(symbol, timeframe):
             return
+        if position is None:
+            saved_strategy = str(backtest.get("strategy") or "keltner").strip().lower()
+            if saved_strategy != params.get("strategy"):
+                self.log_symbol_throttled(
+                    symbol,
+                    "strategy_backtest_mismatch",
+                    logging.WARNING,
+                    "[LOCAL_STRATEGY] %s entry disabled: row strategy '%s' does not match saved backtest strategy '%s'.",
+                    symbol,
+                    params.get("strategy"),
+                    saved_strategy,
+                )
+                self.defer_next_entry_check(symbol, timeframe)
+                self.save_state()
+                return
+            rejection = self.backtest_entry_rejection_reason(backtest)
+            if rejection:
+                self.log_symbol_throttled(
+                    symbol,
+                    "quality_reject",
+                    logging.INFO,
+                    "[LOCAL_STRATEGY] %s entry disabled: %s",
+                    symbol,
+                    rejection,
+                )
+                self.defer_next_entry_check(symbol, timeframe)
+                self.save_state()
+                return
 
         bars = self.fetch_closed_bars(api, symbol, timeframe, feed, session)
-        min_bars = max(params["inner_kc_length"], params["outer_kc_length"]) + 3
+        if params.get("strategy") == "macd_sma":
+            min_bars = max(
+                params["macd_sma_length"] + params["macd_slow_length"] + params["macd_signal_length"] + 5,
+                100,
+            )
+        else:
+            min_bars = max(params["inner_kc_length"], params["outer_kc_length"]) + 3
         if len(bars) < min_bars:
-            self.logger.info("[LOCAL_STRATEGY] %s skipped: bars=%s min=%s timeframe=%s", symbol, len(bars), min_bars, timeframe)
+            self.log_symbol_throttled(
+                symbol,
+                "not_enough_bars",
+                logging.INFO,
+                "[LOCAL_STRATEGY] %s skipped: bars=%s min=%s timeframe=%s",
+                symbol,
+                len(bars),
+                min_bars,
+                timeframe,
+            )
             if position is None:
                 self.defer_next_entry_check(symbol, timeframe)
                 self.save_state()
             return
 
-        mid, upper, lower = keltner_channel(bars, params["inner_kc_length"], params["inner_kc_mult"])
-        frame = bars.assign(mid_inner=mid, up_inner=upper, low_inner=lower).dropna()
+        if params.get("strategy") == "macd_sma":
+            frame = self.build_macd_sma_frame(bars, params)
+        else:
+            mid, upper, lower = keltner_channel(bars, params["inner_kc_length"], params["inner_kc_mult"])
+            frame = bars.assign(mid_inner=mid, up_inner=upper, low_inner=lower).dropna()
         if len(frame) < 2:
             if position is None:
                 self.defer_next_entry_check(symbol, timeframe)
@@ -263,12 +436,40 @@ class LocalStrategyEngine:
             return
 
         if position is not None:
-            self.evaluate_exit(user, symbol, position, latest_price, params, frame, last_bar_ts, timeframe)
+            if params.get("strategy") == "macd_sma":
+                self.evaluate_exit_macd_sma(user, symbol, position, latest_price, params, frame, last_bar_ts, timeframe)
+            else:
+                self.evaluate_exit(user, symbol, position, latest_price, params, frame, last_bar_ts, timeframe)
             return
 
         self.defer_next_entry_check(symbol, timeframe)
         self.reset_position_state(symbol)
-        self.evaluate_entry(user, cfg, symbol, latest_price, params, frame, last_bar_ts, timeframe, backtest)
+        if params.get("strategy") == "macd_sma":
+            self.evaluate_entry_macd_sma(user, api, cfg, symbol, latest_price, params, frame, last_bar_ts, timeframe, backtest)
+        else:
+            self.evaluate_entry(user, api, cfg, symbol, latest_price, params, frame, last_bar_ts, timeframe, backtest)
+
+    def build_macd_sma_frame(self, bars: pd.DataFrame, params: Dict) -> pd.DataFrame:
+        frame = bars.copy()
+        frame["fast_ma"] = sma(frame["close"], params["macd_fast_length"])
+        frame["slow_ma"] = sma(frame["close"], params["macd_slow_length"])
+        frame["veryslow_ma"] = sma(frame["close"], params["macd_sma_length"])
+        frame["macd_line"] = frame["fast_ma"] - frame["slow_ma"]
+        frame["signal_line"] = sma(frame["macd_line"], params["macd_signal_length"])
+        frame["hist"] = frame["macd_line"] - frame["signal_line"]
+        frame["long_signal"] = (
+            crossed_above(frame["hist"], 0.0)
+            & (frame["macd_line"] > 0)
+            & (frame["fast_ma"] > frame["slow_ma"])
+            & (frame["close"].shift(params["macd_slow_length"]) > frame["veryslow_ma"])
+        )
+        frame["short_signal"] = (
+            crossed_below(frame["hist"], 0.0)
+            & (frame["macd_line"] < 0)
+            & (frame["fast_ma"] < frame["slow_ma"])
+            & (frame["close"].shift(params["macd_slow_length"]) < frame["veryslow_ma"])
+        )
+        return frame.dropna()
 
     def get_latest_price(self, api: LegacyCompatibleAlpacaClient, symbol: str) -> float:
         try:
@@ -285,9 +486,28 @@ class LocalStrategyEngine:
             err = str(exc).lower()
             if any(marker in err for marker in ("position not found", "position does not exist", "no position")):
                 return None
+            if self.is_transient_api_exception(exc):
+                raise TransientStrategyAPIError(f"Alpaca position check failed for {symbol}: {exc}") from exc
             raise RuntimeError(f"Alpaca position check failed for {symbol}: {exc}") from exc
         except Exception as exc:
+            if self.is_transient_api_exception(exc):
+                raise TransientStrategyAPIError(f"Position check failed for {symbol}: {exc}") from exc
             raise RuntimeError(f"Position check failed for {symbol}: {exc}") from exc
+
+    def is_transient_api_exception(self, exc: Exception) -> bool:
+        text = str(exc).lower()
+        markers = (
+            "temporary failure in name resolution",
+            "failed to establish a new connection",
+            "max retries exceeded",
+            "connection aborted",
+            "connection reset",
+            "connection refused",
+            "read timed out",
+            "timeout",
+            "temporarily unavailable",
+        )
+        return any(marker in text for marker in markers)
 
     def reset_position_state(self, symbol: str) -> None:
         st = self.symbol_state(symbol)
@@ -296,7 +516,7 @@ class LocalStrategyEngine:
             st["trail_stop"] = None
             self.save_state()
 
-    def evaluate_entry(self, user: User, cfg: Dict, symbol: str, latest_price: float, params: Dict, frame: pd.DataFrame, last_bar_ts: str, timeframe: str, backtest: Dict) -> None:
+    def evaluate_entry(self, user: User, api: LegacyCompatibleAlpacaClient, cfg: Dict, symbol: str, latest_price: float, params: Dict, frame: pd.DataFrame, last_bar_ts: str, timeframe: str, backtest: Dict) -> None:
         st = self.symbol_state(symbol)
         if st.get("last_entry_bar") == last_bar_ts:
             return
@@ -329,10 +549,132 @@ class LocalStrategyEngine:
             backtest=backtest,
         )
         self.logger.info("[LOCAL_STRATEGY] %s entry signal action=%s bar=%s price=%s", symbol, action, last_bar_ts, latest_price)
+        self.submit_llm_shadow_validation(user, api, payload, latest_price, params, frame, backtest)
         ok = self.execute_or_recover(user, payload, kind="open")
         st["last_entry_bar"] = last_bar_ts
         st["last_decision"] = f"entry_{action}_{'ok' if ok else 'recovery'}"
         self.save_state()
+
+    def evaluate_entry_macd_sma(self, user: User, api: LegacyCompatibleAlpacaClient, cfg: Dict, symbol: str, latest_price: float, params: Dict, frame: pd.DataFrame, last_bar_ts: str, timeframe: str, backtest: Dict) -> None:
+        st = self.symbol_state(symbol)
+        if st.get("last_entry_bar") == last_bar_ts:
+            return
+        cur = frame.iloc[-1]
+        trade_direction = params["trade_direction"]
+        action = None
+        reason = None
+        if trade_direction in ("Both", "Long Only") and bool(cur.get("long_signal")):
+            action = "buy"
+            reason = "Local MACD SMA Long Entry"
+        elif trade_direction in ("Both", "Short Only") and bool(cur.get("short_signal")):
+            action = "sell"
+            reason = "Local MACD SMA Short Entry"
+        if not action:
+            st["last_checked_bar"] = last_bar_ts
+            st["last_decision"] = "no_entry"
+            self.save_state()
+            return
+
+        order_backtest = dict(backtest or {})
+        order_backtest["strategy"] = "macd_sma"
+        payload = self.build_payload(
+            symbol=symbol,
+            action=action,
+            amount=float(cfg.get("order_size", user.per_trade_amount)),
+            reason=reason,
+            timeframe=timeframe,
+            bar_ts=last_bar_ts,
+            backtest=order_backtest,
+        )
+        self.logger.info("[LOCAL_STRATEGY] %s MACD/SMA entry signal action=%s bar=%s price=%s", symbol, action, last_bar_ts, latest_price)
+        self.submit_llm_shadow_validation(user, api, payload, latest_price, params, frame, order_backtest)
+        ok = self.execute_or_recover(user, payload, kind="open")
+        st["last_entry_bar"] = last_bar_ts
+        st["last_decision"] = f"entry_{action}_{'ok' if ok else 'recovery'}"
+        self.save_state()
+
+    def submit_llm_shadow_validation(
+        self,
+        user: User,
+        api: LegacyCompatibleAlpacaClient,
+        payload: Dict,
+        latest_price: float,
+        params: Dict,
+        frame: pd.DataFrame,
+        backtest: Dict,
+    ) -> None:
+        if not self.llm_validator:
+            return
+        try:
+            technical_context = self.build_llm_shadow_context(payload, latest_price, params, frame, backtest)
+            self.llm_validator.submit_entry_signal(
+                user_snapshot={"id": user.id, "username": user.username},
+                payload=payload,
+                technical_context=technical_context,
+                alpaca_api_key=getattr(api, "api_key", None),
+                alpaca_api_secret=getattr(api, "api_secret", None),
+            )
+        except Exception as exc:
+            self.logger.warning("[LLM_SHADOW] submit failed for %s: %s", payload.get("symbol"), exc)
+
+    def build_llm_shadow_context(self, payload: Dict, latest_price: float, params: Dict, frame: pd.DataFrame, backtest: Dict) -> Dict:
+        tail_rows = []
+        for ts, row in frame.tail(5).iterrows():
+            tail_rows.append({
+                "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                "open": self._round_for_context(row.get("open")),
+                "high": self._round_for_context(row.get("high")),
+                "low": self._round_for_context(row.get("low")),
+                "close": self._round_for_context(row.get("close")),
+                "mid_inner": self._round_for_context(row.get("mid_inner")),
+                "up_inner": self._round_for_context(row.get("up_inner")),
+                "low_inner": self._round_for_context(row.get("low_inner")),
+                "fast_ma": self._round_for_context(row.get("fast_ma")),
+                "slow_ma": self._round_for_context(row.get("slow_ma")),
+                "veryslow_ma": self._round_for_context(row.get("veryslow_ma")),
+                "macd_line": self._round_for_context(row.get("macd_line")),
+                "signal_line": self._round_for_context(row.get("signal_line")),
+                "hist": self._round_for_context(row.get("hist")),
+            })
+        backtest_summary = {
+            "job_id": backtest.get("job_id"),
+            "timeframe": backtest.get("timeframe"),
+            "session": backtest.get("session"),
+        }
+        for key in ("total_return_pct", "win_rate", "max_drawdown_pct", "profit_factor", "trades"):
+            if key in backtest:
+                backtest_summary[key] = backtest.get(key)
+        return {
+            "symbol": payload.get("symbol"),
+            "action": payload.get("action"),
+            "latest_price": self._round_for_context(latest_price),
+            "entry_reason": payload.get("local_reason"),
+            "timeframe": payload.get("timeframe"),
+            "bar_time": payload.get("bar_time"),
+            "params": {
+                "trade_direction": params.get("trade_direction"),
+                "inner_kc_length": params.get("inner_kc_length"),
+                "inner_kc_mult": params.get("inner_kc_mult"),
+                "fixed_stop_loss_pct": params.get("fixed_stop_loss_pct"),
+                "fixed_take_profit_pct": params.get("fixed_take_profit_pct"),
+                "forced_stop_loss_pct": params.get("forced_stop_loss_pct"),
+                "forced_take_profit_pct": params.get("forced_take_profit_pct"),
+                "macd_fast_length": params.get("macd_fast_length"),
+                "macd_slow_length": params.get("macd_slow_length"),
+                "macd_signal_length": params.get("macd_signal_length"),
+                "macd_sma_length": params.get("macd_sma_length"),
+            },
+            "recent_bars": tail_rows,
+            "backtest": backtest_summary,
+        }
+
+    def _round_for_context(self, value):
+        try:
+            if value is None or pd.isna(value):
+                return None
+            return round(float(value), 6)
+        except Exception:
+            return value
 
     def evaluate_exit(self, user: User, symbol: str, position, latest_price: float, params: Dict, frame: pd.DataFrame, last_bar_ts: str, timeframe: str) -> None:
         st = self.symbol_state(symbol)
@@ -365,6 +707,67 @@ class LocalStrategyEngine:
         st["last_exit_price"] = latest_price
         st["last_decision"] = f"exit_{'ok' if ok else 'recovery'}"
         self.save_state()
+
+    def evaluate_exit_macd_sma(self, user: User, symbol: str, position, latest_price: float, params: Dict, frame: pd.DataFrame, last_bar_ts: str, timeframe: str) -> None:
+        st = self.symbol_state(symbol)
+        if st.get("last_exit_bar") == last_bar_ts and st.get("last_exit_price") == latest_price:
+            return
+        try:
+            entry_price = float(position.avg_entry_price)
+        except Exception:
+            self.logger.warning("[LOCAL_STRATEGY] %s cannot read avg_entry_price; skip MACD/SMA exit.", symbol)
+            return
+        side = str(getattr(position, "side", "") or "").lower()
+        is_short = side == "short"
+        reason = self.exit_reason_macd_sma(is_short, entry_price, latest_price, params, frame)
+        if not reason:
+            return
+        payload = self.build_payload(
+            symbol=symbol,
+            action="close",
+            amount=user.per_trade_amount,
+            reason=reason,
+            timeframe=timeframe,
+            bar_ts=last_bar_ts,
+            backtest={"strategy": "macd_sma"},
+        )
+        payload["position_side"] = "short" if is_short else "long"
+        self.logger.warning("[LOCAL_STRATEGY] %s MACD/SMA exit signal reason='%s' bar=%s price=%s", symbol, reason, last_bar_ts, latest_price)
+        ok = self.execute_or_recover(user, payload, kind="close")
+        st["last_exit_bar"] = last_bar_ts
+        st["last_exit_price"] = latest_price
+        st["last_decision"] = f"exit_{'ok' if ok else 'recovery'}"
+        self.save_state()
+
+    def exit_reason_macd_sma(self, is_short: bool, entry_price: float, latest_price: float, params: Dict, frame: pd.DataFrame) -> Optional[str]:
+        fixed_sl = params["fixed_stop_loss_pct"] / 100.0
+        fixed_tp = params["fixed_take_profit_pct"] / 100.0
+        forced_sl = params["forced_stop_loss_pct"] / 100.0
+        forced_tp = params["forced_take_profit_pct"] / 100.0
+        cur = frame.iloc[-1]
+        if not is_short:
+            if latest_price <= entry_price * (1 - forced_sl):
+                return "macd forced sl long"
+            if latest_price >= entry_price * (1 + forced_tp):
+                return "macd forced tp long"
+            if latest_price <= entry_price * (1 - fixed_sl):
+                return "macd fixed stop loss long"
+            if latest_price >= entry_price * (1 + fixed_tp):
+                return "macd fixed take profit long"
+            if bool(cur.get("short_signal")):
+                return "macd opposite short signal"
+        else:
+            if latest_price >= entry_price * (1 + forced_sl):
+                return "macd forced sl short"
+            if latest_price <= entry_price * (1 - forced_tp):
+                return "macd forced tp short"
+            if latest_price >= entry_price * (1 + fixed_sl):
+                return "macd fixed stop loss short"
+            if latest_price <= entry_price * (1 - fixed_tp):
+                return "macd fixed take profit short"
+            if bool(cur.get("long_signal")):
+                return "macd opposite long signal"
+        return None
 
     def exit_reason(self, symbol: str, is_short: bool, entry_price: float, latest_price: float, params: Dict, frame: pd.DataFrame, st: Dict) -> Optional[str]:
         fixed_sl = params["fixed_stop_loss_pct"] / 100.0
@@ -426,6 +829,7 @@ class LocalStrategyEngine:
             "timeframe": timeframe,
             "bar_time": bar_ts,
             "client_order_id": client_order_id[:48],
+            "strategy": (backtest or {}).get("strategy", "keltner"),
             "strategy_job_id": (backtest or {}).get("job_id"),
             "order_type": "market",
             "time_in_force": "day",

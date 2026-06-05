@@ -39,10 +39,13 @@ from openpyxl import load_workbook
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-DEFAULT_PINE = PROJECT_ROOT / "misc" / "keltner.pine"
+DEFAULT_KELTNER_PINE = PROJECT_ROOT / "misc" / "strategies" / "keltner.pine"
+DEFAULT_MACD_SMA_PINE = PROJECT_ROOT / "misc" / "strategies" / "MACD_SMA_strategy.pine"
+DEFAULT_PINE = DEFAULT_KELTNER_PINE
 DEFAULT_XLSX = PROJECT_ROOT / "misc" / "Keltner_channel_strategy_stocks_NYSE_TSM_2026-06-02.xlsx"
 DEFAULT_REPORT = PROJECT_ROOT / "misc" / "optimizer_report.json"
 DEFAULT_TOP_CSV = PROJECT_ROOT / "misc" / "optimizer_top.csv"
+SUPPORTED_STRATEGIES = {"keltner", "macd_sma"}
 
 
 @dataclass
@@ -58,6 +61,11 @@ class StrategyParams:
     forced_take_profit_pct: float
     trailing_offset_ticks: int
     tick_size: float
+    macd_fast_length: int = 12
+    macd_slow_length: int = 26
+    macd_signal_length: int = 9
+    macd_sma_length: int = 200
+    max_intraday_loss_pct: float = 50.0
 
 
 @dataclass
@@ -96,6 +104,7 @@ _WORKER_DF: Optional[pd.DataFrame] = None
 _WORKER_CFG: Optional[BacktestConfig] = None
 _WORKER_START: Optional[datetime] = None
 _WORKER_END: Optional[datetime] = None
+_WORKER_STRATEGY: str = "keltner"
 
 
 def _safe_float(value: object, default: float) -> float:
@@ -134,6 +143,11 @@ def parse_pine_defaults(pine_path: Path) -> Dict[str, object]:
         "commission_pct": 0.04,
         "order_size_usd": 2000.0,
         "tick_size": 0.01,
+        "macd_fast_length": 12,
+        "macd_slow_length": 26,
+        "macd_signal_length": 9,
+        "macd_sma_length": 200,
+        "max_intraday_loss_pct": 50.0,
     }
 
     # Parse strategy(...) line for initial capital and commission.
@@ -183,6 +197,19 @@ def parse_pine_defaults(pine_path: Path) -> Dict[str, object]:
     m_trail = re.search(r"trail_offset\s*=\s*([\d\.]+)", text)
     if m_trail:
         defaults["trailing_offset_ticks"] = _safe_int(m_trail.group(1), defaults["trailing_offset_ticks"])
+
+    macd_mapping = [
+        ("macd_fast_length", "MACD fast moving average", "input", True),
+        ("macd_slow_length", "MACD slow moving average", "input", True),
+        ("macd_signal_length", "MACD signal line moving average", "input", True),
+        ("macd_sma_length", "Very slow moving average", "input", True),
+        ("max_intraday_loss_pct", "Max Intraday Loss(%)", "input", False),
+    ]
+    for key, title, func, is_int in macd_mapping:
+        v = _extract_input_default(title, func=func)
+        if v is None:
+            continue
+        defaults[key] = _safe_int(v, int(defaults[key])) if is_int else _safe_float(v, float(defaults[key]))
 
     return defaults
 
@@ -469,6 +496,18 @@ def resample_bars(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
 
 def ema(series: pd.Series, length: int) -> pd.Series:
     return series.ewm(span=length, adjust=False, min_periods=length).mean()
+
+
+def sma(series: pd.Series, length: int) -> pd.Series:
+    return series.rolling(window=length, min_periods=length).mean()
+
+
+def crossed_above(series: pd.Series, level: float = 0.0) -> pd.Series:
+    return (series.shift(1) <= level) & (series > level)
+
+
+def crossed_below(series: pd.Series, level: float = 0.0) -> pd.Series:
+    return (series.shift(1) >= level) & (series < level)
 
 
 def true_range(df: pd.DataFrame) -> pd.Series:
@@ -881,6 +920,238 @@ def backtest(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, star
     )
 
 
+def _finalize_result(
+    params: StrategyParams,
+    cfg: BacktestConfig,
+    equity: float,
+    equity_marks: List[float],
+    winners: int,
+    losers: int,
+    gross_profit: float,
+    gross_loss: float,
+    trade_returns: List[float],
+    trade_bars: List[int],
+    trades: List[Dict[str, object]],
+) -> BacktestResult:
+    total_trades = winners + losers
+    net_profit = equity - cfg.initial_capital
+    return_pct = (net_profit / cfg.initial_capital) * 100.0 if cfg.initial_capital else 0.0
+    win_rate = (winners / total_trades) * 100.0 if total_trades else 0.0
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else (gross_profit if gross_profit > 0 else 0.0)
+
+    eq = np.array(equity_marks, dtype=float)
+    running_max = np.maximum.accumulate(eq)
+    drawdowns = running_max - eq
+    max_dd = float(drawdowns.max()) if len(drawdowns) else 0.0
+    max_dd_pct = float(((drawdowns / running_max).max() * 100.0) if len(drawdowns) and np.any(running_max > 0) else 0.0)
+
+    rets = np.array(trade_returns, dtype=float)
+    sharpe = 0.0
+    if len(rets) > 2 and rets.std(ddof=1) > 1e-12:
+        sharpe = float(rets.mean() / rets.std(ddof=1) * math.sqrt(len(rets)))
+
+    avg_bars = float(np.mean(trade_bars)) if trade_bars else 0.0
+    score = (
+        return_pct
+        + (win_rate * 0.35)
+        + (min(profit_factor, 10.0) * 4.0)
+        + (sharpe * 2.0)
+        - (max_dd_pct * 1.5)
+    )
+    if total_trades < 3:
+        score -= 25.0
+
+    return BacktestResult(
+        params=params,
+        final_equity=equity,
+        net_profit=net_profit,
+        return_pct=return_pct,
+        total_trades=total_trades,
+        winners=winners,
+        losers=losers,
+        win_rate_pct=win_rate,
+        gross_profit=gross_profit,
+        gross_loss=gross_loss,
+        profit_factor=profit_factor,
+        sharpe=sharpe,
+        max_drawdown=max_dd,
+        max_drawdown_pct=max_dd_pct,
+        avg_bars_per_trade=avg_bars,
+        score=score,
+        trades=trades,
+    )
+
+
+def backtest_macd_sma(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, start_utc: datetime, end_utc: datetime) -> BacktestResult:
+    df = df[(df.index >= pd.Timestamp(start_utc)) & (df.index <= pd.Timestamp(end_utc))].copy()
+    if len(df) < max(100, params.macd_sma_length + params.macd_slow_length + params.macd_signal_length + 5):
+        raise RuntimeError("Not enough bars for MACD/SMA backtest after date filtering.")
+
+    fast_ma = sma(df["close"], params.macd_fast_length)
+    slow_ma = sma(df["close"], params.macd_slow_length)
+    veryslow_ma = sma(df["close"], params.macd_sma_length)
+    macd_line = fast_ma - slow_ma
+    signal_line = sma(macd_line, params.macd_signal_length)
+    hist = macd_line - signal_line
+
+    df["fast_ma"] = fast_ma
+    df["slow_ma"] = slow_ma
+    df["veryslow_ma"] = veryslow_ma
+    df["macd_line"] = macd_line
+    df["signal_line"] = signal_line
+    df["hist"] = hist
+    df["long_signal"] = (
+        crossed_above(df["hist"], 0.0)
+        & (df["macd_line"] > 0)
+        & (df["fast_ma"] > df["slow_ma"])
+        & (df["close"].shift(params.macd_slow_length) > df["veryslow_ma"])
+    )
+    df["short_signal"] = (
+        crossed_below(df["hist"], 0.0)
+        & (df["macd_line"] < 0)
+        & (df["fast_ma"] < df["slow_ma"])
+        & (df["close"].shift(params.macd_slow_length) < df["veryslow_ma"])
+    )
+    df = df.dropna()
+    if df.empty:
+        raise RuntimeError("MACD/SMA indicator warm-up removed all bars; widen date range.")
+
+    idx = df.index
+    c = df["close"].to_numpy(dtype=float)
+    h = df["high"].to_numpy(dtype=float)
+    l = df["low"].to_numpy(dtype=float)
+    long_signal = df["long_signal"].to_numpy(dtype=bool)
+    short_signal = df["short_signal"].to_numpy(dtype=bool)
+
+    equity = cfg.initial_capital
+    equity_marks: List[float] = [equity]
+    position = 0
+    entry_price = 0.0
+    qty = 0
+    entry_index = -1
+    entry_time: Optional[pd.Timestamp] = None
+    gross_profit = 0.0
+    gross_loss = 0.0
+    winners = 0
+    losers = 0
+    trade_returns: List[float] = []
+    trade_bars: List[int] = []
+    trades: List[Dict[str, object]] = []
+
+    def close_position(i: int, exit_price: float, exit_reason: str) -> None:
+        nonlocal equity, position, entry_price, qty, entry_index, entry_time, gross_profit, gross_loss, winners, losers
+        notional_entry = qty * entry_price
+        notional_exit = qty * exit_price
+        fees = (notional_entry + notional_exit) * (cfg.commission_pct / 100.0)
+        pnl = (exit_price - entry_price) * qty * position - fees
+        pnl_pct = (pnl / notional_entry) * 100.0 if notional_entry else 0.0
+        if pnl >= 0:
+            gross_profit += pnl
+            winners += 1
+        else:
+            gross_loss += abs(pnl)
+            losers += 1
+        equity += pnl
+        equity_marks.append(equity)
+        trade_returns.append(pnl_pct)
+        trade_bars.append(i - entry_index)
+        trades.append({
+            "entry_time": entry_time.isoformat() if entry_time is not None else None,
+            "exit_time": idx[i].isoformat(),
+            "side": "long" if position > 0 else "short",
+            "entry_price": round(float(entry_price), 6),
+            "exit_price": round(float(exit_price), 6),
+            "qty": int(qty),
+            "pnl": round(float(pnl), 2),
+            "pnl_pct": round(float(pnl_pct), 4),
+            "reason": exit_reason,
+            "bars_held": int(i - entry_index),
+        })
+        position = 0
+        entry_price = 0.0
+        qty = 0
+        entry_index = -1
+        entry_time = None
+
+    for i in range(1, len(df)):
+        if position != 0:
+            exit_price: Optional[float] = None
+            exit_reason: Optional[str] = None
+            if position > 0:
+                if l[i] <= entry_price * (1 - params.forced_stop_loss_pct / 100.0):
+                    exit_price = entry_price * (1 - params.forced_stop_loss_pct / 100.0)
+                    exit_reason = "MACD Forced SL Long"
+                elif h[i] >= entry_price * (1 + params.forced_take_profit_pct / 100.0):
+                    exit_price = entry_price * (1 + params.forced_take_profit_pct / 100.0)
+                    exit_reason = "MACD Forced TP Long"
+                elif c[i] <= entry_price * (1 - params.fixed_stop_loss_pct / 100.0):
+                    exit_price = c[i]
+                    exit_reason = "MACD Fixed Stop Loss Long"
+                elif c[i] >= entry_price * (1 + params.fixed_take_profit_pct / 100.0):
+                    exit_price = c[i]
+                    exit_reason = "MACD Fixed Take Profit Long"
+                elif short_signal[i]:
+                    exit_price = c[i]
+                    exit_reason = "MACD Opposite Short Signal"
+            else:
+                if h[i] >= entry_price * (1 + params.forced_stop_loss_pct / 100.0):
+                    exit_price = entry_price * (1 + params.forced_stop_loss_pct / 100.0)
+                    exit_reason = "MACD Forced SL Short"
+                elif l[i] <= entry_price * (1 - params.forced_take_profit_pct / 100.0):
+                    exit_price = entry_price * (1 - params.forced_take_profit_pct / 100.0)
+                    exit_reason = "MACD Forced TP Short"
+                elif c[i] >= entry_price * (1 + params.fixed_stop_loss_pct / 100.0):
+                    exit_price = c[i]
+                    exit_reason = "MACD Fixed Stop Loss Short"
+                elif c[i] <= entry_price * (1 - params.fixed_take_profit_pct / 100.0):
+                    exit_price = c[i]
+                    exit_reason = "MACD Fixed Take Profit Short"
+                elif long_signal[i]:
+                    exit_price = c[i]
+                    exit_reason = "MACD Opposite Long Signal"
+            if exit_price is not None and exit_reason is not None:
+                close_position(i, float(exit_price), exit_reason)
+                continue
+
+        if position == 0:
+            entry_side = 0
+            if params.trade_direction in ("Both", "Long Only") and long_signal[i]:
+                entry_side = 1
+            elif params.trade_direction in ("Both", "Short Only") and short_signal[i]:
+                entry_side = -1
+            if entry_side:
+                q = math.floor(cfg.order_size_usd / c[i])
+                if q > 0:
+                    position = entry_side
+                    entry_price = c[i]
+                    qty = q
+                    entry_index = i
+                    entry_time = idx[i]
+
+    if position != 0 and qty > 0:
+        close_position(len(df) - 1, float(c[-1]), "Final Close")
+
+    return _finalize_result(
+        params=params,
+        cfg=cfg,
+        equity=equity,
+        equity_marks=equity_marks,
+        winners=winners,
+        losers=losers,
+        gross_profit=gross_profit,
+        gross_loss=gross_loss,
+        trade_returns=trade_returns,
+        trade_bars=trade_bars,
+        trades=trades,
+    )
+
+
+def run_strategy_backtest(strategy: str, df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, start_utc: datetime, end_utc: datetime) -> BacktestResult:
+    if strategy == "macd_sma":
+        return backtest_macd_sma(df, params, cfg, start_utc, end_utc)
+    return backtest(df, params, cfg, start_utc, end_utc)
+
+
 def parse_range(spec: str, is_int: bool) -> List[float]:
     parts = [x.strip() for x in spec.split(":")]
     if len(parts) != 3:
@@ -916,6 +1187,11 @@ def sample_params(
         forced_take_profit_pct=float(rng.choice(ranges["forced_take_profit_pct"])),
         trailing_offset_ticks=int(rng.choice(ranges["trailing_offset_ticks"])),
         tick_size=base.tick_size,
+        macd_fast_length=int(rng.choice(ranges.get("macd_fast_length", [base.macd_fast_length]))),
+        macd_slow_length=int(rng.choice(ranges.get("macd_slow_length", [base.macd_slow_length]))),
+        macd_signal_length=int(rng.choice(ranges.get("macd_signal_length", [base.macd_signal_length]))),
+        macd_sma_length=int(rng.choice(ranges.get("macd_sma_length", [base.macd_sma_length]))),
+        max_intraday_loss_pct=float(rng.choice(ranges.get("max_intraday_loss_pct", [base.max_intraday_loss_pct]))),
     )
 
 
@@ -940,19 +1216,20 @@ def result_row_for_timeframe(timeframe: str, res: BacktestResult) -> Dict[str, o
     return row
 
 
-def init_backtest_worker(df: pd.DataFrame, cfg: BacktestConfig, start_utc: datetime, end_utc: datetime) -> None:
-    global _WORKER_DF, _WORKER_CFG, _WORKER_START, _WORKER_END
+def init_backtest_worker(df: pd.DataFrame, cfg: BacktestConfig, start_utc: datetime, end_utc: datetime, strategy: str = "keltner") -> None:
+    global _WORKER_DF, _WORKER_CFG, _WORKER_START, _WORKER_END, _WORKER_STRATEGY
     _WORKER_DF = df
     _WORKER_CFG = cfg
     _WORKER_START = start_utc
     _WORKER_END = end_utc
+    _WORKER_STRATEGY = strategy
 
 
 def safe_backtest_worker(params: StrategyParams) -> Optional[BacktestResult]:
     try:
         if _WORKER_DF is None or _WORKER_CFG is None or _WORKER_START is None or _WORKER_END is None:
             raise RuntimeError("Backtest worker was not initialized.")
-        return backtest(_WORKER_DF, params, _WORKER_CFG, _WORKER_START, _WORKER_END)
+        return run_strategy_backtest(_WORKER_STRATEGY, _WORKER_DF, params, _WORKER_CFG, _WORKER_START, _WORKER_END)
     except Exception:
         return None
 
@@ -964,9 +1241,143 @@ def resolve_optimizer_jobs(requested: int) -> int:
     return max(1, cpu_count - 1)
 
 
+def describe_accelerator(requested: str) -> Dict[str, object]:
+    requested = (requested or "auto").strip().lower()
+    if requested not in {"auto", "cpu", "gpu"}:
+        requested = "auto"
+    info: Dict[str, object] = {
+        "requested": requested,
+        "active": "cpu",
+        "gpu_available": False,
+        "backend": None,
+        "message": "CPU execution selected.",
+    }
+    if requested == "cpu":
+        return info
+
+    probes: List[str] = []
+    try:
+        import torch_directml  # type: ignore
+
+        device = torch_directml.device()
+        info["gpu_available"] = True
+        info["backend"] = "torch-directml"
+        info["message"] = (
+            f"DirectML device detected ({device}), but this pandas/OHLC simulator has no GPU kernel yet; "
+            "running backtest on CPU."
+        )
+        return info
+    except Exception as exc:
+        probes.append(f"torch-directml unavailable: {exc}")
+
+    try:
+        import pyopencl as cl  # type: ignore
+
+        platforms = cl.get_platforms()
+        devices = [dev.name for platform in platforms for dev in platform.get_devices(device_type=cl.device_type.GPU)]
+        if devices:
+            info["gpu_available"] = True
+            info["backend"] = "opencl"
+            info["message"] = (
+                f"OpenCL GPU detected ({devices[0]}), but this pandas/OHLC simulator has no GPU kernel yet; "
+                "running backtest on CPU."
+            )
+            return info
+    except Exception as exc:
+        probes.append(f"pyopencl unavailable: {exc}")
+
+    if requested == "gpu":
+        info["message"] = "GPU was requested, but no supported Python GPU backend was detected; running on CPU."
+    else:
+        info["message"] = "No supported Python GPU backend detected; running on CPU."
+    info["probes"] = probes[-3:]
+    return info
+
+
+def suggest_params_tpe(
+    trial,
+    base: StrategyParams,
+    ranges: Dict[str, List[float]],
+    trade_direction: str,
+) -> StrategyParams:
+    return StrategyParams(
+        trade_direction=trade_direction,
+        inner_kc_length=int(trial.suggest_categorical("inner_kc_length", ranges["inner_kc_length"])),
+        inner_kc_mult=float(trial.suggest_categorical("inner_kc_mult", ranges["inner_kc_mult"])),
+        outer_kc_length=int(trial.suggest_categorical("outer_kc_length", ranges["outer_kc_length"])),
+        outer_kc_mult=float(trial.suggest_categorical("outer_kc_mult", ranges["outer_kc_mult"])),
+        fixed_stop_loss_pct=float(trial.suggest_categorical("fixed_stop_loss_pct", ranges["fixed_stop_loss_pct"])),
+        fixed_take_profit_pct=float(trial.suggest_categorical("fixed_take_profit_pct", ranges["fixed_take_profit_pct"])),
+        forced_stop_loss_pct=float(trial.suggest_categorical("forced_stop_loss_pct", ranges["forced_stop_loss_pct"])),
+        forced_take_profit_pct=float(trial.suggest_categorical("forced_take_profit_pct", ranges["forced_take_profit_pct"])),
+        trailing_offset_ticks=int(trial.suggest_categorical("trailing_offset_ticks", ranges["trailing_offset_ticks"])),
+        tick_size=base.tick_size,
+        macd_fast_length=int(trial.suggest_categorical("macd_fast_length", ranges.get("macd_fast_length", [base.macd_fast_length]))),
+        macd_slow_length=int(trial.suggest_categorical("macd_slow_length", ranges.get("macd_slow_length", [base.macd_slow_length]))),
+        macd_signal_length=int(trial.suggest_categorical("macd_signal_length", ranges.get("macd_signal_length", [base.macd_signal_length]))),
+        macd_sma_length=int(trial.suggest_categorical("macd_sma_length", ranges.get("macd_sma_length", [base.macd_sma_length]))),
+        max_intraday_loss_pct=float(trial.suggest_categorical("max_intraday_loss_pct", ranges.get("max_intraday_loss_pct", [base.max_intraday_loss_pct]))),
+    )
+
+
+def run_tpe_trials(
+    tf_label: str,
+    tf_bars: pd.DataFrame,
+    cfg: BacktestConfig,
+    start_utc: datetime,
+    end_utc: datetime,
+    params_template: StrategyParams,
+    ranges: Dict[str, List[float]],
+    trade_direction: str,
+    strategy: str,
+    trials: int,
+    seed: int,
+    all_results: List[Tuple[str, BacktestResult]],
+) -> int:
+    try:
+        import optuna
+    except Exception as exc:
+        raise RuntimeError(
+            "Optuna TPE selected but optuna is not installed. Run `pip install -r requirements.txt` "
+            "on the machine running the optimizer."
+        ) from exc
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    sampler = optuna.samplers.TPESampler(seed=seed)
+    study = optuna.create_study(direction="maximize", sampler=sampler)
+    completed = 0
+
+    def objective(trial) -> float:
+        nonlocal completed
+        params = suggest_params_tpe(trial, params_template, ranges, trade_direction)
+        try:
+            res = run_strategy_backtest(strategy, tf_bars, params, cfg, start_utc, end_utc)
+        except Exception:
+            return -1_000_000_000.0
+        all_results.append((tf_label, res))
+        completed += 1
+        if completed % 25 == 0:
+            best_tf, best_res = max(all_results, key=lambda item: item[1].score)
+            print(f"[{tf_label}] TPE trial {completed:4d}/{trials}: global best={best_tf} "
+                  f"score={best_res.score:.4f}, net={best_res.net_profit:.2f}, "
+                  f"PF={best_res.profit_factor:.3f}, trades={best_res.total_trades}")
+        return float(res.score)
+
+    study.optimize(objective, n_trials=max(1, trials), n_jobs=1, show_progress_bar=False)
+    if completed and completed % 25 != 0:
+        best_tf, best_res = max(all_results, key=lambda item: item[1].score)
+        print(f"[{tf_label}] TPE trial {completed:4d}/{trials}: global best={best_tf} "
+              f"score={best_res.score:.4f}, net={best_res.net_profit:.2f}, "
+              f"PF={best_res.profit_factor:.3f}, trades={best_res.total_trades}")
+    return completed
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Optimize Keltner Pine strategy parameters locally.")
-    parser.add_argument("--pine", type=Path, default=DEFAULT_PINE)
+    parser = argparse.ArgumentParser(description="Optimize project Pine strategy parameters locally.")
+    parser.add_argument("--strategy", type=str, default="keltner", choices=sorted(SUPPORTED_STRATEGIES))
+    parser.add_argument("--optimizer-engine", type=str, default="random", choices=["random", "tpe"])
+    parser.add_argument("--accelerator", type=str, default="auto", choices=["auto", "cpu", "gpu"])
+    parser.add_argument("--pine", type=Path, default=None)
     parser.add_argument("--reference-xlsx", type=Path, default=DEFAULT_XLSX)
     parser.add_argument("--bars-csv", type=Path, default=None, help="Optional CSV with timestamp,open,high,low,close[,volume]")
     parser.add_argument("--alpaca-user", type=str, default=None, help="Username from local DB to use Alpaca keys")
@@ -999,16 +1410,31 @@ def main() -> None:
     parser.add_argument("--forced-tp-range", type=str, default="3.0:10.0:0.2")
     # Trailing offset is currently hardcoded in Pine (`trail_offset = 4`), so keep fixed by default.
     parser.add_argument("--trail-offset-range", type=str, default="4:4:1")
+    parser.add_argument("--macd-fast-range", type=str, default="8:20:1")
+    parser.add_argument("--macd-slow-range", type=str, default="20:40:1")
+    parser.add_argument("--macd-signal-range", type=str, default="5:15:1")
+    parser.add_argument("--macd-sma-range", type=str, default="100:250:10")
+    parser.add_argument("--max-intraday-loss-range", type=str, default="50:50:1")
 
     parser.add_argument("--report-json", type=Path, default=DEFAULT_REPORT)
     parser.add_argument("--top-csv", type=Path, default=DEFAULT_TOP_CSV)
 
     args = parser.parse_args()
 
-    if not args.pine.exists():
-        raise SystemExit(f"Pine file not found: {args.pine}")
+    strategy_name = args.strategy.strip().lower()
+    if strategy_name not in SUPPORTED_STRATEGIES:
+        raise SystemExit(f"Unsupported strategy '{args.strategy}'. Supported: {', '.join(sorted(SUPPORTED_STRATEGIES))}")
 
-    pine_defaults = parse_pine_defaults(args.pine)
+    accelerator_info = describe_accelerator(args.accelerator)
+    print(f"Strategy: {strategy_name}")
+    print(f"Optimizer engine: {args.optimizer_engine}")
+    print(f"Accelerator: requested={accelerator_info['requested']} active={accelerator_info['active']} - {accelerator_info['message']}")
+
+    pine_path = args.pine or (DEFAULT_MACD_SMA_PINE if strategy_name == "macd_sma" else DEFAULT_KELTNER_PINE)
+    if not pine_path.exists():
+        raise SystemExit(f"Pine file not found: {pine_path}")
+
+    pine_defaults = parse_pine_defaults(pine_path)
 
     ref_data = {"properties": {}}
     if args.reference_xlsx and args.reference_xlsx.exists():
@@ -1039,6 +1465,11 @@ def main() -> None:
         cfg.commission_pct = float(args.commission_pct)
     if args.tick_size is not None:
         base_params.tick_size = float(args.tick_size)
+    base_params.macd_fast_length = int(pine_defaults.get("macd_fast_length", 12))
+    base_params.macd_slow_length = int(pine_defaults.get("macd_slow_length", 26))
+    base_params.macd_signal_length = int(pine_defaults.get("macd_signal_length", 9))
+    base_params.macd_sma_length = int(pine_defaults.get("macd_sma_length", 200))
+    base_params.max_intraday_loss_pct = float(pine_defaults.get("max_intraday_loss_pct", 50.0))
 
     if args.bars_csv:
         bars = load_bars_csv(args.bars_csv)
@@ -1062,14 +1493,33 @@ def main() -> None:
         "forced_stop_loss_pct": parse_range(args.forced_sl_range, is_int=False),
         "forced_take_profit_pct": parse_range(args.forced_tp_range, is_int=False),
         "trailing_offset_ticks": parse_range(args.trail_offset_range, is_int=True),
+        "macd_fast_length": parse_range(args.macd_fast_range, is_int=True),
+        "macd_slow_length": parse_range(args.macd_slow_range, is_int=True),
+        "macd_signal_length": parse_range(args.macd_signal_range, is_int=True),
+        "macd_sma_length": parse_range(args.macd_sma_range, is_int=True),
+        "max_intraday_loss_pct": parse_range(args.max_intraday_loss_range, is_int=False),
     }
+    if strategy_name == "keltner":
+        ranges["macd_fast_length"] = [base_params.macd_fast_length]
+        ranges["macd_slow_length"] = [base_params.macd_slow_length]
+        ranges["macd_signal_length"] = [base_params.macd_signal_length]
+        ranges["macd_sma_length"] = [base_params.macd_sma_length]
+        ranges["max_intraday_loss_pct"] = [base_params.max_intraday_loss_pct]
+    elif strategy_name == "macd_sma":
+        ranges["inner_kc_length"] = [base_params.inner_kc_length]
+        ranges["inner_kc_mult"] = [base_params.inner_kc_mult]
+        ranges["outer_kc_length"] = [base_params.outer_kc_length]
+        ranges["outer_kc_mult"] = [base_params.outer_kc_mult]
+        ranges["trailing_offset_ticks"] = [base_params.trailing_offset_ticks]
 
     all_results: List[Tuple[str, BacktestResult]] = []
     reference_timeframe = None
     reference_result = None
     bars_count_by_timeframe: Dict[str, int] = {}
     optimizer_jobs = resolve_optimizer_jobs(args.jobs)
-    if optimizer_jobs > 1:
+    if args.optimizer_engine == "tpe":
+        print("Optuna TPE runs sequentially in this implementation; CPU Jobs is used by the random engine.")
+    elif optimizer_jobs > 1:
         print(f"Optimizer parallelism: {optimizer_jobs} processes")
 
     for tf_index, tf_label in enumerate(timeframes):
@@ -1094,13 +1544,18 @@ def main() -> None:
                 forced_take_profit_pct=float(ranges["forced_take_profit_pct"][0]),
                 trailing_offset_ticks=int(ranges["trailing_offset_ticks"][0]),
                 tick_size=params_template.tick_size,
+                macd_fast_length=int(ranges["macd_fast_length"][0]),
+                macd_slow_length=int(ranges["macd_slow_length"][0]),
+                macd_signal_length=int(ranges["macd_signal_length"][0]),
+                macd_sma_length=int(ranges["macd_sma_length"][0]),
+                max_intraday_loss_pct=float(ranges["max_intraday_loss_pct"][0]),
             )
 
         rng = random.Random(args.seed + tf_index)
         seen = set()
         params_template.trade_direction = args.trade_direction
         try:
-            base_result = backtest(tf_bars, params_template, cfg, start_utc, end_utc)
+            base_result = run_strategy_backtest(strategy_name, tf_bars, params_template, cfg, start_utc, end_utc)
         except Exception as exc:
             print(f"Skipping {tf_label}: {exc}")
             continue
@@ -1114,6 +1569,24 @@ def main() -> None:
               f"PF={base_result.profit_factor:.3f} | trades={base_result.total_trades} | "
               f"win={base_result.win_rate_pct:.2f}%")
 
+        has_search_space = any(len(values) > 1 for values in ranges.values())
+        if args.optimizer_engine == "tpe" and has_search_space:
+            run_tpe_trials(
+                tf_label=tf_label,
+                tf_bars=tf_bars,
+                cfg=cfg,
+                start_utc=start_utc,
+                end_utc=end_utc,
+                params_template=params_template,
+                ranges=ranges,
+                trade_direction=args.trade_direction,
+                strategy=strategy_name,
+                trials=args.trials,
+                seed=args.seed + tf_index,
+                all_results=all_results,
+            )
+            continue
+
         sampled_params: List[StrategyParams] = []
         for _ in range(args.trials):
             p = sample_params(rng, params_template, ranges, args.trade_direction)
@@ -1125,7 +1598,7 @@ def main() -> None:
 
         if optimizer_jobs <= 1 or len(sampled_params) <= 1:
             result_iter = (safe_backtest_worker(p) for p in sampled_params)
-            init_backtest_worker(tf_bars, cfg, start_utc, end_utc)
+            init_backtest_worker(tf_bars, cfg, start_utc, end_utc, strategy_name)
             for i, res in enumerate(result_iter, start=1):
                 if res is not None:
                     all_results.append((tf_label, res))
@@ -1139,7 +1612,7 @@ def main() -> None:
             with ProcessPoolExecutor(
                 max_workers=optimizer_jobs,
                 initializer=init_backtest_worker,
-                initargs=(tf_bars, cfg, start_utc, end_utc),
+                initargs=(tf_bars, cfg, start_utc, end_utc, strategy_name),
             ) as executor:
                 for i, res in enumerate(executor.map(safe_backtest_worker, sampled_params, chunksize=chunksize), start=1):
                     if res is not None:
@@ -1174,6 +1647,9 @@ def main() -> None:
     best_timeframe, best = top[0]
     report = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "strategy": strategy_name,
+        "optimizer_engine": args.optimizer_engine,
+        "accelerator": accelerator_info,
         "symbol_input": raw_symbol,
         "symbol_used": symbol,
         "timeframe": best_timeframe if len(timeframes) == 1 else "sweep",

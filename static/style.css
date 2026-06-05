@@ -456,6 +456,49 @@ body.dark-mode .strategy-json {
     border-radius: 12px;
 }
 
+.stock-intelligence-question {
+    min-height: 190px;
+    resize: vertical;
+}
+.stock-intelligence-answer {
+    min-height: 260px;
+    white-space: pre-wrap;
+    line-height: 1.55;
+}
+.stock-intelligence-context {
+    max-height: 520px;
+    overflow: auto;
+}
+.stock-intelligence-standalone-main {
+    padding: 1.25rem;
+}
+.stock-intelligence-source-link {
+    display: inline-flex;
+    align-items: center;
+    margin-top: 0.35rem;
+}
+.stock-intelligence-symbol {
+    border-bottom: 1px solid var(--card-border);
+    padding: 0.75rem 0;
+}
+.stock-intelligence-symbol:first-child {
+    padding-top: 0;
+}
+.stock-intelligence-symbol:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+}
+.stock-intelligence-news-item {
+    background: rgba(0, 0, 0, 0.035);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    margin-top: 0.55rem;
+    padding: 0.65rem;
+}
+body.dark-mode .stock-intelligence-news-item {
+    background: rgba(255, 255, 255, 0.04);
+}
+
 /* --- DataTables Mobile/Responsive --- */
 .dataTables_wrapper { width: 100%; max-width: 100%; }
 .table td,

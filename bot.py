@@ -326,25 +326,26 @@ def mirror_close_trade(user, payload, api_client):
         return None
     api_symbol = symbol.replace('/', '')
     trade = Trade.query.filter_by(symbol=api_symbol, status='open', user_id=user.id).order_by(Trade.open_time.desc()).first()
+    if not trade:
+        logger.info(
+            f"[TRADE_MIRROR] Skipped mirrored close for '{user.username}' {api_symbol}: "
+            "no live position and no matching open DB trade."
+        )
+        return None
 
     close_price = get_last_price(api_client, symbol)
     if close_price == 0:
-        close_price = trade.open_price if trade else None
+        logger.warning(
+            f"[TRADE_MIRROR] Skipped mirrored close for '{user.username}' {api_symbol}: "
+            "could not fetch a reliable close price."
+        )
+        return None
     if close_price is None:
         return None
 
-    if trade:
-        qty = trade.qty
-        avg_entry_price = trade.open_price
-        side_raw = (trade.side or "").lower()
-    else:
-        side_raw = (payload.get("action") or "").lower()
-        amount = user.per_trade_amount
-        if is_crypto(symbol):
-            qty = amount / close_price
-        else:
-            qty = amount / close_price
-        avg_entry_price = close_price
+    qty = trade.qty
+    avg_entry_price = trade.open_price
+    side_raw = (trade.side or "").lower()
 
     position_side = "short" if "short" in side_raw or side_raw == "sell" else "long"
     position_obj = {
@@ -382,6 +383,25 @@ def _order_fill_price(api, order_id):
     except Exception:
         return None
 
+def _order_fill_details_from_order(order_obj):
+    if order_obj is None:
+        return None, None
+    status = str(getattr(order_obj, "status", "") or "").lower()
+    price = _safe_float(getattr(order_obj, "filled_avg_price", None))
+    filled_at = getattr(order_obj, "filled_at", None)
+    if price is None or status not in ("filled", "partially_filled"):
+        return None, None
+    return price, filled_at
+
+def _order_fill_details(api, order_id):
+    if not order_id:
+        return None, None
+    try:
+        ord_obj = api.get_order(order_id)
+        return _order_fill_details_from_order(ord_obj)
+    except Exception:
+        return None, None
+
 def _is_no_position_error(err_text):
     normalized = (err_text or "").lower()
     markers = (
@@ -393,10 +413,15 @@ def _is_no_position_error(err_text):
     )
     return any(marker in normalized for marker in markers)
 
-def _pick_close_price_from_updates(api_key, api_secret, close_order_id, close_order, api, fallback_symbol):
-    close_price = _safe_float(getattr(close_order, "filled_avg_price", None))
+def _pick_close_fill_from_updates(api_key, api_secret, close_order_id, close_order, api, fallback_symbol):
+    close_price, close_time = _order_fill_details_from_order(close_order)
     if close_price is not None:
-        return close_price
+        return {
+            "price": close_price,
+            "time": close_time,
+            "source": "order_object",
+            "is_authoritative": True,
+        }
 
     try:
         update = TRADE_UPDATES.wait_for_order(
@@ -406,17 +431,34 @@ def _pick_close_price_from_updates(api_key, api_secret, close_order_id, close_or
             order_id=str(close_order_id),
             timeout_sec=TRADE_UPDATES_WAIT_SEC,
         )
-        if update and update.price is not None:
-            return float(update.price)
+        if update and update.price is not None and update.event in ("fill", "partial_fill"):
+            return {
+                "price": float(update.price),
+                "time": update.timestamp,
+                "source": "trade_update",
+                "is_authoritative": True,
+            }
     except Exception as exc:
         logger.warning(f"[ALPACA_STREAM] Could not read trade update for close order {close_order_id}: {exc}")
 
-    close_price = _order_fill_price(api, close_order_id)
+    close_price, close_time = _order_fill_details(api, close_order_id)
     if close_price is not None:
-        return close_price
+        return {
+            "price": close_price,
+            "time": close_time,
+            "source": "order_poll",
+            "is_authoritative": True,
+        }
 
     fallback = get_last_price(api, fallback_symbol)
-    return fallback if fallback else None
+    if fallback:
+        return {
+            "price": fallback,
+            "time": datetime.now(timezone.utc),
+            "source": "latest_trade_fallback",
+            "is_authoritative": False,
+        }
+    return {"price": None, "time": None, "source": "unavailable", "is_authoritative": False}
 
 def _resolve_equity_order_params(symbol, action, amount, last_price, payload):
     requested_type = str(payload.get("order_type", "market")).strip().lower() or "market"
@@ -547,7 +589,7 @@ def process_trade_for_user(user, payload):
             close_order = api.close_position(api_symbol)
             close_order_id = str(getattr(close_order, "id", ""))
             logger.info(f"[TRADE_EXECUTED] User '{user.username}' CLOSE order {close_order_id} for {api_symbol}")
-            close_price = _pick_close_price_from_updates(
+            close_fill = _pick_close_fill_from_updates(
                 api_key=api_key,
                 api_secret=api_secret,
                 close_order_id=close_order_id,
@@ -568,9 +610,13 @@ def process_trade_for_user(user, payload):
                     "asset_id": str(position_to_close.asset_id)
                 }
             }
+            close_price = close_fill.get("price")
             if close_price is not None:
+                close_time = close_fill.get("time") or datetime.now(timezone.utc)
                 notification_payload["close_price"] = close_price
-                notification_payload["close_time"] = datetime.now(timezone.utc).isoformat()
+                notification_payload["close_time"] = close_time.isoformat() if hasattr(close_time, "isoformat") else str(close_time)
+                notification_payload["close_price_source"] = close_fill.get("source")
+                notification_payload["close_price_authoritative"] = bool(close_fill.get("is_authoritative"))
             record_trade_notification(notification_payload)
             return True, 200, {"result": "closed", "close_order_id": close_order_id}, notification_payload
         except AlpacaAPIError as e:
@@ -657,7 +703,8 @@ def process_trade_for_user(user, payload):
             order_id = str(getattr(order, "id", ""))
             logger.info(f"[TRADE_EXECUTED] User '{user.username}' OPEN order {order_id} for {api_symbol}")
 
-            entry_price = _safe_float(getattr(order, "filled_avg_price", None))
+            entry_price, entry_time = _order_fill_details_from_order(order)
+            entry_price_source = "order_object" if entry_price is not None else None
             if entry_price is None:
                 try:
                     update = TRADE_UPDATES.wait_for_order(
@@ -667,12 +714,21 @@ def process_trade_for_user(user, payload):
                         order_id=order_id,
                         timeout_sec=TRADE_UPDATES_WAIT_SEC,
                     )
-                    if update and update.price is not None:
+                    if update and update.price is not None and update.event in ("fill", "partial_fill"):
                         entry_price = float(update.price)
+                        entry_time = update.timestamp
+                        entry_price_source = "trade_update"
                 except Exception as exc:
                     logger.warning(f"[ALPACA_STREAM] Could not read trade update for open order {order_id}: {exc}")
             if entry_price is None:
-                entry_price = _order_fill_price(api, order_id) or last_price
+                entry_price, entry_time = _order_fill_details(api, order_id)
+                entry_price_source = "order_poll" if entry_price is not None else None
+            if entry_price is None:
+                entry_price = last_price
+                entry_time = datetime.now(timezone.utc)
+                entry_price_source = "latest_trade_fallback"
+            if entry_time is None:
+                entry_time = datetime.now(timezone.utc)
 
             notification_payload = {
                 "result": "opened",
@@ -680,6 +736,8 @@ def process_trade_for_user(user, payload):
                 "symbol": symbol,
                 "side": action.lower(),
                 "price": entry_price,
+                "price_source": entry_price_source,
+                "open_time": entry_time.isoformat() if hasattr(entry_time, "isoformat") else str(entry_time),
                 "payload": payload,
                 "user_id": user.id,
                 "qty": qty_to_log

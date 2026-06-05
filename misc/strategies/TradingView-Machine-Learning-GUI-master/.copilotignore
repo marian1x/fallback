@@ -1,0 +1,27 @@
+# Browser profile data (credential extraction artifacts, not source code)
+hyperview/browser_profile/
+
+# Cached market data CSVs and results output
+data/
+results/
+
+# Python bytecode
+.pycache/
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/
+
+# Logs
+*.log
+
+# Git internals
+.git/
+
+# OS artifacts
+Thumbs.db
+desktop.ini
+
+# License (not needed for coding context)
+LICENSE

@@ -10,10 +10,11 @@
     <div class="d-flex flex-column flex-lg-row align-items-lg-end justify-content-between gap-3 mb-3">
         <div>
             <h3 class="mb-1">Admin Strategy Lab</h3>
-            <div class="small text-muted">Keltner channel strategy stocks</div>
+            <div class="small text-muted">Strategy backtests and local signal routing</div>
         </div>
         <div class="strategy-status-strip">
             <span><i class="fa-solid fa-database me-1"></i>Live data: Alpaca</span>
+            <span><i class="fa-solid fa-code-branch me-1"></i>{{ config.strategy|default('keltner') }}</span>
             <span><i class="fa-solid fa-clock me-1"></i>{{ config.timeframe }}</span>
             <span><i class="fa-solid fa-signal me-1"></i>{{ config.feed|upper }}</span>
         </div>
@@ -52,6 +53,13 @@
                                     <div class="col-12 col-md-3">
                                         <label class="form-label">Backtest Stocks {{ tip('Un stock sau o lista de stocks separate prin virgula sau rand nou. Exemplu: TSM, AAPL, MSFT. Se creeaza un optimizer run separat pentru fiecare.') }}</label>
                                         <textarea name="symbol" class="form-control universe-symbol" rows="1" required list="strategy-symbols">{{ config.symbol }}</textarea>
+                                    </div>
+                                    <div class="col-6 col-md-2">
+                                        <label class="form-label">Strategy {{ tip('Selecteaza strategia implementata in backtester si local bot.') }}</label>
+                                        <select name="strategy" class="form-select">
+                                            <option value="keltner" {% if config.strategy|default('keltner') == 'keltner' %}selected{% endif %}>Keltner Channel</option>
+                                            <option value="macd_sma" {% if config.strategy|default('keltner') == 'macd_sma' %}selected{% endif %}>MACD + SMA</option>
+                                        </select>
                                     </div>
                                     <div class="col-6 col-md-2">
                                         <label class="form-label">Chart Interval {{ tip('Intervalul de chart folosit pentru barele Alpaca. 1Min este mai greu; 1Day/1Week sunt mai rapide, dar mai putin precise pentru intraday.') }}</label>
@@ -162,6 +170,24 @@
                                             <label>Forced Take Profit (%) {{ tip('Intrabar limit-style exit. This can fill before the candle close in the local emulator.') }}</label>
                                             <input type="number" name="forced_take_profit_pct" class="form-control" value="{{ config.forced_take_profit_pct }}" step="0.1">
                                         </div>
+
+                                        <div class="tw-section-label">MACD + SMA Settings</div>
+                                        <div class="tw-row">
+                                            <label>MACD Fast Length {{ tip('Fast SMA length from the MACD + SMA Pine strategy.') }}</label>
+                                            <input type="number" name="macd_fast_length" class="form-control" value="{{ config.macd_fast_length|default(12) }}" min="1" step="1">
+                                        </div>
+                                        <div class="tw-row">
+                                            <label>MACD Slow Length {{ tip('Slow SMA length from the MACD + SMA Pine strategy.') }}</label>
+                                            <input type="number" name="macd_slow_length" class="form-control" value="{{ config.macd_slow_length|default(26) }}" min="1" step="1">
+                                        </div>
+                                        <div class="tw-row">
+                                            <label>MACD Signal Length {{ tip('Signal SMA length for the MACD histogram.') }}</label>
+                                            <input type="number" name="macd_signal_length" class="form-control" value="{{ config.macd_signal_length|default(9) }}" min="1" step="1">
+                                        </div>
+                                        <div class="tw-row">
+                                            <label>Very Slow SMA Length {{ tip('Trend filter length. The Pine script default is SMA 200.') }}</label>
+                                            <input type="number" name="macd_sma_length" class="form-control" value="{{ config.macd_sma_length|default(200) }}" min="1" step="1">
+                                        </div>
                                     </div>
                                 </div>
 
@@ -230,7 +256,7 @@
                                         <div>
                                             <div class="form-check form-switch mb-3">
                                                 <input class="form-check-input" type="checkbox" name="optimize_enabled" id="optimizeEnabled" {% if config.optimize_enabled %}checked{% endif %}>
-                                                <label class="form-check-label" for="optimizeEnabled">Enable parameter optimization {{ tip('Off: run exact TW-style settings. On: run random search using the ranges below.') }}</label>
+                                                <label class="form-check-label" for="optimizeEnabled">Enable parameter optimization {{ tip('Off: run exact TW-style settings. On: run the selected optimizer using the ranges below.') }}</label>
                                             </div>
                                             <div class="strategy-target-card mb-3">
                                                 <div class="form-check form-switch mb-3">
@@ -273,6 +299,21 @@
                                                     <label class="form-label">CPU Jobs {{ tip('Procese paralele pentru un optimizer run. 0 = auto, foloseste cpu_count - 1. Pentru Mini-PC recomand 0 sau 6-10, in functie de temperaturi.') }}</label>
                                                     <input type="number" min="0" name="optimizer_jobs" class="form-control" value="{{ config.optimizer_jobs }}">
                                                 </div>
+                                                <div class="col-6 col-lg-3">
+                                                    <label class="form-label">Optimizer {{ tip('Random foloseste cautare aleatoare paralela. Optuna TPE foloseste Bayesian optimization si tinde sa gaseasca zone bune cu mai putine incercari.') }}</label>
+                                                    <select name="optimizer_engine" class="form-select">
+                                                        <option value="tpe" {% if config.optimizer_engine|default('tpe') == 'tpe' %}selected{% endif %}>Optuna TPE</option>
+                                                        <option value="random" {% if config.optimizer_engine|default('tpe') == 'random' %}selected{% endif %}>Random</option>
+                                                    </select>
+                                                </div>
+                                                <div class="col-6 col-lg-3">
+                                                    <label class="form-label">Accelerator {{ tip('Auto/GPU detecteaza capabilitati, dar backtesterul actual ruleaza pe CPU pana cand exista un kernel GPU real pentru simularea OHLC.') }}</label>
+                                                    <select name="accelerator" class="form-select">
+                                                        <option value="auto" {% if config.accelerator|default('auto') == 'auto' %}selected{% endif %}>Auto</option>
+                                                        <option value="cpu" {% if config.accelerator|default('auto') == 'cpu' %}selected{% endif %}>CPU</option>
+                                                        <option value="gpu" {% if config.accelerator|default('auto') == 'gpu' %}selected{% endif %}>GPU request</option>
+                                                    </select>
+                                                </div>
                                                 <div class="col-12 col-lg-3">
                                                     <label class="form-label">Trade Direction {{ tip('Both tests long and short entries. Long Only and Short Only isolate one side.') }}</label>
                                                     <select name="trade_direction" class="form-select">
@@ -284,6 +325,22 @@
                                                 <div class="col-12 col-lg-3">
                                                     <label class="form-label">Trail Offset Range {{ tip('Current Pine script uses 4 ticks. Keep 4:4:1 for best TW parity.') }}</label>
                                                     <input type="text" name="trail_offset_range" class="form-control" value="{{ config.trail_offset_range }}">
+                                                </div>
+                                                <div class="col-6 col-lg-3">
+                                                    <label class="form-label">MACD Fast Range</label>
+                                                    <input type="text" name="macd_fast_range" class="form-control" value="{{ config.macd_fast_range|default('8:20:1') }}">
+                                                </div>
+                                                <div class="col-6 col-lg-3">
+                                                    <label class="form-label">MACD Slow Range</label>
+                                                    <input type="text" name="macd_slow_range" class="form-control" value="{{ config.macd_slow_range|default('20:40:1') }}">
+                                                </div>
+                                                <div class="col-6 col-lg-3">
+                                                    <label class="form-label">MACD Signal Range</label>
+                                                    <input type="text" name="macd_signal_range" class="form-control" value="{{ config.macd_signal_range|default('5:15:1') }}">
+                                                </div>
+                                                <div class="col-6 col-lg-3">
+                                                    <label class="form-label">SMA Trend Range</label>
+                                                    <input type="text" name="macd_sma_range" class="form-control" value="{{ config.macd_sma_range|default('100:250:10') }}">
                                                 </div>
                                             </div>
                                         </div>
@@ -352,6 +409,7 @@
                                     <thead>
                                         <tr>
                                             <th>Symbol {{ tip('Must be available in the Alpaca tradable list.') }}</th>
+                                            <th>Strategy {{ tip('Strategia locala folosita pentru acest simbol. Parametrii vin din backtestul salvat pe rand.') }}</th>
                                             <th>Mode {{ tip('Local: ignore TW and use local strategy later. TradingView: TW only. Both: compare both. Disabled: block symbol.') }}</th>
                                             <th>Active {{ tip('Fast on/off switch for this row.') }}</th>
                                             <th>Backtest Result {{ tip('Rezultatul salvat pentru acest stock. Parametrii castigatori sunt ascunsi in Details.') }}</th>
@@ -365,6 +423,13 @@
                                             <td>
                                                 <input type="hidden" name="universe_backtest[]" {% if item.backtest %}value='{{ item.backtest|tojson|forceescape }}'{% else %}value=""{% endif %}>
                                                 <input type="text" name="universe_symbol[]" class="form-control form-control-sm universe-symbol" value="{{ item.symbol }}" list="strategy-symbols" required>
+                                            </td>
+                                            <td>
+                                                {% set row_strategy = item.strategy|default(item.backtest.strategy if item.backtest else 'keltner') %}
+                                                <select name="universe_strategy[]" class="form-select form-select-sm">
+                                                    <option value="keltner" {% if row_strategy == 'keltner' %}selected{% endif %}>Keltner</option>
+                                                    <option value="macd_sma" {% if row_strategy == 'macd_sma' %}selected{% endif %}>MACD + SMA</option>
+                                                </select>
                                             </td>
                                             <td>
                                                 <select name="universe_mode[]" class="form-select form-select-sm">
@@ -381,6 +446,7 @@
                                             <td>
                                                 {% if item.backtest %}
                                                 <div class="small">
+                                                    <span class="badge bg-secondary-subtle text-secondary-emphasis border">{{ item.backtest.strategy|default(item.strategy|default('keltner')) }}</span>
                                                     <strong>{{ item.backtest.metrics.net_profit }}</strong> net,
                                                     {{ item.backtest.metrics.return_pct }}%,
                                                     PF {{ item.backtest.metrics.profit_factor }},
@@ -397,7 +463,7 @@
                                             </td>
                                         </tr>
                                         <tr class="universe-detail-row">
-                                            <td colspan="6" class="p-0 border-0">
+                                            <td colspan="7" class="p-0 border-0">
                                                 <div class="collapse strategy-detail-collapse" id="btDetails{{ loop.index }}">
                                                     {% if item.backtest %}
                                                     <pre class="strategy-json mb-0">{{ item.backtest|tojson(indent=2) }}</pre>
@@ -570,7 +636,7 @@
                                     {% endif %}
                                     <input type="hidden" id="selectedJobId" name="job_id" value="">
                                     <div class="small text-muted mt-3">
-                                        Windows agent: <code>python misc/windows_strategy_agent.py --server https://salavat.home.ro/trading --token %STRATEGY_WORKER_TOKEN% --workers 4</code>
+                                        Windows agent: <code>python misc/windows_strategy_agent.py --server https://salavat.home.ro/trading --token %STRATEGY_WORKER_TOKEN% --workers 4 --accelerator auto</code>
                                     </div>
                                 </div>
                             </div>
@@ -729,6 +795,12 @@ $(document).ready(function() {
                     <input type="text" name="universe_symbol[]" class="form-control form-control-sm universe-symbol" list="strategy-symbols" required>
                 </td>
                 <td>
+                    <select name="universe_strategy[]" class="form-select form-select-sm">
+                        <option value="keltner" selected>Keltner</option>
+                        <option value="macd_sma">MACD + SMA</option>
+                    </select>
+                </td>
+                <td>
                     <select name="universe_mode[]" class="form-select form-select-sm">
                         <option value="local">Local</option>
                         <option value="tw">TradingView</option>
@@ -742,7 +814,7 @@ $(document).ready(function() {
                 <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger remove-universe-row" title="Remove symbol"><i class="fa-solid fa-trash"></i></button></td>
             </tr>
         `);
-        const detailRow = $('<tr class="universe-detail-row"><td colspan="6" class="p-0 border-0"></td></tr>');
+        const detailRow = $('<tr class="universe-detail-row"><td colspan="7" class="p-0 border-0"></td></tr>');
         $('#universeTable tbody').append(row).append(detailRow);
         bindUniverseRow(row);
         row.find('.universe-symbol').trigger('focus');

@@ -27,7 +27,7 @@ def app():
 
 def test_record_open_trade(app):
     payload = {'symbol': 'AAPL', 'action': 'buy'}
-    data = {'order_id': '123', 'side': 'buy', 'qty': 10, 'price': 100}
+    data = {'order_id': '123', 'side': 'buy', 'qty': 10, 'price': 100, 'open_time': '2026-06-05T13:00:00+00:00'}
     with app.app_context():
         user = User(username='tester', email='tester@example.com', password_hash='hashed')
         db.session.add(user)
@@ -36,6 +36,7 @@ def test_record_open_trade(app):
         assert t is not None
         assert t.symbol == 'AAPL'
         assert t.status == 'open'
+        assert t.open_time.hour == 13
 
         t2 = trade_db.record_open_trade(data, payload, user.id)
         assert t2 is None
@@ -149,3 +150,115 @@ def test_record_closed_trade_with_override_price(app, monkeypatch):
         t = trade_db.record_closed_trade(close_data, {'symbol': 'AAPL', 'action': 'sell'}, user.id, position_obj)
         assert t.status == 'closed'
         assert t.close_price == 111
+
+
+def test_record_closed_trade_replaces_fallback_close_price_with_order_fill(app, monkeypatch):
+    open_payload = {'symbol': 'AAPL', 'action': 'buy'}
+    open_data = {'order_id': '1', 'side': 'buy', 'qty': 5, 'price': 100}
+    with app.app_context():
+        user = User(username='tester4', email='tester4@example.com', password_hash='hashed')
+        db.session.add(user)
+        db.session.commit()
+        trade_db.record_open_trade(open_data, open_payload, user.id)
+
+        position_obj = SimpleNamespace(
+            avg_entry_price=100,
+            qty=5,
+            side='long',
+            asset_id='asset123'
+        )
+
+        class MockOrder:
+            status = 'filled'
+            filled_avg_price = 112
+            filled_at = datetime(2023, 1, 3, tzinfo=timezone.utc)
+
+        class MockAPI(SimpleNamespace):
+            def get_order(self, order_id):
+                assert order_id == 'close123'
+                return MockOrder()
+
+        monkeypatch.setattr(trade_db, 'get_api_for_user', lambda user_id: MockAPI())
+        monkeypatch.setattr(trade_db.time, 'sleep', lambda s: None)
+
+        close_data = {
+            'close_order_id': 'close123',
+            'close_price': 100,
+            'close_price_source': 'latest_trade_fallback',
+            'close_price_authoritative': False,
+            'close_time': '2023-01-03T12:00:00+00:00'
+        }
+        t = trade_db.record_closed_trade(close_data, {'symbol': 'AAPL', 'action': 'sell'}, user.id, position_obj)
+        assert t.status == 'closed'
+        assert t.close_price == 112
+        assert t.profit_loss == 60
+
+
+def test_record_closed_trade_skips_fallback_when_position_still_open(app, monkeypatch):
+    open_payload = {'symbol': 'AAPL', 'action': 'buy'}
+    open_data = {'order_id': '1', 'side': 'buy', 'qty': 5, 'price': 100}
+    with app.app_context():
+        user = User(username='tester5', email='tester5@example.com', password_hash='hashed')
+        db.session.add(user)
+        db.session.commit()
+        trade_db.record_open_trade(open_data, open_payload, user.id)
+
+        position_obj = SimpleNamespace(
+            avg_entry_price=100,
+            qty=5,
+            side='long',
+            asset_id='asset123'
+        )
+
+        class MockOrder:
+            status = 'accepted'
+            filled_avg_price = None
+            filled_at = None
+
+        class MockAPI(SimpleNamespace):
+            def get_order(self, order_id):
+                assert order_id == 'close123'
+                return MockOrder()
+
+            def get_position(self, symbol):
+                assert symbol == 'AAPL'
+                return SimpleNamespace(symbol='AAPL')
+
+        monkeypatch.setattr(trade_db, 'get_api_for_user', lambda user_id: MockAPI())
+        monkeypatch.setattr(trade_db.time, 'sleep', lambda s: None)
+
+        close_data = {
+            'close_order_id': 'close123',
+            'close_price': 100,
+            'close_price_source': 'latest_trade_fallback',
+            'close_price_authoritative': False,
+            'close_time': '2023-01-03T12:00:00+00:00'
+        }
+        assert trade_db.record_closed_trade(close_data, {'symbol': 'AAPL', 'action': 'sell'}, user.id, position_obj) is None
+        assert Trade.query.filter_by(status='open').count() == 1
+
+
+def test_record_closed_trade_skips_when_no_open_trade(app, monkeypatch):
+    with app.app_context():
+        user = User(username='tester6', email='tester6@example.com', password_hash='hashed')
+        db.session.add(user)
+        db.session.commit()
+
+        position_obj = SimpleNamespace(
+            avg_entry_price=100,
+            qty=5,
+            side='long',
+            asset_id='asset123'
+        )
+
+        class MockAPI(SimpleNamespace):
+            pass
+
+        monkeypatch.setattr(trade_db, 'get_api_for_user', lambda user_id: MockAPI())
+
+        close_data = {
+            'close_price': 111,
+            'close_time': '2023-01-02T12:00:00+00:00'
+        }
+        assert trade_db.record_closed_trade(close_data, {'symbol': 'AAPL', 'action': 'sell'}, user.id, position_obj) is None
+        assert Trade.query.count() == 0

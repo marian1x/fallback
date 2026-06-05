@@ -73,8 +73,8 @@
                                 <th>{{ _('Close Price') }}</th>
                                 <th>{{ _('P/L') }}</th>
                                 <th>{{ _('P/L %%') }}</th>
-                                <th>{{ _('Open Time') }}</th>
-                                <th>{{ _('Close Time') }}</th>
+                                <th>{{ _('Open Time') }} RO</th>
+                                <th>{{ _('Close Time') }} RO</th>
                                 <th>{{ _('Exit Reason') }}</th>
                             </tr>
                         </thead>
@@ -110,10 +110,23 @@
     let leaderboardTable;
     const closedOrdersUrl = "{{ url_for('api_closed_orders') }}";
     const performanceLeaderboardUrl = "{{ url_for('api_admin_performance_leaderboard') }}";
+    const romaniaZone = "Europe/Bucharest";
 
     function toLocalTime(isoString) {
         if (!isoString) return "-";
-        return luxon.DateTime.fromISO(isoString, { zone: "utc" }).toFormat("dd/MM/yyyy, HH:mm:ss");
+        const dt = luxon.DateTime.fromISO(isoString, { zone: "utc" }).setZone(romaniaZone);
+        return dt.isValid ? dt.toFormat("dd/MM/yyyy, HH:mm:ss") : "-";
+    }
+
+    function localDateIso(isoString) {
+        if (!isoString) return "";
+        const dt = luxon.DateTime.fromISO(isoString, { zone: "utc" }).setZone(romaniaZone);
+        return dt.isValid ? dt.toISODate() : "";
+    }
+
+    function numericValue(value) {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : null;
     }
 
     function colorPL(val, withSign = false) {
@@ -146,7 +159,7 @@
         const filtered = allClosedOrders.filter(r => {
             const closeTime = r.close_time || r.open_time;
             if (!closeTime) return false;
-            const closeDate = closeTime.slice(0, 10);
+            const closeDate = localDateIso(closeTime);
             return (!dateFrom || closeDate >= dateFrom) && (!dateTo || closeDate <= dateTo);
         });
         
@@ -156,10 +169,13 @@
             const closeTimeOrder = r.close_time || '';
             const openTimeDisplay = toLocalTime(r.open_time);
             const closeTimeDisplay = toLocalTime(r.close_time);
+            const openPrice = numericValue(r.open_price);
+            const closePrice = numericValue(r.close_price);
+            const plPct = numericValue(r.profit_loss_pct);
             closedOrdersTable.row.add([
                 r.symbol.replace('USD', '/USD'), r.side ? r.side.toUpperCase() : '-',
-                r.open_price ? r.open_price.toFixed(4) : '-', r.close_price ? r.close_price.toFixed(4) : '-',
-                colorPL(r.profit_loss, true), r.profit_loss_pct ? r.profit_loss_pct.toFixed(2) + '%' : '-',
+                openPrice !== null ? openPrice.toFixed(4) : '-', closePrice !== null ? closePrice.toFixed(4) : '-',
+                colorPL(numericValue(r.profit_loss), true), plPct !== null ? plPct.toFixed(2) + '%' : '-',
                 `<span data-order="${openTimeOrder}">${openTimeDisplay}</span>`,
                 `<span data-order="${closeTimeOrder}">${closeTimeDisplay}</span>`,
                 r.action ? `<span class="badge bg-info text-dark">${r.action}</span>` : ''
@@ -175,19 +191,19 @@
     function updateStatsPanel(filteredTrades) {
         let totalPL = 0, wins = 0, losses = 0, bestTrade = null, worstTrade = null;
         filteredTrades.forEach(trade => {
-            const pl = trade.profit_loss || 0;
+            const pl = numericValue(trade.profit_loss) || 0;
             totalPL += pl;
             if (pl > 0) wins++; else if (pl < 0) losses++;
-            if (!bestTrade || pl > bestTrade.profit_loss) bestTrade = trade;
-            if (!worstTrade || pl < worstTrade.profit_loss) worstTrade = trade;
+            if (!bestTrade || pl > (numericValue(bestTrade.profit_loss) || 0)) bestTrade = trade;
+            if (!worstTrade || pl < (numericValue(worstTrade.profit_loss) || 0)) worstTrade = trade;
         });
         const winrate = wins + losses > 0 ? (100 * wins / (wins + losses)).toFixed(1) : "0";
         $("#ctStatPL").html(`{{ _('Total Net P/L') }}: ${colorPL(totalPL)}`);
         $("#ctStatWinrate").text(`{{ _('Win Rate') }}: ${winrate}%`);
         $("#ctStatWins").text(`{{ _('Wins') }}: ${wins}`);
         $("#ctStatLosses").text(`{{ _('Losses') }}: ${losses}`);
-        $("#ctBestTrade").html(`{{ _('Best Trade') }}: ${bestTrade ? `${bestTrade.symbol} (${colorPL(bestTrade.profit_loss, true)})` : '<span class="text-muted">N/A</span>'}`);
-        $("#ctWorstTrade").html(`{{ _('Worst Trade') }}: ${worstTrade ? `${worstTrade.symbol} (${colorPL(worstTrade.profit_loss, true)})` : '<span class="text-muted">N/A</span>'}`);
+        $("#ctBestTrade").html(`{{ _('Best Trade') }}: ${bestTrade ? `${bestTrade.symbol} (${colorPL(numericValue(bestTrade.profit_loss), true)})` : '<span class="text-muted">N/A</span>'}`);
+        $("#ctWorstTrade").html(`{{ _('Worst Trade') }}: ${worstTrade ? `${worstTrade.symbol} (${colorPL(numericValue(worstTrade.profit_loss), true)})` : '<span class="text-muted">N/A</span>'}`);
     }
 
     $(document).ready(function() {
@@ -223,7 +239,7 @@
         $('#dateFrom, #dateTo, #userFilter').on('change', fetchAndRenderTrades);
         
         $('[data-preset]').on('click', function() {
-            const preset = $(this).data('preset'), now = luxon.DateTime.now();
+            const preset = $(this).data('preset'), now = luxon.DateTime.now().setZone(romaniaZone);
             let start;
             if (preset === 'today') start = now.startOf('day');
             else if (preset === 'week') start = now.startOf('week');

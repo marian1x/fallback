@@ -1,0 +1,25 @@
+# Python
+.pycache/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Virtual environments
+.venv/
+
+# IDE / editor
+.vscode/
+.env
+
+# Logs
+*.log
+
+# OS artifacts
+Thumbs.db
+desktop.ini
+
+# Runtime data (browser profiles, cached market data, results)
+hyperview/browser_profile/
+data/
+results/

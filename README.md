@@ -184,6 +184,87 @@ Useful env vars:
 - `TRADE_UPDATES_EVENT_TTL_SEC=3600`: keep Alpaca trade-update events in memory for this many seconds.
 - `TRADE_UPDATES_MAX_EVENTS=500`: cap in-memory Alpaca trade-update events per account stream.
 
+### LLM Shadow Validation
+
+The local strategy can optionally ask a remote/local LLM what it would do with a Keltner entry signal while leaving live/paper execution unchanged. This is a shadow-only audit layer: Keltner orders continue through the normal risk-gated path, and LLM decisions are appended to `instance/llm_trade_shadow.jsonl`.
+
+Recommended first-phase `.env` settings for LM Studio on the MiniPC:
+
+```bash
+LLM_TRADE_VALIDATION_ENABLED=true
+LLM_TRADE_VALIDATION_MODE=shadow
+LLM_TRADE_VALIDATION_API_STYLE=lmstudio_native
+LLM_TRADE_VALIDATION_BASE_URL=http://192.168.50.110:1234
+LLM_TRADE_VALIDATION_MODEL=google/gemma-4-e4b
+LLM_TRADE_VALIDATION_API_TOKEN=
+LLM_TRADE_VALIDATION_TIMEOUT_SEC=25
+LLM_TRADE_VALIDATION_MAX_ATTEMPTS=2
+LLM_TRADE_VALIDATION_MAX_WORKERS=1
+LLM_TRADE_VALIDATION_NEWS_ENABLED=true
+LLM_TRADE_VALIDATION_NEWS_LIMIT=3
+LLM_TRADE_VALIDATION_NEWS_TIMEOUT_SEC=5
+NEWS_CONTEXT_SOURCES=alpaca,google
+NEWS_CONTEXT_LIMIT=3
+NEWS_CONTEXT_TIMEOUT_SEC=5
+NEWS_CONTEXT_GOOGLE_DAYS=7
+```
+
+LM Studio must expose its OpenAI-compatible server to the PI5. Start the server in LM Studio, enable serving on the local network or bind to an address reachable by the PI5, and allow Windows Firewall inbound TCP on port `1234`.
+
+Test from the PI5:
+
+```bash
+curl http://192.168.50.110:1234/api/v1/models
+curl http://192.168.50.110:1234/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"model":"google/gemma-4-e4b","system_prompt":"Return only valid JSON.","input":"Return {\"decision\":\"approve\",\"confidence\":0.5,\"reason\":\"test\",\"risk_flags\":[]}.","temperature":0.1,"max_output_tokens":120,"store":false}'
+```
+
+News context sources:
+
+- `alpaca`: authenticated Alpaca News API; uses the same Alpaca credentials already available to the local strategy request.
+- `yahoo`: optional Yahoo Finance search/news endpoint. Keep it disabled by default because the public endpoint can return HTTP 429 rate limits from the PI5 network.
+- `google`: Google News RSS query for recent symbol news.
+- `stocktwits`: optional investor-message sentiment source. It can be blocked by Cloudflare from some networks; keep it out of `NEWS_CONTEXT_SOURCES` unless it works reliably from the PI5 or you add a paid/authorized sentiment provider.
+
+Test news context from the PI5:
+
+```bash
+source venv/bin/activate
+python3 misc/news_context_smoke.py --symbol AAPL --sources alpaca,google --limit 3
+```
+
+Summarize the shadow period:
+
+```bash
+source venv/bin/activate
+python3 misc/llm_shadow_report.py --days 30
+```
+
+Export shadow events as chat-style examples for manual review or later LoRA/fine-tuning:
+
+```bash
+python3 misc/export_llm_shadow_dataset.py --min-confidence 0.7
+```
+
+For model specialization, start with prompt/RAG plus the shadow log. Fine-tuning should use curated labels or closed-trade outcomes, not only the model's own first-pass decisions.
+
+### Stock Intelligence Web UI
+
+Logged-in dashboard users can ask the local LM Studio model market questions at `Analytics -> Stock Intelligence`. The dashboard acts as the authenticated proxy: expose the dashboard through Nginx as usual, but keep LM Studio reachable only from the PI5/local network.
+
+Useful `.env` settings:
+
+```bash
+STOCK_INTELLIGENCE_ENABLED=true
+STOCK_INTELLIGENCE_BASE_URL=http://192.168.50.110:1234
+STOCK_INTELLIGENCE_MODEL=google/gemma-4-e4b
+STOCK_INTELLIGENCE_TIMEOUT_SEC=45
+STOCK_INTELLIGENCE_MAX_ATTEMPTS=2
+STOCK_INTELLIGENCE_MAX_TOKENS=900
+STOCK_INTELLIGENCE_TEMPERATURE=0.2
+```
+
 ### Remote Optimizer Worker
 
 For heavier optimization runs, Strategy Lab can queue the job on the PI5 and let another machine run the calculation. The PI5 downloads Alpaca OHLC bars and sends only historical bar data plus optimizer parameters to the worker. Alpaca credentials stay on the PI5.

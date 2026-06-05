@@ -1,0 +1,182 @@
+{% extends "stock_intelligence_shell.html" if standalone else "base.html" %}
+{% block title %}Stock Intelligence{% endblock %}
+
+{% block content %}
+<div class="row g-3 stock-intelligence-page">
+    <div class="col-12 col-xl-4">
+        <div class="card shadow-sm">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <span><i class="fa-solid fa-brain me-2"></i>Stock Intelligence</span>
+                <span class="badge text-bg-secondary">{{ default_model }}</span>
+            </div>
+            <div class="card-body">
+                {% if not stock_intelligence_enabled %}
+                <div class="alert alert-warning">Stock Intelligence is disabled by server configuration.</div>
+                {% endif %}
+                <form id="stockIntelForm">
+                    {% if g.user and g.user.is_superuser and all_users %}
+                    <div class="mb-3">
+                        <label class="form-label" for="targetUser">Alpaca context user</label>
+                        <select class="form-select" id="targetUser" name="target_user_id">
+                            {% for user in all_users %}
+                            <option value="{{ user.id }}">{{ user.username }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    {% endif %}
+                    <div class="mb-3">
+                        <label class="form-label" for="symbolsInput">Symbols</label>
+                        <input class="form-control" id="symbolsInput" name="symbols" value="AAPL" placeholder="AAPL, NVDA, TSM">
+                        <div class="form-text">Up to 6 symbols, separated by comma or space.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="questionInput">Question</label>
+                        <textarea class="form-control stock-intelligence-question" id="questionInput" name="question" rows="8" maxlength="3000">Ce se intampla cu acest simbol si care sunt riscurile principale pentru urmatoarele zile?</textarea>
+                    </div>
+                    <button class="btn btn-primary w-100" type="submit" {% if not stock_intelligence_enabled %}disabled{% endif %}>
+                        <i class="fa-solid fa-paper-plane me-2"></i>Ask
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-xl-8">
+        <div class="card shadow-sm">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <span><i class="fa-solid fa-message me-2"></i>Answer</span>
+                <span id="stockIntelStatus" class="small text-muted">Ready</span>
+            </div>
+            <div class="card-body">
+                <div id="stockIntelAnswer" class="stock-intelligence-answer text-muted">
+                    Ask a market question to generate an answer from the local model.
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm mt-3">
+            <div class="card-header">
+                <i class="fa-solid fa-newspaper me-2"></i>Context Used
+            </div>
+            <div class="card-body">
+                <div id="stockIntelContext" class="stock-intelligence-context text-muted">
+                    No context loaded yet.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    const form = document.getElementById('stockIntelForm');
+    const answer = document.getElementById('stockIntelAnswer');
+    const context = document.getElementById('stockIntelContext');
+    const status = document.getElementById('stockIntelStatus');
+
+    function escapeHtml(value) {
+        return String(value || '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#039;');
+    }
+
+    function safeExternalUrl(value) {
+        try {
+            const url = new URL(String(value || ''), window.location.origin);
+            return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+        } catch (error) {
+            return '';
+        }
+    }
+
+    function renderAnswer(data) {
+        answer.classList.remove('text-muted');
+        answer.innerHTML = escapeHtml(data.answer || '(empty response)').replace(/\n/g, '<br>');
+        status.textContent = `${data.model || 'model'} · ${data.latency_sec || '?'}s`;
+    }
+
+    function renderContext(data) {
+        const chunks = [];
+        const news = data.news_context || {};
+        Object.keys(news).forEach((symbol) => {
+            const ctx = news[symbol] || {};
+            const aggregate = ctx.aggregate || {};
+            const providerErrors = ctx.provider_errors || {};
+            chunks.push(`
+                <div class="stock-intelligence-symbol">
+                    <div class="d-flex flex-wrap justify-content-between gap-2">
+                        <strong>${escapeHtml(symbol)}</strong>
+                        <span class="badge text-bg-secondary">${escapeHtml(aggregate.sentiment_label || 'neutral')} ${escapeHtml(aggregate.sentiment_score ?? 0)}</span>
+                    </div>
+                    <div class="small text-muted mb-2">${escapeHtml(aggregate.news_count || 0)} news · ${escapeHtml(aggregate.investor_message_count || 0)} investor messages</div>
+                    ${(ctx.items || []).slice(0, 5).map((item) => {
+                        const url = safeExternalUrl(item.url);
+                        const headline = escapeHtml(item.headline || '(untitled)');
+                        return `
+                            <div class="stock-intelligence-news-item">
+                                <div class="fw-semibold">
+                                    ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${headline}</a>` : headline}
+                                </div>
+                                <div class="small text-muted">${escapeHtml(item.source || item.provider || '')} · ${escapeHtml(item.published_at || '')}</div>
+                                <div class="small">${escapeHtml(item.summary || '')}</div>
+                                ${url ? `<a class="stock-intelligence-source-link small" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square me-1"></i>Open source</a>` : ''}
+                            </div>
+                        `;
+                    }).join('')}
+                    ${Object.keys(providerErrors).length ? `<div class="small text-warning mt-2">Source warnings: ${escapeHtml(JSON.stringify(providerErrors))}</div>` : ''}
+                </div>
+            `);
+        });
+        context.classList.toggle('text-muted', chunks.length === 0);
+        context.innerHTML = chunks.length ? chunks.join('') : 'No context returned.';
+    }
+
+    form.addEventListener('submit', async function(event) {
+        event.preventDefault();
+        const submit = form.querySelector('button[type="submit"]');
+        submit.disabled = true;
+        status.textContent = 'Thinking...';
+        answer.classList.add('text-muted');
+        answer.textContent = 'Collecting news context and asking the local model...';
+        context.classList.add('text-muted');
+        context.textContent = 'Loading context...';
+
+        const payload = {
+            symbols: document.getElementById('symbolsInput').value,
+            question: document.getElementById('questionInput').value,
+        };
+        const targetUser = document.getElementById('targetUser');
+        if (targetUser) {
+            payload.target_user_id = targetUser.value;
+        }
+
+        try {
+            const response = await fetch('{{ url_for("api_stock_intelligence_ask") }}', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+            }
+            renderAnswer(data);
+            renderContext(data);
+        } catch (error) {
+            status.textContent = 'Error';
+            answer.classList.remove('text-muted');
+            answer.innerHTML = `<span class="text-danger">${escapeHtml(error.message)}</span>`;
+            context.classList.add('text-muted');
+            context.textContent = 'No context available.';
+        } finally {
+            submit.disabled = false;
+        }
+    });
+})();
+</script>
+{% endblock %}

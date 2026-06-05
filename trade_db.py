@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from models import db, Trade, User
 import os
 from dotenv import load_dotenv
@@ -13,6 +13,20 @@ load_dotenv(ENV_PATH)
 BASE_URL = os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
 
 logger = logging.getLogger(__name__)
+
+def parse_datetime_utc(value):
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str) and value and value.lower() != "none":
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            dt = None
+    else:
+        dt = None
+    if dt and dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 def is_crypto(symbol):
     return symbol and (symbol.upper().endswith('USD') or '/' in symbol)
@@ -72,7 +86,7 @@ def record_open_trade(data, payload, user_id):
             side=data.get('side', payload.get('action', '')),
             qty=qty,
             open_price=open_price,
-            open_time=datetime.now(timezone.utc),
+            open_time=parse_datetime_utc(data.get('open_time')) or datetime.now(timezone.utc),
             status='open',
             action=payload.get('action', '')
         )
@@ -119,26 +133,63 @@ def record_closed_trade(data, payload, user_id, position_obj):
     close_price_override = data.get('close_price')
     close_time_override = data.get('close_time')
 
-    def parse_close_time(value):
-        if isinstance(value, datetime):
-            dt = value
-        elif isinstance(value, str) and value:
+    def poll_order_fill(order_id):
+        if not order_id:
+            return None, None
+        terminal_statuses = {'filled', 'partially_filled', 'canceled', 'rejected', 'expired'}
+        exit_order = None
+        for i in range(30):
             try:
-                dt = datetime.fromisoformat(value)
-            except ValueError:
-                dt = None
-        else:
-            dt = None
-        if dt and dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
+                exit_order = api.get_order(order_id)
+                status = (exit_order.status or '').lower()
+                if status in terminal_statuses:
+                    logger.info(f"Close order {order_id} for {symbol} confirmed as '{exit_order.status}'.")
+                    break
+                logger.warning(f"Waiting for close order {order_id} to fill... Status: '{exit_order.status}'. Attempt {i+1}/30")
+                time.sleep(1)
+            except Exception as e:
+                logger.error(f"Error fetching close order {order_id}: {e}")
+                time.sleep(1)
+        if exit_order and exit_order.status in ['filled', 'partially_filled']:
+            fill_price = float(exit_order.filled_avg_price) if exit_order.filled_avg_price else None
+            return fill_price, parse_datetime_utc(exit_order.filled_at)
+        return None, None
+
+    def position_is_still_open():
+        try:
+            api.get_position(api_symbol)
+            return True
+        except AlpacaAPIError as e:
+            if "position not found" in str(e).lower():
+                return False
+            raise
 
     if close_price_override is not None:
         try:
             close_price = float(close_price_override)
         except (TypeError, ValueError):
             close_price = None
-        close_time = parse_close_time(close_time_override) or datetime.now(timezone.utc)
+        close_time = parse_datetime_utc(close_time_override) or datetime.now(timezone.utc)
+        close_order_id = data.get('close_order_id')
+        close_price_source = str(data.get('close_price_source', '') or '').lower()
+        close_price_authoritative = bool(data.get('close_price_authoritative', True))
+        if close_order_id and (not close_price_authoritative or close_price_source.endswith('fallback')):
+            polled_price, polled_time = poll_order_fill(close_order_id)
+            if polled_price is not None:
+                close_price = polled_price
+                close_time = polled_time or close_time
+                logger.info(f"[DATABASE] Replaced fallback close price for {symbol}, user_id={user_id}, using Alpaca fill for order {close_order_id}.")
+            else:
+                try:
+                    if position_is_still_open():
+                        logger.warning(
+                            f"[DATABASE] Close order {close_order_id} for {symbol} has no authoritative fill yet "
+                            "and the Alpaca position is still open. Skipping close record."
+                        )
+                        return None
+                except Exception as e:
+                    logger.error(f"[DATABASE] Error checking position status for {symbol}, user_id={user_id}: {e}")
+                    return None
         if close_price is None:
             close_price = get_latest_price(api, symbol)
         if close_price is None:
@@ -150,38 +201,26 @@ def record_closed_trade(data, payload, user_id, position_obj):
             logger.error(f"[DATABASE] Cannot record closed trade for {symbol}: No close_order_id was provided.")
             return None
 
-        exit_order = None
-        terminal_statuses = {'filled', 'partially_filled', 'canceled', 'rejected', 'expired'}
-        for i in range(30):
+        close_price, close_time = poll_order_fill(close_order_id)
+        if close_price is not None:
+            pass
+        else:
             try:
                 exit_order = api.get_order(close_order_id)
-                status = (exit_order.status or '').lower()
-                if status in terminal_statuses:
-                    logger.info(f"Close order {close_order_id} for {symbol} confirmed as '{exit_order.status}'.")
-                    break
-                logger.warning(f"Waiting for close order {close_order_id} to fill... Status: '{exit_order.status}'. Attempt {i+1}/30")
-                time.sleep(1)
-            except Exception as e:
-                logger.error(f"Error fetching close order {close_order_id}: {e}")
-                time.sleep(1)
-
-        exit_status = (exit_order.status if exit_order else 'unknown')
-        if exit_order and exit_order.status in ['filled', 'partially_filled']:
-            close_price = float(exit_order.filled_avg_price) if exit_order.filled_avg_price else None
-            close_time = exit_order.filled_at
-        else:
+                exit_status = (exit_order.status if exit_order else 'unknown')
+            except Exception:
+                exit_status = 'unknown'
             logger.warning(
                 f"[DATABASE] Close order {close_order_id} for {symbol} not filled (status='{exit_status}'). "
                 "Checking position status."
             )
             try:
-                api.get_position(api_symbol)
-                logger.warning(f"[DATABASE] Position still open for {symbol}, user_id={user_id}. Skipping close record.")
-                return None
-            except AlpacaAPIError as e:
-                if "position not found" not in str(e).lower():
-                    logger.error(f"[DATABASE] Error checking position status for {symbol}, user_id={user_id}: {e}")
+                if position_is_still_open():
+                    logger.warning(f"[DATABASE] Position still open for {symbol}, user_id={user_id}. Skipping close record.")
                     return None
+            except AlpacaAPIError as e:
+                logger.error(f"[DATABASE] Error checking position status for {symbol}, user_id={user_id}: {e}")
+                return None
             except Exception as e:
                 logger.error(f"[DATABASE] Error checking position status for {symbol}, user_id={user_id}: {e}")
                 return None
@@ -199,14 +238,11 @@ def record_closed_trade(data, payload, user_id, position_obj):
     trade_to_update = Trade.query.filter_by(symbol=symbol, status='open', user_id=user_id).order_by(Trade.open_time.desc()).first()
     
     if not trade_to_update:
-        logger.warning(f"[DATABASE] A close was recorded for {symbol}, user_id={user_id}, but no open trade was found. Creating a new closed record.")
-        trade_to_update = Trade(
-            user_id=user_id,
-            trade_id=f"closed_{position_obj.asset_id}_{int(time.time())}",
-            symbol=symbol,
-            open_time=close_time - timedelta(minutes=5)
+        logger.warning(
+            f"[DATABASE] Close order recorded for {symbol}, user_id={user_id}, but no matching open trade "
+            "exists in the DB. Skipping synthetic closed row."
         )
-        db.session.add(trade_to_update)
+        return None
 
     pl = (close_price - avg_entry_price) * total_qty if position_side == 'long' else (avg_entry_price - close_price) * total_qty
     pl_pct = (pl / (avg_entry_price * total_qty)) * 100 if avg_entry_price > 0 and total_qty > 0 else 0

@@ -39,6 +39,21 @@ def substitute_args(args: list[str], bars_csv: str, report_json: str, top_csv: s
     ]
 
 
+def set_optimizer_option(args: list[str], option: str, value: str | None) -> list[str]:
+    if not value:
+        return args
+    out = list(args)
+    if option in out:
+        idx = out.index(option)
+        if idx + 1 < len(out):
+            out[idx + 1] = value
+        else:
+            out.append(value)
+    else:
+        out.extend([option, value])
+    return out
+
+
 def poll_job(server: str, token: str, worker: str, timeout: int) -> dict | None:
     response = requests.get(
         build_url(server, "/api/admin/strategy/remote_jobs/next"),
@@ -61,7 +76,7 @@ def complete_job(server: str, token: str, job_id: str, payload: dict, timeout: i
     response.raise_for_status()
 
 
-def run_job(job: dict, python_bin: str, work_dir: Path) -> dict:
+def run_job(job: dict, python_bin: str, work_dir: Path, accelerator: str | None = None) -> dict:
     job_id = job["id"]
     job_dir = work_dir / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -76,6 +91,7 @@ def run_job(job: dict, python_bin: str, work_dir: Path) -> dict:
         str(report_path),
         str(top_path),
     )
+    optimizer_args = set_optimizer_option(optimizer_args, "--accelerator", accelerator)
     command = [python_bin] + optimizer_args
     result = subprocess.run(
         command,
@@ -110,7 +126,7 @@ def worker_loop(args, work_dir: Path, stop_event: threading.Event, worker_name: 
                 continue
 
             print(f"[{worker_name}] Running job {job['id']} for {job.get('symbol')} {job.get('timeframe')}", flush=True)
-            payload = run_job(job, args.python, work_dir)
+            payload = run_job(job, args.python, work_dir, args.accelerator)
             complete_job(args.server, args.token, job["id"], payload, args.request_timeout)
             processed += 1
             print(f"[{worker_name}] Completed job {job['id']} with returncode={payload['returncode']}", flush=True)
@@ -138,6 +154,7 @@ def main() -> int:
     parser.add_argument("--request-timeout", type=int, default=30)
     parser.add_argument("--workers", type=int, default=1, help="Parallel queue workers. Use with optimizer --jobs carefully.")
     parser.add_argument("--once", action="store_true", help="Process at most one job and exit.")
+    parser.add_argument("--accelerator", choices=["auto", "cpu", "gpu"], default=os.getenv("STRATEGY_ACCELERATOR", "auto"))
     args = parser.parse_args()
 
     if not args.token:

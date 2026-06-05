@@ -125,6 +125,7 @@ let recentTradesTable;
 const closedOrdersUrl = "{{ url_for('api_closed_orders') }}";
 const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const currencyFormatterShort = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+const romaniaZone = "Europe/Bucharest";
 
 function formatCurrency(value) {
     return currencyFormatter.format(value);
@@ -155,6 +156,16 @@ function formatDurationFromHours(hours) {
     if (days > 0) return `${days}d ${hoursPart}h`;
     if (hoursPart > 0) return `${hoursPart}h ${minutesPart}m`;
     return `${minutesPart}m`;
+}
+
+function parseTradeDateTime(isoString) {
+    return luxon.DateTime.fromISO(isoString, { zone: 'utc' }).setZone(romaniaZone);
+}
+
+function tradeLocalDateIso(isoString) {
+    if (!isoString) return '';
+    const dt = parseTradeDateTime(isoString);
+    return dt.isValid ? dt.toISODate() : '';
 }
 
 function median(values) {
@@ -228,7 +239,7 @@ function computeAnalytics() {
     let filteredTrades = allTrades.filter(t => {
         if (!t.close_time) return false;
         const symbolOk = symbolFilter === 'all' || t.symbol === symbolFilter;
-        const closeDate = t.close_time.slice(0, 10);
+        const closeDate = tradeLocalDateIso(t.close_time);
         const fromOk = !dateFrom || closeDate >= dateFrom;
         const toOk = !dateTo || closeDate <= dateTo;
         return symbolOk && fromOk && toOk;
@@ -263,14 +274,14 @@ function computeAnalytics() {
             plPctValues.push(plPctValue);
         }
         if (t.open_time && t.close_time) {
-            const openTime = luxon.DateTime.fromISO(t.open_time);
-            const closeTime = luxon.DateTime.fromISO(t.close_time);
+            const openTime = parseTradeDateTime(t.open_time);
+            const closeTime = parseTradeDateTime(t.close_time);
             if (openTime.isValid && closeTime.isValid) {
                 const hoursHeld = closeTime.diff(openTime, 'hours').hours;
                 if (hoursHeld > 0) holdDurations.push(hoursHeld);
             }
         }
-        const month = luxon.DateTime.fromISO(t.close_time).toFormat('yyyy-MM');
+        const month = parseTradeDateTime(t.close_time).toFormat('yyyy-MM');
         monthlyPL[month] = (monthlyPL[month] || 0) + pl;
     });
 
@@ -342,7 +353,7 @@ function computeAnalytics() {
         recentTradesTable.clear();
         sortedByClose.slice(0, 10).forEach(t => {
             const closeTimeDisplay = t.close_time
-                ? luxon.DateTime.fromISO(t.close_time).toFormat('dd/MM/yyyy, HH:mm')
+                ? parseTradeDateTime(t.close_time).toFormat('dd/MM/yyyy, HH:mm')
                 : '-';
             recentTradesTable.row.add([
                 t.symbol.replace('USD', '/USD'),

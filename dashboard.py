@@ -28,6 +28,7 @@ import requests
 from alpaca_api import LegacyCompatibleAlpacaClient
 from models import db, Trade, User
 import strategy_config as strategy_store
+from stock_intelligence import StockIntelligenceService, parse_symbols
 from trade_db import record_open_trade, record_closed_trade
 from utils import encrypt_data, decrypt_data
 
@@ -89,6 +90,7 @@ STRATEGY_WORKER_TOKEN = os.getenv('STRATEGY_WORKER_TOKEN', INTERNAL_API_KEY)
 LOGIN_RATE_LIMIT_WINDOW_SEC = int(os.getenv('LOGIN_RATE_LIMIT_WINDOW_SEC', '600'))
 LOGIN_RATE_LIMIT_MAX_ATTEMPTS = int(os.getenv('LOGIN_RATE_LIMIT_MAX_ATTEMPTS', '8'))
 PASSWORD_MIN_LENGTH = int(os.getenv('PASSWORD_MIN_LENGTH', '10'))
+STOCK_INTELLIGENCE_ENABLED = os.getenv('STOCK_INTELLIGENCE_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'y')
 os.makedirs(STRATEGY_JOBS_DIR, exist_ok=True)
 
 LOGIN_ATTEMPTS = {}
@@ -446,6 +448,7 @@ def load_cached_tradable_symbols():
 
 def parse_strategy_universe_from_form(form):
     symbols = form.getlist('universe_symbol[]')
+    strategies = form.getlist('universe_strategy[]')
     modes = form.getlist('universe_mode[]')
     enabled_values = form.getlist('universe_enabled[]')
     notes = form.getlist('universe_notes[]')
@@ -455,6 +458,10 @@ def parse_strategy_universe_from_form(form):
         symbol = strategy_store.normalize_symbol(raw_symbol)
         if not symbol:
             continue
+        strategy = strategies[idx] if idx < len(strategies) else 'keltner'
+        strategy = strategy.strip().lower() if isinstance(strategy, str) else 'keltner'
+        if strategy not in strategy_store.STRATEGY_CHOICES:
+            strategy = 'keltner'
         mode = modes[idx] if idx < len(modes) else 'both'
         enabled_value = enabled_values[idx] if idx < len(enabled_values) else '1'
         note = notes[idx] if idx < len(notes) else ''
@@ -468,6 +475,7 @@ def parse_strategy_universe_from_form(form):
                 backtest = None
         entries.append({
             'symbol': symbol,
+            'strategy': strategy,
             'mode': mode,
             'enabled': str(enabled_value).lower() in ('1', 'true', 'yes', 'on'),
             'notes': note,
@@ -616,6 +624,7 @@ def parse_strategy_symbols(raw_value):
 
 def find_active_strategy_job(config, compute_target):
     symbol = strategy_store.normalize_symbol(config.get('symbol', ''))
+    strategy = str(config.get('strategy', 'keltner') or 'keltner').strip().lower()
     timeframe = str(config.get('timeframe', '') or '')
     session_name = str(config.get('session', '') or '')
     feed = str(config.get('feed', '') or '')
@@ -625,6 +634,8 @@ def find_active_strategy_job(config, compute_target):
         if job.get('compute_target') != compute_target:
             continue
         if strategy_store.normalize_symbol(job.get('symbol', '')) != symbol:
+            continue
+        if str(job.get('strategy', 'keltner') or 'keltner').strip().lower() != strategy:
             continue
         if str(job.get('timeframe', '') or '') != timeframe:
             continue
@@ -649,10 +660,12 @@ def summarize_strategy_report(report, source='local', job_id=None):
         'trade_direction', 'inner_kc_length', 'inner_kc_mult', 'outer_kc_length',
         'outer_kc_mult', 'fixed_stop_loss_pct', 'fixed_take_profit_pct',
         'forced_stop_loss_pct', 'forced_take_profit_pct', 'trailing_offset_ticks',
-        'tick_size',
+        'tick_size', 'macd_fast_length', 'macd_slow_length', 'macd_signal_length',
+        'macd_sma_length', 'max_intraday_loss_pct',
     ]
     return {
         'symbol': strategy_store.normalize_symbol(report.get('symbol_used') or report.get('symbol_input') or ''),
+        'strategy': str(report.get('strategy') or 'keltner').strip().lower(),
         'timeframe': best.get('timeframe') or report.get('best_timeframe') or report.get('timeframe'),
         'session': report.get('session_filter'),
         'run_at_utc': report.get('generated_at_utc') or datetime.now(timezone.utc).isoformat(),
@@ -696,6 +709,7 @@ def upsert_universe_backtest(config, summary, mode='local'):
     found = False
     for item in universe:
         if item['symbol'] == symbol:
+            item['strategy'] = summary.get('strategy') or item.get('strategy') or 'keltner'
             item['backtest'] = summary
             item['mode'] = item.get('mode') or mode
             item['enabled'] = bool(item.get('enabled', True))
@@ -704,6 +718,7 @@ def upsert_universe_backtest(config, summary, mode='local'):
     if not found:
         universe.append({
             'symbol': symbol,
+            'strategy': summary.get('strategy') or 'keltner',
             'mode': mode,
             'enabled': True,
             'notes': 'Added from Strategy Tester',
@@ -815,8 +830,16 @@ def build_strategy_optimizer_args(config, report_path, top_path, bars_csv_path=N
     fixed_tp_range = str(config.get("fixed_tp_range", "0.8:4.0:0.1")) if optimize_enabled else exact_range(config.get("fixed_take_profit_pct", 3.1))
     forced_sl_range = str(config.get("forced_sl_range", "3.0:10.0:0.2")) if optimize_enabled else exact_range(config.get("forced_stop_loss_pct", 9.0))
     forced_tp_range = str(config.get("forced_tp_range", "3.0:10.0:0.2")) if optimize_enabled else exact_range(config.get("forced_take_profit_pct", 10.0))
+    macd_fast_range = str(config.get("macd_fast_range", "8:20:1")) if optimize_enabled else exact_range(int(config.get("macd_fast_length", 12)), "1")
+    macd_slow_range = str(config.get("macd_slow_range", "20:40:1")) if optimize_enabled else exact_range(int(config.get("macd_slow_length", 26)), "1")
+    macd_signal_range = str(config.get("macd_signal_range", "5:15:1")) if optimize_enabled else exact_range(int(config.get("macd_signal_length", 9)), "1")
+    macd_sma_range = str(config.get("macd_sma_range", "100:250:10")) if optimize_enabled else exact_range(int(config.get("macd_sma_length", 200)), "1")
+    max_intraday_loss_range = str(config.get("max_intraday_loss_range", "50:50:1")) if optimize_enabled else exact_range(config.get("max_intraday_loss_pct", 50), "1")
     args = [
         "misc/pine_optimizer.py",
+        "--strategy", str(config.get("strategy", "keltner") or "keltner"),
+        "--optimizer-engine", str(config.get("optimizer_engine", "tpe") or "tpe"),
+        "--accelerator", str(config.get("accelerator", "auto") or "auto"),
         "--symbol", str(config.get("symbol", "TSM")),
         "--timeframe", str(config.get("timeframe", "30Min")),
         "--timeframes", ",".join(build_strategy_timeframes(config)),
@@ -835,6 +858,11 @@ def build_strategy_optimizer_args(config, report_path, top_path, bars_csv_path=N
         "--forced-sl-range", forced_sl_range,
         "--forced-tp-range", forced_tp_range,
         "--trail-offset-range", str(config.get("trail_offset_range", "4:4:1")),
+        "--macd-fast-range", macd_fast_range,
+        "--macd-slow-range", macd_slow_range,
+        "--macd-signal-range", macd_signal_range,
+        "--macd-sma-range", macd_sma_range,
+        "--max-intraday-loss-range", max_intraday_loss_range,
         "--initial-capital", str(config.get("initial_capital", 8000)),
         "--order-size", str(config.get("order_size", 2000)),
         "--commission-pct", str(config.get("commission_pct", 0.04)),
@@ -904,10 +932,13 @@ def create_strategy_job(config, compute_target):
         'created_at_utc': datetime.now(timezone.utc).isoformat(),
         'updated_at_utc': datetime.now(timezone.utc).isoformat(),
         'symbol': strategy_store.normalize_symbol(config.get('symbol', '')),
+        'strategy': str(config.get('strategy', 'keltner') or 'keltner').strip().lower(),
         'timeframe': config.get('timeframe'),
         'session': config.get('session'),
         'feed': config.get('feed'),
         'optimize_enabled': bool(config.get('optimize_enabled')),
+        'optimizer_engine': str(config.get('optimizer_engine', 'tpe') or 'tpe').strip().lower(),
+        'accelerator': str(config.get('accelerator', 'auto') or 'auto').strip().lower(),
         'trials': int(config.get('trials', 200)),
         'optimizer_jobs': int(config.get('optimizer_jobs', 0)),
         'top_k': int(config.get('top_k', 20)),
@@ -1034,6 +1065,20 @@ def stats():
     all_users = regular_users_query().order_by(User.username).all() if g.user.is_superuser else None
     return render_template('stats.html', all_users=all_users, current_user=g.user)
 
+@app.route('/stock_intelligence')
+@login_required
+def stock_intelligence():
+    all_users = regular_users_query().order_by(User.username).all() if g.user.is_superuser else None
+    standalone = request.args.get('standalone') == '1'
+    return render_template(
+        'stock_intelligence.html',
+        all_users=all_users,
+        current_user=g.user,
+        standalone=standalone,
+        stock_intelligence_enabled=STOCK_INTELLIGENCE_ENABLED,
+        default_model=os.getenv('STOCK_INTELLIGENCE_MODEL', os.getenv('LLM_TRADE_VALIDATION_MODEL', 'local-model')),
+    )
+
 @app.route('/config', methods=['GET', 'POST'])
 @login_required
 def user_config():
@@ -1134,6 +1179,12 @@ def admin_strategy():
         config['timeframe_sweep_enabled'] = 'timeframe_sweep_enabled' in request.form
         compute_target = request.form.get('compute_target', config.get('compute_target', 'local')).strip().lower()
         config['compute_target'] = compute_target if compute_target in ('local', 'remote') else 'local'
+        strategy_name = request.form.get('strategy', config.get('strategy', 'keltner')).strip().lower()
+        config['strategy'] = strategy_name if strategy_name in strategy_store.STRATEGY_CHOICES else 'keltner'
+        optimizer_engine = request.form.get('optimizer_engine', config.get('optimizer_engine', 'tpe')).strip().lower()
+        config['optimizer_engine'] = optimizer_engine if optimizer_engine in strategy_store.OPTIMIZER_ENGINES else 'tpe'
+        accelerator = request.form.get('accelerator', config.get('accelerator', 'auto')).strip().lower()
+        config['accelerator'] = accelerator if accelerator in strategy_store.ACCELERATOR_CHOICES else 'auto'
         config['alpaca_user'] = request.form.get('alpaca_user', '').strip()
         config['symbol'] = request.form.get('symbol', config.get('symbol', 'TSM')).strip().upper()
         config['timeframe'] = request.form.get('timeframe', config.get('timeframe', '30Min')).strip()
@@ -1153,6 +1204,11 @@ def admin_strategy():
         config['fixed_take_profit_pct'] = as_float(request.form.get('fixed_take_profit_pct', config.get('fixed_take_profit_pct', 3.1)), 3.1)
         config['forced_stop_loss_pct'] = as_float(request.form.get('forced_stop_loss_pct', config.get('forced_stop_loss_pct', 9.0)), 9.0)
         config['forced_take_profit_pct'] = as_float(request.form.get('forced_take_profit_pct', config.get('forced_take_profit_pct', 10.0)), 10.0)
+        config['macd_fast_length'] = max(1, as_int(request.form.get('macd_fast_length', config.get('macd_fast_length', 12)), 12))
+        config['macd_slow_length'] = max(1, as_int(request.form.get('macd_slow_length', config.get('macd_slow_length', 26)), 26))
+        config['macd_signal_length'] = max(1, as_int(request.form.get('macd_signal_length', config.get('macd_signal_length', 9)), 9))
+        config['macd_sma_length'] = max(1, as_int(request.form.get('macd_sma_length', config.get('macd_sma_length', 200)), 200))
+        config['max_intraday_loss_pct'] = as_float(request.form.get('max_intraday_loss_pct', config.get('max_intraday_loss_pct', 50)), 50)
         config['initial_capital'] = as_float(request.form.get('initial_capital', config.get('initial_capital', 8000)), 8000)
         config['base_currency'] = request.form.get('base_currency', config.get('base_currency', 'USD')).strip().upper() or 'USD'
         config['order_size'] = as_float(request.form.get('order_size', config.get('order_size', 2000)), 2000)
@@ -1183,6 +1239,11 @@ def admin_strategy():
         config['forced_sl_range'] = request.form.get('forced_sl_range', config.get('forced_sl_range', '3.0:10.0:0.2')).strip()
         config['forced_tp_range'] = request.form.get('forced_tp_range', config.get('forced_tp_range', '3.0:10.0:0.2')).strip()
         config['trail_offset_range'] = request.form.get('trail_offset_range', config.get('trail_offset_range', '4:4:1')).strip()
+        config['macd_fast_range'] = request.form.get('macd_fast_range', config.get('macd_fast_range', '8:20:1')).strip()
+        config['macd_slow_range'] = request.form.get('macd_slow_range', config.get('macd_slow_range', '20:40:1')).strip()
+        config['macd_signal_range'] = request.form.get('macd_signal_range', config.get('macd_signal_range', '5:15:1')).strip()
+        config['macd_sma_range'] = request.form.get('macd_sma_range', config.get('macd_sma_range', '100:250:10')).strip()
+        config['max_intraday_loss_range'] = request.form.get('max_intraday_loss_range', config.get('max_intraday_loss_range', '50:50:1')).strip()
         universe = parse_strategy_universe_from_form(request.form)
         tradable_symbols = set(load_cached_tradable_symbols())
         invalid_symbols = []
@@ -1198,9 +1259,10 @@ def admin_strategy():
 
         save_strategy_config(config)
         app.logger.info(
-            "[STRATEGY] Admin '%s' saved strategy config (enabled=%s, symbol=%s, timeframe=%s).",
+            "[STRATEGY] Admin '%s' saved strategy config (enabled=%s, strategy=%s, symbol=%s, timeframe=%s).",
             g.user.username,
             config['enabled'],
+            config['strategy'],
             config['symbol'],
             config['timeframe'],
         )
@@ -1383,7 +1445,10 @@ def api_strategy_remote_next():
         'job': {
             'id': job['id'],
             'symbol': job.get('symbol'),
+            'strategy': job.get('strategy', 'keltner'),
             'timeframe': job.get('timeframe'),
+            'optimizer_engine': job.get('optimizer_engine', 'tpe'),
+            'accelerator': job.get('accelerator', 'auto'),
             'optimizer_args': job.get('optimizer_args', []),
             'bars_csv': bars_csv,
         }
@@ -2023,6 +2088,14 @@ def api_admin_dashboard_summary():
         summary_data.append(user_data)
     return jsonify(summary_data)
 
+def should_include_synthetic_closed_trades():
+    return str(request.args.get('include_synthetic', '') or '').strip().lower() in ('1', 'true', 'yes', 'y')
+
+def visible_closed_trades_query(query):
+    if should_include_synthetic_closed_trades():
+        return query
+    return query.filter(~Trade.trade_id.like('closed_mirror_%'))
+
 @app.route('/api/admin/performance_leaderboard')
 @superuser_required
 def api_admin_performance_leaderboard():
@@ -2030,8 +2103,8 @@ def api_admin_performance_leaderboard():
         Trade.query
         .join(User, Trade.user_id == User.id)
         .filter(Trade.status == 'closed', User.is_superuser == False)
-        .all()
     )
+    closed_trades = visible_closed_trades_query(closed_trades).all()
     user_stats = {}
     for trade in closed_trades:
         if trade.user_id not in user_stats:
@@ -2202,8 +2275,57 @@ def api_closed_orders():
             query = query.join(User, Trade.user_id == User.id).filter(User.is_superuser == False)
     else:
         query = query.filter_by(user_id=g.user.id)
+    query = visible_closed_trades_query(query)
     closed_trades = query.order_by(Trade.close_time.desc()).all()
     return jsonify([{'symbol': t.symbol, 'side': t.side, 'open_price': t.open_price, 'close_price': t.close_price, 'profit_loss': t.profit_loss, 'profit_loss_pct': t.profit_loss_pct, 'open_time': t.open_time.isoformat() if t.open_time else None, 'close_time': t.close_time.isoformat() if t.close_time else None, 'action': t.action or ""} for t in closed_trades])
+
+@app.route('/api/stock_intelligence/ask', methods=['POST'])
+@login_required
+def api_stock_intelligence_ask():
+    if not STOCK_INTELLIGENCE_ENABLED:
+        return jsonify({'error': 'stock_intelligence_disabled'}), 403
+    payload = request.get_json(silent=True) or {}
+    question = str(payload.get('question', '') or '').strip()
+    if not question:
+        return jsonify({'error': 'question_required'}), 400
+    if len(question) > 3000:
+        return jsonify({'error': 'question_too_long'}), 400
+    symbols = parse_symbols(str(payload.get('symbols', '') or ''), limit=6)
+    if not symbols:
+        return jsonify({'error': 'at_least_one_symbol_required'}), 400
+
+    context_user = g.user
+    if g.user.is_superuser:
+        context_user = get_admin_dashboard_target_user(payload, required=False) or g.user
+    keypair = get_user_keypair(context_user) if context_user else None
+    alpaca_key, alpaca_secret = keypair if keypair else (None, None)
+
+    try:
+        service = StockIntelligenceService.from_env()
+        result = service.ask(
+            question=question,
+            symbols=symbols,
+            alpaca_api_key=alpaca_key,
+            alpaca_api_secret=alpaca_secret,
+        )
+        result['context_user'] = {
+            'id': getattr(context_user, 'id', None),
+            'username': getattr(context_user, 'username', None),
+            'has_alpaca_credentials': bool(keypair),
+        }
+        app.logger.info(
+            "[STOCK_INTELLIGENCE] user=%s symbols=%s latency=%s",
+            g.user.username,
+            ",".join(symbols),
+            result.get('latency_sec'),
+        )
+        return jsonify(result)
+    except requests.Timeout:
+        app.logger.warning("[STOCK_INTELLIGENCE] timeout user=%s symbols=%s", g.user.username, ",".join(symbols))
+        return jsonify({'error': 'model_timeout'}), 504
+    except Exception as e:
+        app.logger.error("[STOCK_INTELLIGENCE] failed user=%s error=%s", g.user.username, e, exc_info=True)
+        return jsonify({'error': 'stock_intelligence_failed', 'detail': str(e)}), 500
 
 @app.route('/api/account')
 @login_required
