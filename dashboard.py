@@ -5,6 +5,7 @@ import subprocess
 import csv
 import io
 import uuid
+import hashlib
 from logging.handlers import RotatingFileHandler
 import threading
 import time
@@ -12,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import hmac
 import secrets
+import re
 from urllib.parse import urlsplit
 from functools import wraps
 from zoneinfo import ZoneInfo
@@ -86,12 +88,15 @@ VERSION_COUNTER_FILE = os.path.join(app.instance_path, 'version_counter.txt')
 STRATEGY_REPORT_FILE = os.path.join(app.instance_path, 'strategy_last_report.json')
 STRATEGY_TOP_FILE = os.path.join(app.instance_path, 'strategy_last_top.csv')
 STRATEGY_JOBS_DIR = os.path.join(app.instance_path, 'strategy_jobs')
+STRATEGY_CONFIG_VERSIONS_DIR = os.path.join(app.instance_path, 'strategy_config_versions')
+STRATEGY_EVENTS_FILE = os.path.join(app.instance_path, 'strategy_events.jsonl')
 STRATEGY_WORKER_TOKEN = os.getenv('STRATEGY_WORKER_TOKEN', INTERNAL_API_KEY)
 LOGIN_RATE_LIMIT_WINDOW_SEC = int(os.getenv('LOGIN_RATE_LIMIT_WINDOW_SEC', '600'))
 LOGIN_RATE_LIMIT_MAX_ATTEMPTS = int(os.getenv('LOGIN_RATE_LIMIT_MAX_ATTEMPTS', '8'))
 PASSWORD_MIN_LENGTH = int(os.getenv('PASSWORD_MIN_LENGTH', '10'))
 STOCK_INTELLIGENCE_ENABLED = os.getenv('STOCK_INTELLIGENCE_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'y')
 os.makedirs(STRATEGY_JOBS_DIR, exist_ok=True)
+os.makedirs(STRATEGY_CONFIG_VERSIONS_DIR, exist_ok=True)
 
 LOGIN_ATTEMPTS = {}
 LOGIN_ATTEMPTS_LOCK = threading.Lock()
@@ -433,18 +438,135 @@ def save_strategy_config(cfg):
     except Exception as e:
         app.logger.error(f"[STRATEGY] Failed to save strategy config: {e}")
 
+def emit_strategy_event(event_type, **fields):
+    payload = {
+        'ts_utc': datetime.now(timezone.utc).isoformat(),
+        'event': event_type,
+    }
+    payload.update(fields)
+    try:
+        with open(STRATEGY_EVENTS_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, sort_keys=True, default=str) + "\n")
+    except Exception as e:
+        app.logger.warning("[STRATEGY] Failed to write event log: %s", e)
+
+def save_strategy_config_version(config, action='save', actor=None, note=None):
+    try:
+        os.makedirs(STRATEGY_CONFIG_VERSIONS_DIR, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        safe_action = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(action or "save"))[:40]
+        path = os.path.join(STRATEGY_CONFIG_VERSIONS_DIR, f"{ts}_{safe_action}.json")
+        payload = {
+            'versioned_at_utc': datetime.now(timezone.utc).isoformat(),
+            'action': action,
+            'actor': actor,
+            'note': note,
+            'config': config,
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, default=str)
+        return path
+    except Exception as e:
+        app.logger.warning("[STRATEGY] Failed to version strategy config: %s", e)
+        return None
+
+def load_strategy_config_versions(limit=10):
+    versions = []
+    try:
+        for name in sorted(os.listdir(STRATEGY_CONFIG_VERSIONS_DIR), reverse=True):
+            if not name.endswith(".json"):
+                continue
+            path = os.path.join(STRATEGY_CONFIG_VERSIONS_DIR, name)
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                data['file'] = name
+                versions.append(data)
+            if len(versions) >= limit:
+                break
+    except Exception as e:
+        app.logger.warning("[STRATEGY] Failed to load config versions: %s", e)
+    return versions
+
+def load_strategy_events(limit=30):
+    files = [STRATEGY_EVENTS_FILE, os.path.join(app.instance_path, "local_strategy_events.jsonl")]
+    collected = []
+    try:
+        for path in files:
+            if not os.path.exists(path):
+                continue
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()[-limit:]
+            for line in lines:
+                try:
+                    item = json.loads(line)
+                    if isinstance(item, dict):
+                        collected.append(item)
+                except Exception:
+                    continue
+        collected.sort(key=lambda item: item.get('ts_utc', ''), reverse=True)
+        return collected[:limit]
+    except Exception:
+        return []
+
 def load_cached_tradable_symbols():
+    return [item['symbol'] for item in load_cached_tradable_assets()]
+
+
+def load_cached_tradable_assets():
     symbols_file = os.path.join(app.instance_path, 'tradable_symbols.json')
     if not os.path.exists(symbols_file):
         update_symbols_task()
     try:
         with open(symbols_file, 'r', encoding='utf-8') as f:
-            symbols = json.load(f)
-        if isinstance(symbols, list):
-            return sorted({str(s).upper() for s in symbols if s})
+            raw_symbols = json.load(f)
+        assets = []
+        seen = set()
+        if isinstance(raw_symbols, list):
+            for item in raw_symbols:
+                if isinstance(item, dict):
+                    symbol = strategy_store.normalize_symbol(item.get('symbol', ''))
+                    if not symbol or symbol in seen:
+                        continue
+                    assets.append({
+                        'symbol': symbol,
+                        'name': str(item.get('name', '') or '').strip(),
+                        'exchange': str(item.get('exchange', '') or '').strip(),
+                    })
+                    seen.add(symbol)
+                else:
+                    symbol = strategy_store.normalize_symbol(item)
+                    if not symbol or symbol in seen:
+                        continue
+                    assets.append({'symbol': symbol, 'name': '', 'exchange': ''})
+                    seen.add(symbol)
+        assets.sort(key=lambda item: item['symbol'])
+        return assets
     except Exception as e:
         app.logger.warning(f"[STRATEGY] Could not read tradable symbols cache: {e}")
     return []
+
+
+def strategy_label(value):
+    normalized = str(value or '').strip().lower()
+    if normalized == 'macd_sma':
+        return 'MACD + SMA'
+    if normalized == 'keltner':
+        return 'Keltner Channel'
+    return 'Unknown'
+
+
+def strategy_run_fingerprint(config):
+    if not isinstance(config, dict):
+        return ''
+    relevant = dict(config)
+    for key in (
+        'last_backtest', 'universe', 'enabled', 'daily_max_trades_per_symbol',
+        'daily_max_losses_per_symbol', 'daily_max_loss_usd_per_symbol',
+    ):
+        relevant.pop(key, None)
+    payload = json.dumps(relevant, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+    return hashlib.sha1(payload.encode('utf-8')).hexdigest()
 
 def parse_strategy_universe_from_form(form):
     symbols = form.getlist('universe_symbol[]')
@@ -608,6 +730,26 @@ def enrich_strategy_jobs(jobs, config=None):
             item['top_results'] = report.get('top_results') or []
         if not isinstance(item.get('summary'), dict):
             item['summary'] = strategy_summary_from_job(item, report)
+        current = item.get('signal_universe_entry') or {}
+        current_bt = current.get('backtest') if isinstance(current, dict) else None
+        if isinstance(item.get('summary'), dict) and isinstance(current_bt, dict):
+            candidate_metrics = item['summary'].get('metrics') or {}
+            current_metrics = current_bt.get('metrics') or {}
+            comparison = {}
+            for key in ('net_profit', 'return_pct', 'win_rate_pct', 'profit_factor', 'max_drawdown_pct', 'total_trades'):
+                try:
+                    candidate = candidate_metrics.get(key)
+                    current_value = current_metrics.get(key)
+                    if candidate is None or current_value is None:
+                        continue
+                    comparison[key] = {
+                        'current': current_value,
+                        'candidate': candidate,
+                        'delta': round(float(candidate) - float(current_value), 4),
+                    }
+                except Exception:
+                    continue
+            item['comparison'] = comparison
         enriched.append(item)
     return enriched
 
@@ -623,6 +765,7 @@ def parse_strategy_symbols(raw_value):
     return symbols
 
 def find_active_strategy_job(config, compute_target):
+    fingerprint = strategy_run_fingerprint(config)
     symbol = strategy_store.normalize_symbol(config.get('symbol', ''))
     strategy = str(config.get('strategy', 'keltner') or 'keltner').strip().lower()
     timeframe = str(config.get('timeframe', '') or '')
@@ -633,6 +776,9 @@ def find_active_strategy_job(config, compute_target):
             continue
         if job.get('compute_target') != compute_target:
             continue
+        job_fingerprint = str(job.get('config_fingerprint') or '').strip()
+        if fingerprint and job_fingerprint and job_fingerprint == fingerprint:
+            return job
         if strategy_store.normalize_symbol(job.get('symbol', '')) != symbol:
             continue
         if str(job.get('strategy', 'keltner') or 'keltner').strip().lower() != strategy:
@@ -675,7 +821,27 @@ def summarize_strategy_report(report, source='local', job_id=None):
         'date_range_utc': report.get('date_range_utc'),
         'metrics': {key: best.get(key) for key in metric_keys if key in best},
         'params': {key: best.get(key) for key in param_keys if key in best},
+        'validation': report.get('validation') if isinstance(report.get('validation'), dict) else None,
     }
+
+
+def delete_strategy_job(job_id):
+    job = load_strategy_job(job_id)
+    if not job:
+        return False
+    targets = [
+        strategy_job_path(job_id),
+        strategy_job_bars_path(job_id),
+        strategy_job_report_path(job_id),
+        strategy_job_top_path(job_id),
+    ]
+    for path in targets:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception as e:
+            app.logger.warning("[STRATEGY] Failed to remove artifact %s: %s", path, e)
+    return True
 
 def strategy_summary_from_job(job, report=None):
     if not isinstance(job, dict):
@@ -849,6 +1015,13 @@ def build_strategy_optimizer_args(config, report_path, top_path, bars_csv_path=N
         "--jobs", str(int(config.get("optimizer_jobs", 0))),
         "--top-k", str(int(config.get("top_k", 20))),
         "--trade-direction", str(config.get("trade_direction", "Both")),
+        "--validation-enabled" if bool(config.get("validation_enabled", True)) else "--no-validation-enabled",
+        "--validation-train-ratio", str(config.get("validation_train_ratio", 0.70)),
+        "--validation-min-trades", str(int(config.get("validation_min_trades", 30))),
+        "--validation-min-win-rate", str(config.get("validation_min_win_rate_pct", 55)),
+        "--validation-min-profit-factor", str(config.get("validation_min_profit_factor", 1.3)),
+        "--validation-max-drawdown-pct", str(config.get("validation_max_drawdown_pct", 8)),
+        "--validation-min-net-profit", str(config.get("validation_min_net_profit", 0)),
         "--inner-len-range", inner_len_range,
         "--inner-mult-range", inner_mult_range,
         "--outer-len-range", outer_len_range,
@@ -925,6 +1098,7 @@ def fetch_strategy_bars_csv(config):
 
 def create_strategy_job(config, compute_target):
     job_id = uuid.uuid4().hex
+    config_fingerprint = strategy_run_fingerprint(config)
     job = {
         'id': job_id,
         'status': 'queued' if compute_target == 'remote' else 'running',
@@ -942,6 +1116,7 @@ def create_strategy_job(config, compute_target):
         'trials': int(config.get('trials', 200)),
         'optimizer_jobs': int(config.get('optimizer_jobs', 0)),
         'top_k': int(config.get('top_k', 20)),
+        'config_fingerprint': config_fingerprint,
         'config': config.copy(),
         'summary': None,
         'stdout': '',
@@ -1177,6 +1352,7 @@ def admin_strategy():
         config['enabled'] = 'enabled' in request.form
         config['optimize_enabled'] = 'optimize_enabled' in request.form
         config['timeframe_sweep_enabled'] = 'timeframe_sweep_enabled' in request.form
+        config['validation_enabled'] = 'validation_enabled' in request.form
         compute_target = request.form.get('compute_target', config.get('compute_target', 'local')).strip().lower()
         config['compute_target'] = compute_target if compute_target in ('local', 'remote') else 'local'
         strategy_name = request.form.get('strategy', config.get('strategy', 'keltner')).strip().lower()
@@ -1223,6 +1399,15 @@ def admin_strategy():
         config['trials'] = max(1, as_int(request.form.get('trials', config.get('trials', 200)), 200))
         config['optimizer_jobs'] = max(0, as_int(request.form.get('optimizer_jobs', config.get('optimizer_jobs', 0)), 0))
         config['top_k'] = max(1, as_int(request.form.get('top_k', config.get('top_k', 20)), 20))
+        config['validation_train_ratio'] = min(0.95, max(0.2, as_float(request.form.get('validation_train_ratio', config.get('validation_train_ratio', 0.70)), 0.70)))
+        config['validation_min_trades'] = max(1, as_int(request.form.get('validation_min_trades', config.get('validation_min_trades', 30)), 30))
+        config['validation_min_win_rate_pct'] = as_float(request.form.get('validation_min_win_rate_pct', config.get('validation_min_win_rate_pct', 55)), 55)
+        config['validation_min_profit_factor'] = as_float(request.form.get('validation_min_profit_factor', config.get('validation_min_profit_factor', 1.3)), 1.3)
+        config['validation_max_drawdown_pct'] = as_float(request.form.get('validation_max_drawdown_pct', config.get('validation_max_drawdown_pct', 8)), 8)
+        config['validation_min_net_profit'] = as_float(request.form.get('validation_min_net_profit', config.get('validation_min_net_profit', 0)), 0)
+        config['daily_max_trades_per_symbol'] = max(1, as_int(request.form.get('daily_max_trades_per_symbol', config.get('daily_max_trades_per_symbol', 3)), 3))
+        config['daily_max_losses_per_symbol'] = max(1, as_int(request.form.get('daily_max_losses_per_symbol', config.get('daily_max_losses_per_symbol', 2)), 2))
+        config['daily_max_loss_usd_per_symbol'] = max(0, as_float(request.form.get('daily_max_loss_usd_per_symbol', config.get('daily_max_loss_usd_per_symbol', 100)), 100))
         config['timeframe_minutes'] = request.form.get('timeframe_minutes', config.get('timeframe_minutes', '5,10,15,30')).strip()
         config['timeframe_hours_start'] = max(1, as_int(request.form.get('timeframe_hours_start', config.get('timeframe_hours_start', 1)), 1))
         config['timeframe_hours_end'] = max(1, as_int(request.form.get('timeframe_hours_end', config.get('timeframe_hours_end', 24)), 24))
@@ -1258,6 +1443,15 @@ def admin_strategy():
         config['universe'] = universe
 
         save_strategy_config(config)
+        version_path = save_strategy_config_version(config, action=action, actor=getattr(g.user, 'username', None))
+        emit_strategy_event(
+            'config_saved',
+            action=action,
+            actor=getattr(g.user, 'username', None),
+            version_file=os.path.basename(version_path) if version_path else None,
+            strategy=config.get('strategy'),
+            symbol=config.get('symbol'),
+        )
         app.logger.info(
             "[STRATEGY] Admin '%s' saved strategy config (enabled=%s, strategy=%s, symbol=%s, timeframe=%s).",
             g.user.username,
@@ -1269,12 +1463,21 @@ def admin_strategy():
         if invalid_symbols:
             flash(f"Skipped symbols not found in Alpaca tradable list: {', '.join(invalid_symbols[:12])}", "warning")
 
-        if action == 'add_result':
+        if action == 'delete_job':
+            job_id = request.form.get('job_id', '').strip()
+            if job_id and delete_strategy_job(job_id):
+                emit_strategy_event('optimizer_job_deleted', actor=getattr(g.user, 'username', None), job_id=job_id)
+                flash(f"Deleted optimizer run {job_id}.", "success")
+            else:
+                flash("Optimizer run not found.", "warning")
+        elif action == 'add_result':
             report = load_strategy_report()
             previous_source = (config.get('last_backtest') or {}).get('source', 'local') if isinstance(config.get('last_backtest'), dict) else 'local'
             summary = apply_strategy_report_to_config(config, report, source=previous_source)
             if summary and upsert_universe_backtest(config, summary, mode='local'):
                 save_strategy_config(config)
+                version_path = save_strategy_config_version(config, action='promote_latest_result', actor=getattr(g.user, 'username', None), note=summary.get('symbol'))
+                emit_strategy_event('backtest_promoted', actor=getattr(g.user, 'username', None), symbol=summary.get('symbol'), strategy=summary.get('strategy'), job_id=summary.get('job_id'), version_file=os.path.basename(version_path) if version_path else None)
                 flash(f"Added {summary['symbol']} to Signal Universe with latest backtest result.", "success")
             else:
                 flash("No valid backtest result available to add.", "warning")
@@ -1286,6 +1489,8 @@ def admin_strategy():
             if summary and upsert_universe_backtest(config, summary, mode='local'):
                 config['last_backtest'] = summary
                 save_strategy_config(config)
+                version_path = save_strategy_config_version(config, action='promote_job_result', actor=getattr(g.user, 'username', None), note=job_id)
+                emit_strategy_event('backtest_promoted', actor=getattr(g.user, 'username', None), symbol=summary.get('symbol'), strategy=summary.get('strategy'), job_id=job_id, version_file=os.path.basename(version_path) if version_path else None)
                 flash(f"Added {summary['symbol']} to Signal Universe from selected optimizer run.", "success")
             else:
                 flash("Selected optimizer run has no valid completed summary.", "warning")
@@ -1308,9 +1513,10 @@ def admin_strategy():
                 try:
                     active_job = find_active_strategy_job(run_config, compute_target)
                     if active_job:
-                        jobs_skipped.append(sym)
+                        jobs_skipped.append(f"{sym} ({active_job.get('id')})")
                         continue
                     job = create_strategy_job(run_config, compute_target)
+                    emit_strategy_event('optimizer_job_created', actor=getattr(g.user, 'username', None), symbol=sym, strategy=run_config.get('strategy'), compute_target=compute_target, job_id=job.get('id'))
                     if compute_target == 'remote':
                         jobs_queued.append(sym)
                     else:
@@ -1334,9 +1540,18 @@ def admin_strategy():
                                     dst.write(src.read())
                             job['summary'] = summarize_strategy_report(report, source='local', job_id=job['id'])
                             config['last_backtest'] = job['summary']
+                            emit_strategy_event(
+                                'optimizer_job_completed',
+                                job_id=job.get('id'),
+                                symbol=sym,
+                                strategy=run_config.get('strategy'),
+                                compute_target='local',
+                                validation_passed=(((job.get('summary') or {}).get('validation') or {}).get('status') or {}).get('passed') if isinstance((job.get('summary') or {}).get('validation'), dict) else None,
+                            )
                             jobs_completed.append(sym)
                         else:
                             job['error'] = err or out or "Unknown error"
+                            emit_strategy_event('optimizer_job_failed', job_id=job.get('id'), symbol=sym, strategy=run_config.get('strategy'), compute_target='local', error=job.get('error'))
                             jobs_failed.append(sym)
 
                         save_strategy_job(job)
@@ -1350,7 +1565,7 @@ def admin_strategy():
                 save_strategy_config(config)
                 flash(f"Strategy run completed for {', '.join(jobs_completed)}.", "success")
             if jobs_skipped:
-                flash(f"Skipped duplicate active jobs for {', '.join(jobs_skipped)}.", "warning")
+                flash(f"Skipped duplicate active jobs already queued/running: {', '.join(jobs_skipped)}.", "warning")
             if jobs_failed:
                 flash(f"Strategy run failed for {', '.join(jobs_failed)}.", "danger")
         else:
@@ -1367,7 +1582,9 @@ def admin_strategy():
         top_rows=top_rows,
         users=users,
         all_jobs=enrich_strategy_jobs(list_strategy_jobs(limit=50), config),
-        tradable_symbols=[],
+        config_versions=load_strategy_config_versions(limit=8),
+        strategy_events=load_strategy_events(limit=25),
+        tradable_symbols=load_cached_tradable_assets(),
     )
 
 @app.route('/api/admin/strategy/live_snapshot')
@@ -1495,13 +1712,24 @@ def api_strategy_remote_complete(job_id):
         summary = summarize_strategy_report(report, source='remote', job_id=job_id)
         config['last_backtest'] = summary
         save_strategy_config(config)
+        save_strategy_config_version(config, action='remote_job_complete', actor=job.get('worker'), note=job_id)
         job['summary'] = summary
         job['status'] = 'completed'
+        emit_strategy_event(
+            'optimizer_job_completed',
+            job_id=job_id,
+            symbol=job.get('symbol'),
+            strategy=job.get('strategy'),
+            compute_target='remote',
+            worker=job.get('worker'),
+            validation_passed=(((summary or {}).get('validation') or {}).get('status') or {}).get('passed') if isinstance((summary or {}).get('validation'), dict) else None,
+        )
         save_strategy_job(job)
         return jsonify({'ok': True, 'summary': summary})
 
     job['status'] = 'failed'
     job['error'] = stderr or stdout or 'Remote optimizer failed.'
+    emit_strategy_event('optimizer_job_failed', job_id=job_id, symbol=job.get('symbol'), strategy=job.get('strategy'), compute_target='remote', worker=job.get('worker'), error=job.get('error'))
     save_strategy_job(job)
     return jsonify({'ok': False, 'error': job['error']})
 
@@ -1606,8 +1834,18 @@ def update_symbols_task():
         symbols_file = os.path.join(app.instance_path, 'tradable_symbols.json')
         try:
             assets = api.list_assets(status='active')
-            symbols = [a.symbol for a in assets if a.tradable]
-            with open(symbols_file, 'w') as f: json.dump(sorted(symbols), f)
+            symbols = []
+            for asset in assets:
+                if not getattr(asset, 'tradable', False):
+                    continue
+                symbols.append({
+                    'symbol': str(getattr(asset, 'symbol', '') or '').upper(),
+                    'name': str(getattr(asset, 'name', '') or '').strip(),
+                    'exchange': str(getattr(asset, 'exchange', '') or '').strip(),
+                })
+            symbols.sort(key=lambda item: item['symbol'])
+            with open(symbols_file, 'w', encoding='utf-8') as f:
+                json.dump(symbols, f, indent=2)
             app.logger.info(f"[SYSTEM] Successfully updated and saved {len(symbols)} symbols.")
         except Exception as e:
             app.logger.error(f"[SYSTEM] Failed to update symbol list: {e}")
@@ -1906,17 +2144,13 @@ def admin_delete_user(user_id):
 @app.route('/api/tradable_symbols')
 @login_required
 def api_tradable_symbols():
-    symbols_file = os.path.join(app.instance_path, 'tradable_symbols.json')
     try:
+        symbols_file = os.path.join(app.instance_path, 'tradable_symbols.json')
         if not os.path.exists(symbols_file):
             app.logger.warning(f"Symbols file not found at '{symbols_file}'. Attempting to generate it now.")
             update_symbols_task()
-            # Give the task a moment to run
             time.sleep(2)
-
-        with open(symbols_file, 'r') as f:
-            symbols = json.load(f)
-        return jsonify(symbols)
+        return jsonify(load_cached_tradable_assets())
     except Exception as e:
         app.logger.error(f"Could not read tradable_symbols.json: {e}")
         return jsonify({'error': 'Could not load symbol list.'}), 500
@@ -2277,7 +2511,23 @@ def api_closed_orders():
         query = query.filter_by(user_id=g.user.id)
     query = visible_closed_trades_query(query)
     closed_trades = query.order_by(Trade.close_time.desc()).all()
-    return jsonify([{'symbol': t.symbol, 'side': t.side, 'open_price': t.open_price, 'close_price': t.close_price, 'profit_loss': t.profit_loss, 'profit_loss_pct': t.profit_loss_pct, 'open_time': t.open_time.isoformat() if t.open_time else None, 'close_time': t.close_time.isoformat() if t.close_time else None, 'action': t.action or ""} for t in closed_trades])
+    return jsonify([
+        {
+            'symbol': t.symbol,
+            'side': t.side,
+            'open_price': t.open_price,
+            'close_price': t.close_price,
+            'profit_loss': t.profit_loss,
+            'profit_loss_pct': t.profit_loss_pct,
+            'open_time': t.open_time.isoformat() if t.open_time else None,
+            'close_time': t.close_time.isoformat() if t.close_time else None,
+            'action': t.action or "",
+            'strategy': t.strategy or "",
+            'strategy_label': strategy_label(t.strategy),
+            'strategy_job_id': t.strategy_job_id or "",
+        }
+        for t in closed_trades
+    ])
 
 @app.route('/api/stock_intelligence/ask', methods=['POST'])
 @login_required

@@ -51,12 +51,17 @@
                             <div class="strategy-target-card mb-4">
                                 <div class="row g-3 align-items-end">
                                     <div class="col-12 col-md-3">
-                                        <label class="form-label">Backtest Stocks {{ tip('Un stock sau o lista de stocks separate prin virgula sau rand nou. Exemplu: TSM, AAPL, MSFT. Se creeaza un optimizer run separat pentru fiecare.') }}</label>
-                                        <textarea name="symbol" class="form-control universe-symbol" rows="1" required list="strategy-symbols">{{ config.symbol }}</textarea>
+                                        <label class="form-label">Backtest Stocks {{ tip('Selecteaza unul sau mai multe simboluri Alpaca. Poti cauta dupa simbol sau dupa numele companiei, apoi bifezi ce vrei sa rulezi.') }}</label>
+                                        <input type="hidden" name="symbol" id="backtestSymbolsField" value="{{ config.symbol }}">
+                                        <div class="strategy-symbol-picker">
+                                            <input type="text" id="backtestSymbolSearch" class="form-control" placeholder="Search symbol or company name">
+                                            <div id="backtestSelectedSymbols" class="strategy-selected-symbols mt-2"></div>
+                                            <div id="backtestSymbolResults" class="strategy-symbol-results mt-2"></div>
+                                        </div>
                                     </div>
                                     <div class="col-6 col-md-2">
                                         <label class="form-label">Strategy {{ tip('Selecteaza strategia implementata in backtester si local bot.') }}</label>
-                                        <select name="strategy" class="form-select">
+                                        <select name="strategy" class="form-select" id="testerStrategySelect">
                                             <option value="keltner" {% if config.strategy|default('keltner') == 'keltner' %}selected{% endif %}>Keltner Channel</option>
                                             <option value="macd_sma" {% if config.strategy|default('keltner') == 'macd_sma' %}selected{% endif %}>MACD + SMA</option>
                                         </select>
@@ -119,22 +124,24 @@
                             <div class="tab-content">
                                 <div class="tab-pane fade show active" id="inputs-pane" role="tabpanel">
                                     <div class="tw-settings">
-                                        <div class="tw-section-label">Keltner Channel Settings</div>
-                                        <div class="tw-row">
-                                            <label>Inner KC Length {{ tip('Number of bars used for the inner Keltner channel EMA. Example: 33 smooths signals more than 13.') }}</label>
-                                            <input type="number" name="inner_kc_length" class="form-control" value="{{ config.inner_kc_length }}" min="1" step="1">
-                                        </div>
-                                        <div class="tw-row">
-                                            <label>Inner KC Multiplier {{ tip('ATR multiplier for the inner channel. Higher values widen the entry band and usually reduce trade frequency.') }}</label>
-                                            <input type="number" name="inner_kc_mult" class="form-control" value="{{ config.inner_kc_mult }}" step="0.1">
-                                        </div>
-                                        <div class="tw-row">
-                                            <label>Outer KC Length {{ tip('Number of bars used for the outer Keltner channel. This affects forced SL/TP reference behavior.') }}</label>
-                                            <input type="number" name="outer_kc_length" class="form-control" value="{{ config.outer_kc_length }}" min="1" step="1">
-                                        </div>
-                                        <div class="tw-row">
-                                            <label>Outer KC Multiplier {{ tip('ATR multiplier for the outer channel. Example: 3 is wider than 2 and changes extreme-band behavior.') }}</label>
-                                            <input type="number" name="outer_kc_mult" class="form-control" value="{{ config.outer_kc_mult }}" step="0.1">
+                                        <div data-strategy-scope="keltner">
+                                            <div class="tw-section-label">Keltner Channel Settings</div>
+                                            <div class="tw-row">
+                                                <label>Inner KC Length {{ tip('Number of bars used for the inner Keltner channel EMA. Example: 33 smooths signals more than 13.') }}</label>
+                                                <input type="number" name="inner_kc_length" class="form-control" value="{{ config.inner_kc_length }}" min="1" step="1">
+                                            </div>
+                                            <div class="tw-row">
+                                                <label>Inner KC Multiplier {{ tip('ATR multiplier for the inner channel. Higher values widen the entry band and usually reduce trade frequency.') }}</label>
+                                                <input type="number" name="inner_kc_mult" class="form-control" value="{{ config.inner_kc_mult }}" step="0.1">
+                                            </div>
+                                            <div class="tw-row">
+                                                <label>Outer KC Length {{ tip('Number of bars used for the outer Keltner channel. This affects forced SL/TP reference behavior.') }}</label>
+                                                <input type="number" name="outer_kc_length" class="form-control" value="{{ config.outer_kc_length }}" min="1" step="1">
+                                            </div>
+                                            <div class="tw-row">
+                                                <label>Outer KC Multiplier {{ tip('ATR multiplier for the outer channel. Example: 3 is wider than 2 and changes extreme-band behavior.') }}</label>
+                                                <input type="number" name="outer_kc_mult" class="form-control" value="{{ config.outer_kc_mult }}" step="0.1">
+                                            </div>
                                         </div>
 
                                         <div class="tw-section-label">Backtest Range</div>
@@ -171,22 +178,24 @@
                                             <input type="number" name="forced_take_profit_pct" class="form-control" value="{{ config.forced_take_profit_pct }}" step="0.1">
                                         </div>
 
-                                        <div class="tw-section-label">MACD + SMA Settings</div>
-                                        <div class="tw-row">
-                                            <label>MACD Fast Length {{ tip('Fast SMA length from the MACD + SMA Pine strategy.') }}</label>
-                                            <input type="number" name="macd_fast_length" class="form-control" value="{{ config.macd_fast_length|default(12) }}" min="1" step="1">
-                                        </div>
-                                        <div class="tw-row">
-                                            <label>MACD Slow Length {{ tip('Slow SMA length from the MACD + SMA Pine strategy.') }}</label>
-                                            <input type="number" name="macd_slow_length" class="form-control" value="{{ config.macd_slow_length|default(26) }}" min="1" step="1">
-                                        </div>
-                                        <div class="tw-row">
-                                            <label>MACD Signal Length {{ tip('Signal SMA length for the MACD histogram.') }}</label>
-                                            <input type="number" name="macd_signal_length" class="form-control" value="{{ config.macd_signal_length|default(9) }}" min="1" step="1">
-                                        </div>
-                                        <div class="tw-row">
-                                            <label>Very Slow SMA Length {{ tip('Trend filter length. The Pine script default is SMA 200.') }}</label>
-                                            <input type="number" name="macd_sma_length" class="form-control" value="{{ config.macd_sma_length|default(200) }}" min="1" step="1">
+                                        <div data-strategy-scope="macd_sma">
+                                            <div class="tw-section-label">MACD + SMA Settings</div>
+                                            <div class="tw-row">
+                                                <label>MACD Fast Length {{ tip('Fast SMA length from the MACD + SMA Pine strategy.') }}</label>
+                                                <input type="number" name="macd_fast_length" class="form-control" value="{{ config.macd_fast_length|default(12) }}" min="1" step="1">
+                                            </div>
+                                            <div class="tw-row">
+                                                <label>MACD Slow Length {{ tip('Slow SMA length from the MACD + SMA Pine strategy.') }}</label>
+                                                <input type="number" name="macd_slow_length" class="form-control" value="{{ config.macd_slow_length|default(26) }}" min="1" step="1">
+                                            </div>
+                                            <div class="tw-row">
+                                                <label>MACD Signal Length {{ tip('Signal SMA length for the MACD histogram.') }}</label>
+                                                <input type="number" name="macd_signal_length" class="form-control" value="{{ config.macd_signal_length|default(9) }}" min="1" step="1">
+                                            </div>
+                                            <div class="tw-row">
+                                                <label>Very Slow SMA Length {{ tip('Trend filter length. The Pine script default is SMA 200.') }}</label>
+                                                <input type="number" name="macd_sma_length" class="form-control" value="{{ config.macd_sma_length|default(200) }}" min="1" step="1">
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -263,6 +272,10 @@
                                                     <input class="form-check-input" type="checkbox" name="timeframe_sweep_enabled" id="timeframeSweepEnabled" {% if config.timeframe_sweep_enabled %}checked{% endif %}>
                                                     <label class="form-check-label" for="timeframeSweepEnabled">Optimize chart interval range {{ tip('Testeaza pe rand intervalele de minute, ore si zile. Best result va include timeframe-ul castigator.') }}</label>
                                                 </div>
+                                                <div class="form-check form-switch mb-3">
+                                                    <input class="form-check-input" type="checkbox" name="validation_enabled" id="validationEnabled" {% if config.validation_enabled|default(true) %}checked{% endif %}>
+                                                    <label class="form-check-label" for="validationEnabled">Walk-forward validation {{ tip('Optimizeaza pe prima parte din date si valideaza parametrul castigator pe out-of-sample inainte de promovare in live.') }}</label>
+                                                </div>
                                                 <div class="row g-3">
                                                     <div class="col-12 col-lg-4">
                                                         <label class="form-label">Minute intervals {{ tip('Lista separata prin virgula. Exemplu: 5,10,15,30 inseamna 5Min, 10Min, 15Min, 30Min.') }}</label>
@@ -300,6 +313,10 @@
                                                     <input type="number" min="0" name="optimizer_jobs" class="form-control" value="{{ config.optimizer_jobs }}">
                                                 </div>
                                                 <div class="col-6 col-lg-3">
+                                                    <label class="form-label">Train Ratio {{ tip('Procent din istoric folosit pentru optimizare. Restul este out-of-sample validation.') }}</label>
+                                                    <input type="number" min="0.2" max="0.95" step="0.05" name="validation_train_ratio" class="form-control" value="{{ config.validation_train_ratio|default(0.7) }}">
+                                                </div>
+                                                <div class="col-6 col-lg-3">
                                                     <label class="form-label">Optimizer {{ tip('Random foloseste cautare aleatoare paralela. Optuna TPE foloseste Bayesian optimization si tinde sa gaseasca zone bune cu mai putine incercari.') }}</label>
                                                     <select name="optimizer_engine" class="form-select">
                                                         <option value="tpe" {% if config.optimizer_engine|default('tpe') == 'tpe' %}selected{% endif %}>Optuna TPE</option>
@@ -322,33 +339,49 @@
                                                         {% endfor %}
                                                     </select>
                                                 </div>
-                                                <div class="col-12 col-lg-3">
+                                                <div class="col-12 col-lg-3" data-strategy-scope="keltner">
                                                     <label class="form-label">Trail Offset Range {{ tip('Current Pine script uses 4 ticks. Keep 4:4:1 for best TW parity.') }}</label>
                                                     <input type="text" name="trail_offset_range" class="form-control" value="{{ config.trail_offset_range }}">
                                                 </div>
-                                                <div class="col-6 col-lg-3">
+                                                <div class="col-6 col-lg-3" data-strategy-scope="macd_sma">
                                                     <label class="form-label">MACD Fast Range</label>
                                                     <input type="text" name="macd_fast_range" class="form-control" value="{{ config.macd_fast_range|default('8:20:1') }}">
                                                 </div>
-                                                <div class="col-6 col-lg-3">
+                                                <div class="col-6 col-lg-3" data-strategy-scope="macd_sma">
                                                     <label class="form-label">MACD Slow Range</label>
                                                     <input type="text" name="macd_slow_range" class="form-control" value="{{ config.macd_slow_range|default('20:40:1') }}">
                                                 </div>
-                                                <div class="col-6 col-lg-3">
+                                                <div class="col-6 col-lg-3" data-strategy-scope="macd_sma">
                                                     <label class="form-label">MACD Signal Range</label>
                                                     <input type="text" name="macd_signal_range" class="form-control" value="{{ config.macd_signal_range|default('5:15:1') }}">
                                                 </div>
-                                                <div class="col-6 col-lg-3">
+                                                <div class="col-6 col-lg-3" data-strategy-scope="macd_sma">
                                                     <label class="form-label">SMA Trend Range</label>
                                                     <input type="text" name="macd_sma_range" class="form-control" value="{{ config.macd_sma_range|default('100:250:10') }}">
+                                                </div>
+                                                <div class="col-6 col-lg-3">
+                                                    <label class="form-label">OOS Min Trades</label>
+                                                    <input type="number" min="1" name="validation_min_trades" class="form-control" value="{{ config.validation_min_trades|default(30) }}">
+                                                </div>
+                                                <div class="col-6 col-lg-3">
+                                                    <label class="form-label">OOS Min Win %</label>
+                                                    <input type="number" step="0.1" name="validation_min_win_rate_pct" class="form-control" value="{{ config.validation_min_win_rate_pct|default(55) }}">
+                                                </div>
+                                                <div class="col-6 col-lg-3">
+                                                    <label class="form-label">OOS Min PF</label>
+                                                    <input type="number" step="0.1" name="validation_min_profit_factor" class="form-control" value="{{ config.validation_min_profit_factor|default(1.3) }}">
+                                                </div>
+                                                <div class="col-6 col-lg-3">
+                                                    <label class="form-label">OOS Max DD %</label>
+                                                    <input type="number" step="0.1" name="validation_max_drawdown_pct" class="form-control" value="{{ config.validation_max_drawdown_pct|default(8) }}">
                                                 </div>
                                             </div>
                                         </div>
                                         <div class="row g-3 mt-1">
-                                            <div class="col-6 col-xl-3"><label class="form-label">Inner Len Range</label><input type="text" name="inner_len_range" class="form-control" value="{{ config.inner_len_range }}"></div>
-                                            <div class="col-6 col-xl-3"><label class="form-label">Inner Mult Range</label><input type="text" name="inner_mult_range" class="form-control" value="{{ config.inner_mult_range }}"></div>
-                                            <div class="col-6 col-xl-3"><label class="form-label">Outer Len Range</label><input type="text" name="outer_len_range" class="form-control" value="{{ config.outer_len_range }}"></div>
-                                            <div class="col-6 col-xl-3"><label class="form-label">Outer Mult Range</label><input type="text" name="outer_mult_range" class="form-control" value="{{ config.outer_mult_range }}"></div>
+                                            <div class="col-6 col-xl-3" data-strategy-scope="keltner"><label class="form-label">Inner Len Range</label><input type="text" name="inner_len_range" class="form-control" value="{{ config.inner_len_range }}"></div>
+                                            <div class="col-6 col-xl-3" data-strategy-scope="keltner"><label class="form-label">Inner Mult Range</label><input type="text" name="inner_mult_range" class="form-control" value="{{ config.inner_mult_range }}"></div>
+                                            <div class="col-6 col-xl-3" data-strategy-scope="keltner"><label class="form-label">Outer Len Range</label><input type="text" name="outer_len_range" class="form-control" value="{{ config.outer_len_range }}"></div>
+                                            <div class="col-6 col-xl-3" data-strategy-scope="keltner"><label class="form-label">Outer Mult Range</label><input type="text" name="outer_mult_range" class="form-control" value="{{ config.outer_mult_range }}"></div>
                                             <div class="col-6 col-xl-3"><label class="form-label">Fixed SL Range</label><input type="text" name="fixed_sl_range" class="form-control" value="{{ config.fixed_sl_range }}"></div>
                                             <div class="col-6 col-xl-3"><label class="form-label">Fixed TP Range</label><input type="text" name="fixed_tp_range" class="form-control" value="{{ config.fixed_tp_range }}"></div>
                                             <div class="col-6 col-xl-3"><label class="form-label">Forced SL Range</label><input type="text" name="forced_sl_range" class="form-control" value="{{ config.forced_sl_range }}"></div>
@@ -395,6 +428,18 @@
                                 <div class="col-12 col-lg-4">
                                     <label class="form-label">Live Data {{ tip('Local strategy reads bars/prices from Alpaca so signal generation and execution share the same source.') }}</label>
                                     <input type="text" class="form-control" value="Alpaca" disabled>
+                                </div>
+                                <div class="col-4 col-lg-2">
+                                    <label class="form-label">Daily Trades</label>
+                                    <input type="number" min="1" name="daily_max_trades_per_symbol" class="form-control" value="{{ config.daily_max_trades_per_symbol|default(3) }}">
+                                </div>
+                                <div class="col-4 col-lg-2">
+                                    <label class="form-label">Daily Losses</label>
+                                    <input type="number" min="1" name="daily_max_losses_per_symbol" class="form-control" value="{{ config.daily_max_losses_per_symbol|default(2) }}">
+                                </div>
+                                <div class="col-4 col-lg-2">
+                                    <label class="form-label">Daily Loss $</label>
+                                    <input type="number" min="0" step="1" name="daily_max_loss_usd_per_symbol" class="form-control" value="{{ config.daily_max_loss_usd_per_symbol|default(100) }}">
                                 </div>
                             </div>
 
@@ -451,6 +496,13 @@
                                                     {{ item.backtest.metrics.return_pct }}%,
                                                     PF {{ item.backtest.metrics.profit_factor }},
                                                     {{ item.backtest.metrics.total_trades }} trades
+                                                    {% if item.backtest.validation %}
+                                                        {% if item.backtest.validation.status.passed %}
+                                                        <span class="badge bg-success-subtle text-success-emphasis border">OOS pass</span>
+                                                        {% else %}
+                                                        <span class="badge bg-danger-subtle text-danger-emphasis border">OOS fail</span>
+                                                        {% endif %}
+                                                    {% endif %}
                                                 </div>
                                                 <button class="btn btn-sm btn-link p-0" type="button" data-bs-toggle="collapse" data-bs-target="#btDetails{{ loop.index }}">Details</button>
                                                 {% else %}
@@ -526,26 +578,66 @@
                                 <div class="strategy-panel-header">Optimizer Runs</div>
                                 <div class="strategy-panel-body">
                                     {% if all_jobs %}
+                                    <div class="row g-2 mb-3">
+                                        <div class="col-12 col-lg-4">
+                                            <input type="text" id="jobFilterText" class="form-control form-control-sm" placeholder="Filter by symbol or job id">
+                                        </div>
+                                        <div class="col-6 col-lg-3">
+                                            <select id="jobFilterStrategy" class="form-select form-select-sm">
+                                                <option value="">All strategies</option>
+                                                <option value="keltner">Keltner Channel</option>
+                                                <option value="macd_sma">MACD + SMA</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-6 col-lg-2">
+                                            <select id="jobFilterStatus" class="form-select form-select-sm">
+                                                <option value="">All status</option>
+                                                <option value="queued">Queued</option>
+                                                <option value="running">Running</option>
+                                                <option value="completed">Completed</option>
+                                                <option value="failed">Failed</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-6 col-lg-3">
+                                            <select id="jobFilterValidation" class="form-select form-select-sm">
+                                                <option value="">All validation</option>
+                                                <option value="pass">OOS pass</option>
+                                                <option value="fail">OOS fail</option>
+                                                <option value="none">No OOS data</option>
+                                            </select>
+                                        </div>
+                                    </div>
                                     <div class="table-responsive strategy-runs-wrap">
                                         <table class="table table-sm align-middle mb-0 strategy-runs-table">
                                             <thead>
                                                 <tr>
                                                     <th>Stock</th>
+                                                    <th>Strategy</th>
                                                     <th>Interval</th>
                                                     <th>Compute</th>
                                                     <th>Status</th>
                                                     <th>Return</th>
                                                     <th>Win</th>
                                                     <th>DD</th>
+                                                    <th>OOS</th>
+                                                    <th>Vs Current</th>
                                                     <th>Action</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
                                                 {% for job in all_jobs %}
-                                                <tr>
+                                                {% set validation_state = 'none' %}
+                                                {% if job.summary and job.summary.validation %}
+                                                    {% if job.summary.validation.status.passed %}
+                                                        {% set validation_state = 'pass' %}
+                                                    {% else %}
+                                                        {% set validation_state = 'fail' %}
+                                                    {% endif %}
+                                                {% endif %}
+                                                <tr class="strategy-job-row" data-job-symbol="{{ job.symbol }}" data-job-strategy="{{ job.strategy }}" data-job-status="{{ job.status }}" data-job-validation="{{ validation_state }}" data-job-id="{{ job.id }}">
                                                     <td>
                                                         <div class="d-flex align-items-center gap-1 flex-wrap">
-                                                            <span>{{ job.symbol }}</span>
+                                                            <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none load-job-config" data-config='{{ job.config|tojson|forceescape }}'>{{ job.symbol }}</button>
                                                             {% if job.signal_exact_match %}
                                                             <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle" data-strategy-tip title="Aceasta configuratie exacta a fost adaugata in Signal Universe.">In Signals</span>
                                                             {% elif job.signal_symbol_match %}
@@ -553,14 +645,30 @@
                                                             {% endif %}
                                                         </div>
                                                     </td>
+                                                    <td><span class="badge bg-secondary-subtle text-secondary-emphasis border">{{ 'MACD + SMA' if job.strategy == 'macd_sma' else 'Keltner' }}</span></td>
                                                     <td>{{ job.summary.timeframe if job.summary else job.timeframe }}</td>
                                                     <td>{{ job.compute_target or '-' }}</td>
                                                     <td><span class="badge bg-neutral">{{ job.status }}</span></td>
                                                     <td>{{ job.summary.metrics.return_pct if job.summary else '-' }}{% if job.summary %}%{% endif %}</td>
                                                     <td>{{ job.summary.metrics.win_rate_pct if job.summary else '-' }}{% if job.summary %}%{% endif %}</td>
                                                     <td>{{ job.summary.metrics.max_drawdown_pct if job.summary else '-' }}{% if job.summary %}%{% endif %}</td>
+                                                    <td>
+                                                        {% if job.summary and job.summary.validation %}
+                                                            {% if job.summary.validation.status.passed %}
+                                                            <span class="badge bg-success-subtle text-success-emphasis border">Pass</span>
+                                                            {% else %}
+                                                            <span class="badge bg-danger-subtle text-danger-emphasis border">Fail</span>
+                                                            {% endif %}
+                                                        {% else %}-{% endif %}
+                                                    </td>
+                                                    <td>
+                                                        {% if job.comparison and job.comparison.net_profit %}
+                                                            {{ job.comparison.net_profit.delta }}
+                                                        {% else %}-{% endif %}
+                                                    </td>
                                                     <td class="strategy-run-actions">
                                                         <button class="btn btn-sm btn-link px-1" type="button" data-bs-toggle="collapse" data-bs-target="#runDetails{{ loop.index }}">Details</button>
+                                                        <button class="btn btn-sm btn-outline-secondary px-2 load-job-config" type="button" data-config='{{ job.config|tojson|forceescape }}'>Load</button>
                                                         {% if job.status == 'completed' and job.summary %}
                                                             {% if job.signal_exact_match %}
                                                             <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">Already added</span>
@@ -570,10 +678,11 @@
                                                             <button class="btn btn-sm btn-outline-primary px-2" type="submit" name="action" value="add_job_result" onclick="document.getElementById('selectedJobId').value='{{ job.id }}'">Add to Signals</button>
                                                             {% endif %}
                                                         {% endif %}
+                                                        <button class="btn btn-sm btn-outline-danger px-2 delete-job-btn" type="button" data-job-id="{{ job.id }}">Delete</button>
                                                     </td>
                                                 </tr>
-                                                <tr>
-                                                    <td colspan="8" class="p-0 border-0">
+                                                <tr class="strategy-job-detail-row" data-parent-job-id="{{ job.id }}">
+                                                    <td colspan="11" class="p-0 border-0">
                                                         <div class="collapse strategy-detail-collapse" id="runDetails{{ loop.index }}">
                                                             <div class="p-3">
                                                                 <div class="small text-muted mb-2">
@@ -587,6 +696,9 @@
                                                                     <div><span>Drawdown %</span><strong>{{ job.summary.metrics.max_drawdown_pct }}</strong></div>
                                                                     <div><span>Profit Factor</span><strong>{{ job.summary.metrics.profit_factor }}</strong></div>
                                                                     <div><span>Trades</span><strong>{{ job.summary.metrics.total_trades }}</strong></div>
+                                                                    {% if job.summary.validation %}
+                                                                    <div><span>OOS Validation</span><strong>{{ 'PASS' if job.summary.validation.status.passed else 'FAIL' }}</strong></div>
+                                                                    {% endif %}
                                                                 </div>
                                                                 <div class="row g-3">
                                                                     <div class="col-12 col-xl-6">
@@ -638,6 +750,57 @@
                                     <div class="small text-muted mt-3">
                                         Windows agent: <code>python misc/windows_strategy_agent.py --server https://salavat.home.ro/trading --token %STRATEGY_WORKER_TOKEN% --workers 4 --accelerator auto</code>
                                     </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-12 col-xl-5">
+                            <div class="strategy-panel h-100">
+                                <div class="strategy-panel-header">Config Versions</div>
+                                <div class="strategy-panel-body table-responsive">
+                                    {% if config_versions %}
+                                    <table class="table table-sm align-middle mb-0">
+                                        <thead><tr><th>Time</th><th>Action</th><th>Actor</th><th>File</th></tr></thead>
+                                        <tbody>
+                                            {% for version in config_versions %}
+                                            <tr>
+                                                <td class="small">{{ version.versioned_at_utc }}</td>
+                                                <td>{{ version.action }}</td>
+                                                <td>{{ version.actor or '-' }}</td>
+                                                <td class="small">{{ version.file }}</td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                    {% else %}
+                                    <div class="text-muted">No config versions yet.</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-xl-7">
+                            <div class="strategy-panel h-100">
+                                <div class="strategy-panel-header">Structured Events</div>
+                                <div class="strategy-panel-body table-responsive">
+                                    {% if strategy_events %}
+                                    <table class="table table-sm align-middle mb-0">
+                                        <thead><tr><th>Time</th><th>Event</th><th>Symbol</th><th>Detail</th></tr></thead>
+                                        <tbody>
+                                            {% for event in strategy_events %}
+                                            <tr>
+                                                <td class="small">{{ event.ts_utc }}</td>
+                                                <td>{{ event.event }}</td>
+                                                <td>{{ event.symbol or '-' }}</td>
+                                                <td class="small">{{ event.detail or event.reason or event.job_id or event.version_file or '-' }}</td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                    {% else %}
+                                    <div class="text-muted">No structured events yet.</div>
+                                    {% endif %}
                                 </div>
                             </div>
                         </div>
@@ -712,8 +875,11 @@
 <script>
 $(document).ready(function() {
     let tradableSymbols = new Set();
+    let tradableAssets = [];
+    let selectedBacktestSymbols = [];
     const tradableSymbolsUrl = "{{ url_for('api_tradable_symbols') }}";
     const liveSnapshotUrl = "{{ url_for('api_admin_strategy_live_snapshot') }}";
+    const strategyForm = $('#strategyConfigForm');
 
     if (window.bootstrap && window.bootstrap.Tooltip) {
         document.querySelectorAll('[data-strategy-tip]').forEach((el) => {
@@ -747,9 +913,158 @@ $(document).ready(function() {
         return String(value || '').toUpperCase().replace(/\//g, '').trim();
     }
 
+    function parseSymbols(rawValue) {
+        const seen = new Set();
+        return String(rawValue || '')
+            .replace(/\n/g, ',')
+            .split(',')
+            .map((item) => normalizeSymbol(item))
+            .filter((item) => item && !seen.has(item) && seen.add(item));
+    }
+
     function escapeHtml(value) {
         return String(value ?? '').replace(/[&<>"']/g, function(char) {
             return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char];
+        });
+    }
+
+    function strategyLabel(strategy) {
+        return strategy === 'macd_sma' ? 'MACD + SMA' : 'Keltner Channel';
+    }
+
+    function applyStrategyVisibility() {
+        const selectedStrategy = $('#testerStrategySelect').val() || 'keltner';
+        $('[data-strategy-scope]').each(function() {
+            const shouldShow = $(this).data('strategy-scope') === selectedStrategy;
+            $(this).toggle(shouldShow);
+        });
+    }
+
+    function syncBacktestSymbolsField() {
+        $('#backtestSymbolsField').val(selectedBacktestSymbols.join(', '));
+    }
+
+    function renderSelectedBacktestSymbols() {
+        const container = $('#backtestSelectedSymbols');
+        container.empty();
+        if (!selectedBacktestSymbols.length) {
+            container.append('<div class="small text-muted">No stocks selected.</div>');
+            return;
+        }
+        selectedBacktestSymbols.forEach((symbol) => {
+            container.append(`
+                <span class="badge bg-primary-subtle text-primary-emphasis border me-1 mb-1">
+                    ${escapeHtml(symbol)}
+                    <button type="button" class="btn btn-link btn-sm p-0 ms-1 text-decoration-none remove-backtest-symbol" data-symbol="${escapeHtml(symbol)}">&times;</button>
+                </span>
+            `);
+        });
+    }
+
+    function renderBacktestSymbolResults() {
+        const container = $('#backtestSymbolResults');
+        const query = String($('#backtestSymbolSearch').val() || '').trim().toLowerCase();
+        container.empty();
+        if (!tradableAssets.length) {
+            container.append('<div class="small text-muted">Loading Alpaca tradable assets...</div>');
+            return;
+        }
+        const matches = tradableAssets.filter((asset) => {
+            if (!query) return selectedBacktestSymbols.includes(asset.symbol);
+            return asset.symbol.toLowerCase().includes(query) || String(asset.name || '').toLowerCase().includes(query);
+        }).slice(0, 40);
+        if (!matches.length) {
+            container.append('<div class="small text-muted">No matching Alpaca symbol.</div>');
+            return;
+        }
+        matches.forEach((asset) => {
+            const checked = selectedBacktestSymbols.includes(asset.symbol) ? 'checked' : '';
+            container.append(`
+                <label class="strategy-symbol-result d-flex align-items-start gap-2 border rounded px-2 py-1 mb-1">
+                    <input type="checkbox" class="form-check-input mt-1 backtest-symbol-toggle" data-symbol="${escapeHtml(asset.symbol)}" ${checked}>
+                    <span>
+                        <strong>${escapeHtml(asset.symbol)}</strong>
+                        <span class="text-muted small d-block">${escapeHtml(asset.name || '')}</span>
+                    </span>
+                </label>
+            `);
+        });
+    }
+
+    function setSelectedBacktestSymbols(symbols) {
+        selectedBacktestSymbols = parseSymbols(Array.isArray(symbols) ? symbols.join(',') : symbols);
+        syncBacktestSymbolsField();
+        renderSelectedBacktestSymbols();
+        renderBacktestSymbolResults();
+    }
+
+    function setFieldValue(name, value) {
+        const field = strategyForm.find(`[name="${name}"]`);
+        if (!field.length) return;
+        const first = field.first();
+        if (first.attr('type') === 'checkbox') {
+            first.prop('checked', Boolean(value));
+            return;
+        }
+        if (name === 'symbol') {
+            setSelectedBacktestSymbols(value);
+            return;
+        }
+        first.val(value);
+    }
+
+    function loadTesterConfig(config) {
+        if (!config || typeof config !== 'object') return;
+        const fieldNames = [
+            'symbol', 'strategy', 'timeframe', 'compute_target', 'alpaca_user', 'session', 'feed',
+            'trade_direction', 'inner_kc_length', 'inner_kc_mult', 'outer_kc_length', 'outer_kc_mult',
+            'backtest_start_date', 'backtest_start_time', 'backtest_end_date', 'backtest_end_time',
+            'fixed_stop_loss_pct', 'fixed_take_profit_pct', 'forced_stop_loss_pct', 'forced_take_profit_pct',
+            'macd_fast_length', 'macd_slow_length', 'macd_signal_length', 'macd_sma_length',
+            'initial_capital', 'order_size', 'commission_pct', 'trials', 'optimizer_jobs', 'top_k',
+            'optimizer_engine', 'accelerator', 'validation_train_ratio', 'validation_min_trades',
+            'validation_min_win_rate_pct', 'validation_min_profit_factor', 'validation_max_drawdown_pct',
+            'validation_min_net_profit', 'inner_len_range', 'inner_mult_range', 'outer_len_range',
+            'outer_mult_range', 'fixed_sl_range', 'fixed_tp_range', 'forced_sl_range', 'forced_tp_range',
+            'macd_fast_range', 'macd_slow_range', 'macd_signal_range', 'macd_sma_range', 'trail_offset_range'
+        ];
+        fieldNames.forEach((name) => {
+            if (Object.prototype.hasOwnProperty.call(config, name)) {
+                setFieldValue(name, config[name]);
+            }
+        });
+        ['optimize_enabled', 'timeframe_sweep_enabled', 'validation_enabled', 'recalc_after_order_filled', 'recalc_on_every_tick'].forEach((name) => {
+            if (Object.prototype.hasOwnProperty.call(config, name)) {
+                setFieldValue(name, config[name]);
+            }
+        });
+        applyStrategyVisibility();
+        const testerTab = document.querySelector('#tester-tab');
+        if (testerTab && window.bootstrap?.Tab) {
+            window.bootstrap.Tab.getOrCreateInstance(testerTab).show();
+        }
+        $('#backtestSymbolSearch').val('');
+        renderBacktestSymbolResults();
+    }
+
+    function applyJobFilters() {
+        const text = String($('#jobFilterText').val() || '').trim().toLowerCase();
+        const strategy = $('#jobFilterStrategy').val() || '';
+        const status = $('#jobFilterStatus').val() || '';
+        const validation = $('#jobFilterValidation').val() || '';
+        $('.strategy-job-row').each(function() {
+            const row = $(this);
+            const symbol = String(row.data('job-symbol') || '').toLowerCase();
+            const jobId = String(row.data('job-id') || '').toLowerCase();
+            const rowStrategy = String(row.data('job-strategy') || '');
+            const rowStatus = String(row.data('job-status') || '');
+            const rowValidation = String(row.data('job-validation') || '');
+            const visible = (!text || symbol.includes(text) || jobId.includes(text))
+                && (!strategy || rowStrategy === strategy)
+                && (!status || rowStatus === status)
+                && (!validation || rowValidation === validation);
+            row.toggle(visible);
+            row.next('.strategy-job-detail-row').toggle(visible);
         });
     }
 
@@ -779,13 +1094,39 @@ $(document).ready(function() {
 
     fetch(tradableSymbolsUrl)
         .then((response) => response.ok ? response.json() : [])
-        .then((symbols) => {
-            if (!Array.isArray(symbols)) return;
+        .then((assets) => {
+            if (!Array.isArray(assets)) return;
             const datalist = $('#strategy-symbols');
             datalist.empty();
-            tradableSymbols = new Set(symbols.map((symbol) => String(symbol).toUpperCase()));
-            symbols.forEach((symbol) => datalist.append(`<option value="${escapeHtml(symbol)}"></option>`));
+            tradableAssets = assets.map((asset) => ({
+                symbol: normalizeSymbol(asset.symbol),
+                name: String(asset.name || ''),
+                exchange: String(asset.exchange || ''),
+            })).filter((asset) => asset.symbol);
+            tradableSymbols = new Set(tradableAssets.map((asset) => asset.symbol));
+            tradableAssets.forEach((asset) => datalist.append(`<option value="${escapeHtml(asset.symbol)}" label="${escapeHtml(asset.name)}"></option>`));
+            setSelectedBacktestSymbols($('#backtestSymbolsField').val());
         });
+
+    $('#backtestSymbolSearch').on('input', renderBacktestSymbolResults);
+    $('#backtestSymbolResults').on('change', '.backtest-symbol-toggle', function() {
+        const symbol = normalizeSymbol($(this).data('symbol'));
+        if ($(this).is(':checked')) {
+            if (!selectedBacktestSymbols.includes(symbol)) selectedBacktestSymbols.push(symbol);
+        } else {
+            selectedBacktestSymbols = selectedBacktestSymbols.filter((item) => item !== symbol);
+        }
+        syncBacktestSymbolsField();
+        renderSelectedBacktestSymbols();
+        renderBacktestSymbolResults();
+    });
+    $('#backtestSelectedSymbols').on('click', '.remove-backtest-symbol', function() {
+        const symbol = normalizeSymbol($(this).data('symbol'));
+        selectedBacktestSymbols = selectedBacktestSymbols.filter((item) => item !== symbol);
+        syncBacktestSymbolsField();
+        renderSelectedBacktestSymbols();
+        renderBacktestSymbolResults();
+    });
 
     $('#addUniverseRow').on('click', function() {
         const row = $(`
@@ -819,6 +1160,32 @@ $(document).ready(function() {
         bindUniverseRow(row);
         row.find('.universe-symbol').trigger('focus');
     });
+
+    $('#testerStrategySelect').on('change', applyStrategyVisibility);
+    applyStrategyVisibility();
+
+    $('.load-job-config').on('click', function() {
+        const rawConfig = $(this).attr('data-config');
+        if (!rawConfig) return;
+        try {
+            loadTesterConfig(JSON.parse(rawConfig));
+        } catch (error) {
+            console.error('Failed to load job config', error);
+        }
+    });
+
+    $('.delete-job-btn').on('click', function() {
+        const jobId = $(this).data('job-id');
+        if (!jobId) return;
+        if (!window.confirm(`Delete optimizer run ${jobId}?`)) return;
+        $('#selectedJobId').val(jobId);
+        strategyForm.find('input[name="action"][data-delete-job="1"]').remove();
+        strategyForm.append('<input type="hidden" name="action" value="delete_job" data-delete-job="1">');
+        strategyForm.trigger('submit');
+    });
+
+    $('#jobFilterText, #jobFilterStrategy, #jobFilterStatus, #jobFilterValidation').on('input change', applyJobFilters);
+    applyJobFilters();
 
     $('#refreshLiveSnapshot').on('click', function() {
         const button = $(this);

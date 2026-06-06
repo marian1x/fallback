@@ -189,6 +189,7 @@
 <script>
     let openTable;
     let tradableSymbols = new Set(); // MODIFIED: Using a Set for faster lookups
+    let tradableAssets = [];
     const openPositionsUrl = "{{ url_for('api_open_positions') }}";
     const accountUrl = "{{ url_for('api_account') }}";
     const tradableSymbolsUrl = "{{ url_for('api_tradable_symbols') }}";
@@ -279,6 +280,19 @@
     function normalizeSymbolInput(rawSymbol) {
         if (!rawSymbol) return '';
         return rawSymbol.toUpperCase().replace(/\s+/g, '').replace(/\//g, '');
+    }
+
+    function resolveTradableAsset(rawInput) {
+        const normalized = normalizeSymbolInput(rawInput);
+        if (tradableSymbols.has(normalized)) {
+            return tradableAssets.find((asset) => asset.symbol === normalized) || { symbol: normalized, name: '' };
+        }
+        const query = String(rawInput || '').trim().toLowerCase();
+        if (!query) return null;
+        const exactName = tradableAssets.find((asset) => String(asset.name || '').trim().toLowerCase() === query);
+        if (exactName) return exactName;
+        const nameMatches = tradableAssets.filter((asset) => String(asset.name || '').toLowerCase().includes(query));
+        return nameMatches.length === 1 ? nameMatches[0] : null;
     }
 
     function logClientEvent(eventType, message, detail = null) {
@@ -431,11 +445,15 @@
             const response = await fetch(tradableSymbolsUrl);
             const symbols = await response.json();
             if (Array.isArray(symbols)) {
-                tradableSymbols = new Set(symbols.map(s => s.toUpperCase()));
+                tradableAssets = symbols.map((item) => ({
+                    symbol: normalizeSymbolInput(item.symbol || item),
+                    name: String(item.name || ''),
+                })).filter((item) => item.symbol);
+                tradableSymbols = new Set(tradableAssets.map((asset) => asset.symbol));
                 const datalist = $('#symbols-datalist');
                 datalist.empty();
-                symbols.forEach(function(symbol) {
-                    datalist.append(`<option value="${symbol}">`);
+                tradableAssets.forEach(function(asset) {
+                    datalist.append(`<option value="${asset.symbol}" label="${asset.name.replace(/"/g, '&quot;')}">`);
                 });
             }
         } catch (error) {
@@ -445,8 +463,8 @@
 
     function validateSymbolInput() {
         const symbolInput = $('#symbolInput');
-        const currentSymbol = normalizeSymbolInput(symbolInput.val());
-        if (currentSymbol && !tradableSymbols.has(currentSymbol)) {
+        const resolved = resolveTradableAsset(symbolInput.val());
+        if (symbolInput.val().trim() && !resolved) {
             symbolInput.addClass('is-invalid');
         } else {
             symbolInput.removeClass('is-invalid');
@@ -651,8 +669,9 @@
         $('#openTradeForm').on('submit', function(e){
             e.preventDefault();
             const rawSymbol = $('#symbolInput').val().trim();
+            const resolvedAsset = resolveTradableAsset(rawSymbol);
             const displaySymbol = rawSymbol.toUpperCase().replace(/\s+/g, '');
-            const sym = normalizeSymbolInput(rawSymbol);
+            const sym = resolvedAsset ? resolvedAsset.symbol : normalizeSymbolInput(rawSymbol);
             const side = $('#sideSelect').val(); const amount = parseFloat($('#amountInput').val());
             const orderType = orderTypeSelect.val();
             const timeInForce = tifSelect.val();

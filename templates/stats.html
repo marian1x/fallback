@@ -22,6 +22,12 @@
         <option value="all" selected>All Symbols</option>
       </select>
     </div>
+    <div class="col-md-3">
+      <label for="strategyFilter" class="form-label small">Strategy</label>
+      <select id="strategyFilter" class="form-select form-select-sm">
+        <option value="all" selected>All Strategies</option>
+      </select>
+    </div>
     <div class="col-md-4">
       <label class="form-label small">Filter by Close Date</label>
       <div>
@@ -102,11 +108,21 @@
             <thead>
               <tr>
                 <th>Symbol</th>
+                <th>Strategy</th>
                 <th>Side</th>
                 <th>P/L</th>
                 <th>Close Time</th>
               </tr>
             </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card shadow-sm mt-4">
+        <div class="card-header"><i class="fa-solid fa-code-branch me-2"></i>Strategy Comparison</div>
+        <div class="card-body p-0">
+          <table id="strategyPerformanceTable" class="table table-hover mb-0">
+            <thead><tr><th>Strategy</th><th>Net P&L</th><th>Win %</th><th>Trades</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -122,6 +138,7 @@ let allTrades = [];
 let charts = {};
 let symbolPerformanceTable;
 let recentTradesTable;
+let strategyPerformanceTable;
 const closedOrdersUrl = "{{ url_for('api_closed_orders') }}";
 const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 const currencyFormatterShort = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -222,6 +239,15 @@ function fetchAndComputeAnalytics() {
         uniqueSymbols.forEach(symbol => {
             symbolFilterEl.append(`<option value="${symbol}">${symbol.replace('USD','/USD')}</option>`);
         });
+        const strategyFilterEl = $('#strategyFilter');
+        const currentStrategy = strategyFilterEl.val() || 'all';
+        strategyFilterEl.html('<option value="all" selected>All Strategies</option>');
+        const uniqueStrategies = [...new Set(allTrades.map(t => t.strategy || 'unknown'))].sort();
+        uniqueStrategies.forEach((strategy) => {
+            const label = allTrades.find((t) => (t.strategy || 'unknown') === strategy)?.strategy_label || strategy;
+            strategyFilterEl.append(`<option value="${strategy}">${label}</option>`);
+        });
+        strategyFilterEl.val(uniqueStrategies.includes(currentStrategy) ? currentStrategy : 'all');
 
         computeAnalytics(); // Run computation with the new data
     }).fail(function(xhr) {
@@ -233,16 +259,18 @@ function fetchAndComputeAnalytics() {
 
 function computeAnalytics() {
     const symbolFilter = $('#symbolFilter').val();
+    const strategyFilter = $('#strategyFilter').val();
     const dateFrom = $('#aDateFrom').val();
     const dateTo = $('#aDateTo').val();
 
     let filteredTrades = allTrades.filter(t => {
         if (!t.close_time) return false;
         const symbolOk = symbolFilter === 'all' || t.symbol === symbolFilter;
+        const strategyOk = strategyFilter === 'all' || (t.strategy || 'unknown') === strategyFilter;
         const closeDate = tradeLocalDateIso(t.close_time);
         const fromOk = !dateFrom || closeDate >= dateFrom;
         const toOk = !dateTo || closeDate <= dateTo;
-        return symbolOk && fromOk && toOk;
+        return symbolOk && strategyOk && fromOk && toOk;
     }).sort((a, b) => new Date(a.close_time) - new Date(b.close_time));
 
     // --- Calculations ---
@@ -348,6 +376,28 @@ function computeAnalytics() {
     });
     symbolPerformanceTable.draw();
 
+    const strategyStats = {};
+    filteredTrades.forEach((t) => {
+        const key = t.strategy || 'unknown';
+        if (!strategyStats[key]) {
+            strategyStats[key] = { netPL: 0, wins: 0, count: 0, label: t.strategy_label || key };
+        }
+        strategyStats[key].netPL += t.profit_loss || 0;
+        strategyStats[key].count++;
+        if ((t.profit_loss || 0) > 0) strategyStats[key].wins++;
+    });
+    strategyPerformanceTable.clear();
+    Object.keys(strategyStats).forEach((key) => {
+        const stats = strategyStats[key];
+        strategyPerformanceTable.row.add([
+            stats.label,
+            `<span class="${stats.netPL > 0 ? 'profit' : stats.netPL < 0 ? 'loss' : 'text-muted'}">${stats.netPL.toFixed(2)}</span>`,
+            `${(stats.count > 0 ? (100 * stats.wins / stats.count) : 0).toFixed(1)}%`,
+            stats.count
+        ]);
+    });
+    strategyPerformanceTable.draw();
+
     if (recentTradesTable) {
         const sortedByClose = [...filteredTrades].sort((a, b) => new Date(b.close_time) - new Date(a.close_time));
         recentTradesTable.clear();
@@ -357,6 +407,7 @@ function computeAnalytics() {
                 : '-';
             recentTradesTable.row.add([
                 t.symbol.replace('USD', '/USD'),
+                t.strategy_label || 'Unknown',
                 t.side ? t.side.toUpperCase() : '-',
                 signedCurrencyHtml(t.profit_loss || 0),
                 `<span data-order="${t.close_time || ''}">${closeTimeDisplay}</span>`
@@ -425,15 +476,23 @@ $(document).ready(function() {
         info: false,
         responsive: true,
         autoWidth: false,
-        order: [[3, 'desc']],
+        order: [[4, 'desc']],
         language: { emptyTable: 'No trades found for the selected filters.' }
+    });
+    strategyPerformanceTable = $('#strategyPerformanceTable').DataTable({
+        paging: false,
+        searching: false,
+        info: false,
+        responsive: true,
+        autoWidth: false,
+        order: [[1, 'desc']]
     });
 
     fetchAndComputeAnalytics(); // Initial data load
 
     // Event handlers
     $('#userFilter').on('change', fetchAndComputeAnalytics); // Refetches all data for new user
-    $('#symbolFilter, #aDateFrom, #aDateTo').on('change', computeAnalytics); // Recomputes on existing data
+    $('#symbolFilter, #strategyFilter, #aDateFrom, #aDateTo').on('change', computeAnalytics); // Recomputes on existing data
     $('#aClearDate').on('click', function(){
         $('#aDateFrom, #aDateTo').val('');
         computeAnalytics();

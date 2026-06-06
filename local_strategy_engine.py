@@ -18,6 +18,7 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Callable, Dict, Optional
 
 import pandas as pd
@@ -35,7 +36,7 @@ from misc.pine_optimizer import (
     sma,
     timeframe_seconds,
 )
-from models import User, db
+from models import Trade, User, db
 import strategy_config as strategy_store
 from utils import decrypt_data
 
@@ -70,6 +71,10 @@ class LocalStrategyEngine:
         self.min_backtest_profit_factor = float(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_PROFIT_FACTOR", "1.3"))
         self.max_backtest_drawdown_pct = float(os.getenv("LOCAL_STRATEGY_MAX_BACKTEST_DRAWDOWN_PCT", "8"))
         self.min_backtest_net_profit = float(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_NET_PROFIT", "0"))
+        self.daily_max_trades_per_symbol = int(os.getenv("LOCAL_STRATEGY_DAILY_MAX_TRADES_PER_SYMBOL", "3"))
+        self.daily_max_losses_per_symbol = int(os.getenv("LOCAL_STRATEGY_DAILY_MAX_LOSSES_PER_SYMBOL", "2"))
+        self.daily_max_loss_usd_per_symbol = float(os.getenv("LOCAL_STRATEGY_DAILY_MAX_LOSS_USD_PER_SYMBOL", "100"))
+        self.event_log_path = os.path.join(self.app.instance_path, "local_strategy_events.jsonl")
         self.dry_run = os.getenv("LOCAL_STRATEGY_DRY_RUN", "false").lower() in ("1", "true", "yes", "y")
         self.state_path = os.path.join(self.app.instance_path, "local_strategy_state.json")
         self.stop_event = threading.Event()
@@ -113,6 +118,20 @@ class LocalStrategyEngine:
             os.replace(tmp_path, self.state_path)
         except Exception as exc:
             self.logger.error("[LOCAL_STRATEGY] Failed to save state: %s", exc)
+
+    def emit_event(self, event_type: str, symbol: str, **fields) -> None:
+        event = {
+            "ts_utc": datetime.now(timezone.utc).isoformat(),
+            "event": event_type,
+            "symbol": strategy_store.normalize_symbol(symbol),
+        }
+        event.update(fields)
+        try:
+            os.makedirs(os.path.dirname(self.event_log_path), exist_ok=True)
+            with open(self.event_log_path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(event, sort_keys=True, default=str) + "\n")
+        except Exception as exc:
+            self.logger.warning("[LOCAL_STRATEGY] Failed to write structured event: %s", exc)
 
     def api_cooldown_active(self) -> bool:
         due = self._parse_state_time(self.state.get("api_cooldown_until_utc"))
@@ -301,6 +320,62 @@ class LocalStrategyEngine:
             return f"backtest max drawdown {max_drawdown:.2f}% > {self.max_backtest_drawdown_pct:.2f}%"
         return None
 
+    def oos_entry_rejection_reason(self, backtest: Dict) -> Optional[str]:
+        validation = backtest.get("validation") if isinstance(backtest.get("validation"), dict) else None
+        if not validation or not validation.get("enabled", True):
+            return "missing out-of-sample validation"
+        status = validation.get("status") if isinstance(validation.get("status"), dict) else {}
+        if not status.get("passed"):
+            failed = status.get("failed_checks") or []
+            if failed:
+                return f"out-of-sample validation failed: {', '.join(map(str, failed))}"
+            return "out-of-sample validation failed"
+        return None
+
+    def local_day_bounds_utc(self) -> tuple[datetime, datetime]:
+        local_tz = ZoneInfo("Europe/Bucharest")
+        now_local = datetime.now(local_tz)
+        start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_local = start_local + timedelta(days=1)
+        return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+
+    def daily_symbol_guard_reason(self, user: User, symbol: str, cfg: Dict) -> Optional[str]:
+        max_trades = int(cfg.get("daily_max_trades_per_symbol", self.daily_max_trades_per_symbol))
+        max_losses = int(cfg.get("daily_max_losses_per_symbol", self.daily_max_losses_per_symbol))
+        max_loss_usd = float(cfg.get("daily_max_loss_usd_per_symbol", self.daily_max_loss_usd_per_symbol))
+        day_start, day_end = self.local_day_bounds_utc()
+        opened_count = (
+            Trade.query
+            .filter(
+                Trade.user_id == user.id,
+                Trade.symbol == symbol,
+                Trade.open_time >= day_start,
+                Trade.open_time < day_end,
+            )
+            .count()
+        )
+        if opened_count >= max_trades:
+            return f"daily trade limit {opened_count}/{max_trades}"
+        closed = (
+            Trade.query
+            .filter(
+                Trade.user_id == user.id,
+                Trade.symbol == symbol,
+                Trade.status == "closed",
+                Trade.close_time >= day_start,
+                Trade.close_time < day_end,
+            )
+            .all()
+        )
+        losses = [float(t.profit_loss or 0.0) for t in closed if float(t.profit_loss or 0.0) < 0]
+        loss_count = len(losses)
+        loss_usd = abs(sum(losses))
+        if loss_count >= max_losses:
+            return f"daily loss-count limit {loss_count}/{max_losses}"
+        if max_loss_usd > 0 and loss_usd >= max_loss_usd:
+            return f"daily loss limit {loss_usd:.2f}/{max_loss_usd:.2f} USD"
+        return None
+
     def _metric_float(self, metrics: Dict, key: str) -> Optional[float]:
         value = metrics.get(key)
         try:
@@ -377,6 +452,35 @@ class LocalStrategyEngine:
                 )
                 self.defer_next_entry_check(symbol, timeframe)
                 self.save_state()
+                self.emit_event("entry_rejected", symbol, reason="strategy_backtest_mismatch", row_strategy=params.get("strategy"), backtest_strategy=saved_strategy)
+                return
+            daily_rejection = self.daily_symbol_guard_reason(user, symbol, cfg)
+            if daily_rejection:
+                self.log_symbol_throttled(
+                    symbol,
+                    "daily_guard_reject",
+                    logging.WARNING,
+                    "[LOCAL_STRATEGY] %s entry disabled: %s",
+                    symbol,
+                    daily_rejection,
+                )
+                self.defer_next_entry_check(symbol, timeframe)
+                self.save_state()
+                self.emit_event("entry_rejected", symbol, reason="daily_guard", detail=daily_rejection)
+                return
+            oos_rejection = self.oos_entry_rejection_reason(backtest)
+            if oos_rejection:
+                self.log_symbol_throttled(
+                    symbol,
+                    "oos_reject",
+                    logging.WARNING,
+                    "[LOCAL_STRATEGY] %s entry disabled: %s",
+                    symbol,
+                    oos_rejection,
+                )
+                self.defer_next_entry_check(symbol, timeframe)
+                self.save_state()
+                self.emit_event("entry_rejected", symbol, reason="oos_validation", detail=oos_rejection)
                 return
             rejection = self.backtest_entry_rejection_reason(backtest)
             if rejection:
@@ -390,6 +494,7 @@ class LocalStrategyEngine:
                 )
                 self.defer_next_entry_check(symbol, timeframe)
                 self.save_state()
+                self.emit_event("entry_rejected", symbol, reason="backtest_quality", detail=rejection)
                 return
 
         bars = self.fetch_closed_bars(api, symbol, timeframe, feed, session)
@@ -551,6 +656,7 @@ class LocalStrategyEngine:
         self.logger.info("[LOCAL_STRATEGY] %s entry signal action=%s bar=%s price=%s", symbol, action, last_bar_ts, latest_price)
         self.submit_llm_shadow_validation(user, api, payload, latest_price, params, frame, backtest)
         ok = self.execute_or_recover(user, payload, kind="open")
+        self.emit_event("entry_submitted", symbol, strategy=payload.get("strategy"), action=action, ok=ok, bar_time=last_bar_ts, reason=reason)
         st["last_entry_bar"] = last_bar_ts
         st["last_decision"] = f"entry_{action}_{'ok' if ok else 'recovery'}"
         self.save_state()
@@ -589,6 +695,7 @@ class LocalStrategyEngine:
         self.logger.info("[LOCAL_STRATEGY] %s MACD/SMA entry signal action=%s bar=%s price=%s", symbol, action, last_bar_ts, latest_price)
         self.submit_llm_shadow_validation(user, api, payload, latest_price, params, frame, order_backtest)
         ok = self.execute_or_recover(user, payload, kind="open")
+        self.emit_event("entry_submitted", symbol, strategy=payload.get("strategy"), action=action, ok=ok, bar_time=last_bar_ts, reason=reason)
         st["last_entry_bar"] = last_bar_ts
         st["last_decision"] = f"entry_{action}_{'ok' if ok else 'recovery'}"
         self.save_state()
@@ -703,6 +810,7 @@ class LocalStrategyEngine:
         payload["position_side"] = "short" if is_short else "long"
         self.logger.warning("[LOCAL_STRATEGY] %s exit signal reason='%s' bar=%s price=%s", symbol, reason, last_bar_ts, latest_price)
         ok = self.execute_or_recover(user, payload, kind="close")
+        self.emit_event("exit_submitted", symbol, strategy=payload.get("strategy"), ok=ok, bar_time=last_bar_ts, reason=reason)
         st["last_exit_bar"] = last_bar_ts
         st["last_exit_price"] = latest_price
         st["last_decision"] = f"exit_{'ok' if ok else 'recovery'}"
@@ -734,6 +842,7 @@ class LocalStrategyEngine:
         payload["position_side"] = "short" if is_short else "long"
         self.logger.warning("[LOCAL_STRATEGY] %s MACD/SMA exit signal reason='%s' bar=%s price=%s", symbol, reason, last_bar_ts, latest_price)
         ok = self.execute_or_recover(user, payload, kind="close")
+        self.emit_event("exit_submitted", symbol, strategy=payload.get("strategy"), ok=ok, bar_time=last_bar_ts, reason=reason)
         st["last_exit_bar"] = last_bar_ts
         st["last_exit_price"] = latest_price
         st["last_decision"] = f"exit_{'ok' if ok else 'recovery'}"

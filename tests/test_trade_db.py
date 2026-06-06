@@ -26,7 +26,7 @@ def app():
 
 
 def test_record_open_trade(app):
-    payload = {'symbol': 'AAPL', 'action': 'buy'}
+    payload = {'symbol': 'AAPL', 'action': 'buy', 'strategy': 'macd_sma', 'strategy_job_id': 'job-123'}
     data = {'order_id': '123', 'side': 'buy', 'qty': 10, 'price': 100, 'open_time': '2026-06-05T13:00:00+00:00'}
     with app.app_context():
         user = User(username='tester', email='tester@example.com', password_hash='hashed')
@@ -37,6 +37,8 @@ def test_record_open_trade(app):
         assert t.symbol == 'AAPL'
         assert t.status == 'open'
         assert t.open_time.hour == 13
+        assert t.strategy == 'macd_sma'
+        assert t.strategy_job_id == 'job-123'
 
         t2 = trade_db.record_open_trade(data, payload, user.id)
         assert t2 is None
@@ -44,7 +46,7 @@ def test_record_open_trade(app):
 
 
 def test_record_closed_trade(app, monkeypatch):
-    open_payload = {'symbol': 'AAPL', 'action': 'buy'}
+    open_payload = {'symbol': 'AAPL', 'action': 'buy', 'strategy': 'keltner', 'strategy_job_id': 'job-kc'}
     open_data = {'order_id': '1', 'side': 'buy', 'qty': 10, 'price': 100}
     with app.app_context():
         user = User(username='tester', email='tester@example.com', password_hash='hashed')
@@ -77,6 +79,8 @@ def test_record_closed_trade(app, monkeypatch):
         assert t.status == 'closed'
         assert t.close_price == 110
         assert t.profit_loss == (110 - 100) * 10
+        assert t.strategy == 'keltner'
+        assert t.strategy_job_id == 'job-kc'
         assert Trade.query.count() == 1
 
 

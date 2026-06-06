@@ -168,3 +168,15 @@ def test_backtest_quality_gate_rejects_weak_configs(tmp_path):
 
     assert "net profit" in engine.backtest_entry_rejection_reason(weak)
     assert engine.backtest_entry_rejection_reason(strong) is None
+
+
+def test_oos_quality_gate_requires_passed_validation(tmp_path):
+    app = SimpleNamespace(instance_path=str(tmp_path))
+    engine = LocalStrategyEngine(app, lambda *_: None, "https://paper-api.alpaca.markets", logging.getLogger("test"))
+
+    assert "missing" in engine.oos_entry_rejection_reason({}) 
+    failed = {"validation": {"enabled": True, "status": {"passed": False, "failed_checks": ["min_profit_factor"]}}}
+    passed = {"validation": {"enabled": True, "status": {"passed": True}}}
+
+    assert "min_profit_factor" in engine.oos_entry_rejection_reason(failed)
+    assert engine.oos_entry_rejection_reason(passed) is None

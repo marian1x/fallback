@@ -1,5 +1,36 @@
 # Release Notes
 
+## Version 2.7.0 - 2026-06-07
+
+### Strategy Lab
+- Reworked **Backtest Stocks** into an Alpaca-backed picker that supports:
+  - multi-select,
+  - symbol search,
+  - company-name search,
+  - selected-symbol review before run.
+- Strategy Tester now shows only the parameter groups relevant to the selected strategy:
+  - `Keltner Channel`,
+  - `MACD + SMA`.
+- Optimizer Runs now keep cross-strategy history visible for the same symbol and add client-side filters for:
+  - symbol / job id,
+  - strategy,
+  - run status,
+  - out-of-sample validation result.
+- Added **Load** from Optimizer Runs back into Strategy Tester so a completed run can be reviewed or rerun from the tester area.
+- Added Optimizer Run deletion from the Results tab.
+- Added stronger duplicate active-job detection using a configuration fingerprint so pressing **Run Backtest** twice with the same active setup does not queue a duplicate job.
+
+### Routing / Trade Analytics
+- Closed Trades now show the strategy used for each trade and support strategy filtering.
+- Strategy Analytics now supports filtering by strategy and adds a strategy-comparison table for side-by-side performance review.
+- Recent trades in Strategy Analytics now include the strategy label.
+- Trade records now persist `strategy` and `strategy_job_id` metadata for local strategy executions.
+
+### Symbol Search
+- Upgraded the tradable-symbol cache from raw symbols to structured Alpaca asset metadata (`symbol`, `name`, `exchange`).
+- Manual trade symbol search can now resolve company names to symbols when the match is unambiguous.
+- Refreshed `instance/tradable_symbols.json` with named Alpaca assets.
+
 ## Version 2.6.0 - 2026-06-02
 
 ### Local Strategy Engine

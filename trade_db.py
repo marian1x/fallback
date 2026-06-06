@@ -5,6 +5,7 @@ import os
 from dotenv import load_dotenv
 import time
 import logging
+from sqlalchemy import inspect, text
 from alpaca_api import AlpacaAPIError, LegacyCompatibleAlpacaClient
 from utils import decrypt_data
 
@@ -13,6 +14,23 @@ load_dotenv(ENV_PATH)
 BASE_URL = os.getenv("ALPACA_API_BASE_URL", "https://paper-api.alpaca.markets")
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_trade_table_columns():
+    try:
+        inspector = inspect(db.engine)
+        columns = {col["name"] for col in inspector.get_columns("trade")}
+        changed = False
+        if "strategy" not in columns:
+            db.session.execute(text("ALTER TABLE trade ADD COLUMN strategy VARCHAR"))
+            changed = True
+        if "strategy_job_id" not in columns:
+            db.session.execute(text("ALTER TABLE trade ADD COLUMN strategy_job_id VARCHAR"))
+            changed = True
+        if changed:
+            db.session.commit()
+    except Exception as e:
+        logger.warning("[DATABASE] Could not ensure trade metadata columns: %s", e)
 
 def parse_datetime_utc(value):
     if isinstance(value, datetime):
@@ -58,6 +76,7 @@ def get_api_for_user(user_id):
     return LegacyCompatibleAlpacaClient(api_key, api_secret, BASE_URL)
 
 def record_open_trade(data, payload, user_id):
+    ensure_trade_table_columns()
     symbol = payload.get('symbol', '').replace('/', '')
     if not symbol:
         logger.error("[DATABASE] Attempted to record an open trade with no symbol.")
@@ -88,7 +107,9 @@ def record_open_trade(data, payload, user_id):
             open_price=open_price,
             open_time=parse_datetime_utc(data.get('open_time')) or datetime.now(timezone.utc),
             status='open',
-            action=payload.get('action', '')
+            action=payload.get('action', ''),
+            strategy=str(payload.get('strategy', '') or '').strip().lower() or None,
+            strategy_job_id=str(payload.get('strategy_job_id', '') or '').strip() or None,
         )
         db.session.add(t)
         db.session.commit()
@@ -99,6 +120,7 @@ def record_open_trade(data, payload, user_id):
     return None
 
 def record_closed_trade(data, payload, user_id, position_obj):
+    ensure_trade_table_columns()
     symbol = payload.get('symbol', '').replace('/', '')
     if not symbol:
         logger.error("[DATABASE] Attempted to record a closed trade with no symbol.")
@@ -256,6 +278,16 @@ def record_closed_trade(data, payload, user_id, position_obj):
     trade_to_update.profit_loss = pl
     trade_to_update.profit_loss_pct = pl_pct
     trade_to_update.action = payload.get('action', '')
+    trade_to_update.strategy = (
+        str(payload.get('strategy', '') or '').strip().lower()
+        or trade_to_update.strategy
+        or None
+    )
+    trade_to_update.strategy_job_id = (
+        str(payload.get('strategy_job_id', '') or '').strip()
+        or trade_to_update.strategy_job_id
+        or None
+    )
 
     db.session.commit()
     logger.info(f"[DATABASE] Closed position for user_id={user_id}, symbol={symbol} with P/L={pl:.2f}")

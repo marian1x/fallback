@@ -39,3 +39,5 @@ class Trade(db.Model):
     profit_loss = db.Column(db.Float)
     profit_loss_pct = db.Column(db.Float)
     action = db.Column(db.String, nullable=True)
+    strategy = db.Column(db.String, nullable=True)
+    strategy_job_id = db.Column(db.String, nullable=True)

@@ -57,6 +57,12 @@
             </select>
         </div>
         {% endif %}
+        <div class="col-md-auto">
+            <label for="strategyFilter" class="form-label small">Filter by Strategy</label>
+            <select id="strategyFilter" class="form-select form-select-sm">
+                <option value="all" selected>All Strategies</option>
+            </select>
+        </div>
     </div>
     
     <div class="row g-4">
@@ -68,6 +74,7 @@
                         <thead>
                             <tr>
                                 <th>{{ _('Symbol') }}</th>
+                                <th>Strategy</th>
                                 <th>{{ _('Side') }}</th>
                                 <th>{{ _('Open Price') }}</th>
                                 <th>{{ _('Close Price') }}</th>
@@ -144,6 +151,15 @@
                 allClosedOrders = [];
             } else {
                 allClosedOrders = data;
+                const strategyFilter = $('#strategyFilter');
+                const selectedStrategy = strategyFilter.val() || 'all';
+                const strategies = [...new Set(allClosedOrders.map((row) => row.strategy || 'unknown'))].sort();
+                strategyFilter.html('<option value="all" selected>All Strategies</option>');
+                strategies.forEach((strategy) => {
+                    const label = allClosedOrders.find((row) => (row.strategy || 'unknown') === strategy)?.strategy_label || strategy;
+                    strategyFilter.append(`<option value="${strategy}">${label}</option>`);
+                });
+                strategyFilter.val(strategies.includes(selectedStrategy) ? selectedStrategy : 'all');
             }
             renderFilteredTrades();
         }).fail(function(xhr) {
@@ -156,11 +172,15 @@
     function renderFilteredTrades() {
         if (!closedOrdersTable) return;
         const dateFrom = $('#dateFrom').val(), dateTo = $('#dateTo').val();
+        const strategyFilter = $('#strategyFilter').val() || 'all';
         const filtered = allClosedOrders.filter(r => {
             const closeTime = r.close_time || r.open_time;
             if (!closeTime) return false;
             const closeDate = localDateIso(closeTime);
-            return (!dateFrom || closeDate >= dateFrom) && (!dateTo || closeDate <= dateTo);
+            const tradeStrategy = r.strategy || 'unknown';
+            return (!dateFrom || closeDate >= dateFrom)
+                && (!dateTo || closeDate <= dateTo)
+                && (strategyFilter === 'all' || tradeStrategy === strategyFilter);
         });
         
         closedOrdersTable.clear();
@@ -173,7 +193,9 @@
             const closePrice = numericValue(r.close_price);
             const plPct = numericValue(r.profit_loss_pct);
             closedOrdersTable.row.add([
-                r.symbol.replace('USD', '/USD'), r.side ? r.side.toUpperCase() : '-',
+                r.symbol.replace('USD', '/USD'),
+                r.strategy_label || 'Unknown',
+                r.side ? r.side.toUpperCase() : '-',
                 openPrice !== null ? openPrice.toFixed(4) : '-', closePrice !== null ? closePrice.toFixed(4) : '-',
                 colorPL(numericValue(r.profit_loss), true), plPct !== null ? plPct.toFixed(2) + '%' : '-',
                 `<span data-order="${openTimeOrder}">${openTimeDisplay}</span>`,
@@ -214,7 +236,7 @@
             info: true,
             responsive: true,
             autoWidth: false,
-            order: [[7, "desc"]],
+            order: [[8, "desc"]],
             language: { emptyTable: 'No closed trades found for the selected filters.' }
         });
         
@@ -237,6 +259,7 @@
         fetchAndRenderTrades();
 
         $('#dateFrom, #dateTo, #userFilter').on('change', fetchAndRenderTrades);
+        $('#strategyFilter').on('change', renderFilteredTrades);
         
         $('[data-preset]').on('click', function() {
             const preset = $(this).data('preset'), now = luxon.DateTime.now().setZone(romaniaZone);

@@ -1216,6 +1216,63 @@ def result_row_for_timeframe(timeframe: str, res: BacktestResult) -> Dict[str, o
     return row
 
 
+def split_train_test_bars(df: pd.DataFrame, train_ratio: float) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if df.empty:
+        return df, df.iloc[0:0]
+    train_ratio = min(0.95, max(0.2, float(train_ratio)))
+    split_at = int(len(df) * train_ratio)
+    split_at = min(max(split_at, 1), max(1, len(df) - 1))
+    return df.iloc[:split_at].copy(), df.iloc[split_at:].copy()
+
+
+def result_or_error(strategy: str, df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, start_utc: datetime, end_utc: datetime) -> Tuple[Optional[BacktestResult], Optional[str]]:
+    try:
+        return run_strategy_backtest(strategy, df, params, cfg, start_utc, end_utc), None
+    except Exception as exc:
+        return None, str(exc)
+
+
+def validation_status(row: Optional[Dict[str, object]], args) -> Dict[str, object]:
+    checks = {
+        "min_net_profit": {"threshold": float(args.validation_min_net_profit), "actual": None, "pass": False},
+        "min_trades": {"threshold": int(args.validation_min_trades), "actual": None, "pass": False},
+        "min_win_rate_pct": {"threshold": float(args.validation_min_win_rate), "actual": None, "pass": False},
+        "min_profit_factor": {"threshold": float(args.validation_min_profit_factor), "actual": None, "pass": False},
+        "max_drawdown_pct": {"threshold": float(args.validation_max_drawdown_pct), "actual": None, "pass": False},
+    }
+    if not isinstance(row, dict):
+        return {"passed": False, "checks": checks, "reason": "missing_validation_result"}
+
+    def f(key: str) -> Optional[float]:
+        try:
+            value = row.get(key)
+            if value is None:
+                return None
+            return float(value)
+        except Exception:
+            return None
+
+    values = {
+        "min_net_profit": f("net_profit"),
+        "min_trades": f("total_trades"),
+        "min_win_rate_pct": f("win_rate_pct"),
+        "min_profit_factor": f("profit_factor"),
+        "max_drawdown_pct": f("max_drawdown_pct"),
+    }
+    checks["min_net_profit"]["actual"] = values["min_net_profit"]
+    checks["min_trades"]["actual"] = values["min_trades"]
+    checks["min_win_rate_pct"]["actual"] = values["min_win_rate_pct"]
+    checks["min_profit_factor"]["actual"] = values["min_profit_factor"]
+    checks["max_drawdown_pct"]["actual"] = values["max_drawdown_pct"]
+    checks["min_net_profit"]["pass"] = values["min_net_profit"] is not None and values["min_net_profit"] >= float(args.validation_min_net_profit)
+    checks["min_trades"]["pass"] = values["min_trades"] is not None and values["min_trades"] >= int(args.validation_min_trades)
+    checks["min_win_rate_pct"]["pass"] = values["min_win_rate_pct"] is not None and values["min_win_rate_pct"] >= float(args.validation_min_win_rate)
+    checks["min_profit_factor"]["pass"] = values["min_profit_factor"] is not None and values["min_profit_factor"] >= float(args.validation_min_profit_factor)
+    checks["max_drawdown_pct"]["pass"] = values["max_drawdown_pct"] is not None and values["max_drawdown_pct"] <= float(args.validation_max_drawdown_pct)
+    failed = [name for name, check in checks.items() if not check["pass"]]
+    return {"passed": not failed, "checks": checks, "failed_checks": failed}
+
+
 def init_backtest_worker(df: pd.DataFrame, cfg: BacktestConfig, start_utc: datetime, end_utc: datetime, strategy: str = "keltner") -> None:
     global _WORKER_DF, _WORKER_CFG, _WORKER_START, _WORKER_END, _WORKER_STRATEGY
     _WORKER_DF = df
@@ -1398,6 +1455,13 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--trade-direction", type=str, default="Both", choices=["Both", "Long Only", "Short Only"])
+    parser.add_argument("--validation-enabled", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--validation-train-ratio", type=float, default=0.70)
+    parser.add_argument("--validation-min-trades", type=int, default=30)
+    parser.add_argument("--validation-min-win-rate", type=float, default=55.0)
+    parser.add_argument("--validation-min-profit-factor", type=float, default=1.3)
+    parser.add_argument("--validation-max-drawdown-pct", type=float, default=8.0)
+    parser.add_argument("--validation-min-net-profit", type=float, default=0.0)
 
     parser.add_argument("--inner-len-range", type=str, default="8:40:1")
     parser.add_argument("--inner-mult-range", type=str, default="0.6:1.8:0.1")
@@ -1516,6 +1580,11 @@ def main() -> None:
     reference_timeframe = None
     reference_result = None
     bars_count_by_timeframe: Dict[str, int] = {}
+    train_bars_count_by_timeframe: Dict[str, int] = {}
+    test_bars_count_by_timeframe: Dict[str, int] = {}
+    bars_by_timeframe: Dict[str, pd.DataFrame] = {}
+    train_ranges_by_timeframe: Dict[str, Dict[str, Optional[str]]] = {}
+    test_ranges_by_timeframe: Dict[str, Dict[str, Optional[str]]] = {}
     optimizer_jobs = resolve_optimizer_jobs(args.jobs)
     if args.optimizer_engine == "tpe":
         print("Optuna TPE runs sequentially in this implementation; CPU Jobs is used by the random engine.")
@@ -1526,9 +1595,22 @@ def main() -> None:
         tf_bars = resample_bars(bars, tf_label)
         tf_bars = filter_session(tf_bars, args.session)
         bars_count_by_timeframe[tf_label] = int(len(tf_bars))
+        bars_by_timeframe[tf_label] = tf_bars
         if tf_bars.empty:
             print(f"Skipping {tf_label}: no bars after session filter '{args.session}'.")
             continue
+        train_bars, test_bars = split_train_test_bars(tf_bars, args.validation_train_ratio) if args.validation_enabled else (tf_bars, tf_bars.iloc[0:0])
+        optimize_bars = train_bars if args.validation_enabled else tf_bars
+        train_bars_count_by_timeframe[tf_label] = int(len(train_bars))
+        test_bars_count_by_timeframe[tf_label] = int(len(test_bars))
+        train_ranges_by_timeframe[tf_label] = {
+            "start": train_bars.index[0].isoformat() if not train_bars.empty else None,
+            "end": train_bars.index[-1].isoformat() if not train_bars.empty else None,
+        }
+        test_ranges_by_timeframe[tf_label] = {
+            "start": test_bars.index[0].isoformat() if not test_bars.empty else None,
+            "end": test_bars.index[-1].isoformat() if not test_bars.empty else None,
+        }
 
         params_template = deepcopy(base_params)
         if all(len(values) == 1 for values in ranges.values()):
@@ -1555,7 +1637,7 @@ def main() -> None:
         seen = set()
         params_template.trade_direction = args.trade_direction
         try:
-            base_result = run_strategy_backtest(strategy_name, tf_bars, params_template, cfg, start_utc, end_utc)
+            base_result = run_strategy_backtest(strategy_name, optimize_bars, params_template, cfg, start_utc, end_utc)
         except Exception as exc:
             print(f"Skipping {tf_label}: {exc}")
             continue
@@ -1573,7 +1655,7 @@ def main() -> None:
         if args.optimizer_engine == "tpe" and has_search_space:
             run_tpe_trials(
                 tf_label=tf_label,
-                tf_bars=tf_bars,
+                tf_bars=optimize_bars,
                 cfg=cfg,
                 start_utc=start_utc,
                 end_utc=end_utc,
@@ -1598,7 +1680,7 @@ def main() -> None:
 
         if optimizer_jobs <= 1 or len(sampled_params) <= 1:
             result_iter = (safe_backtest_worker(p) for p in sampled_params)
-            init_backtest_worker(tf_bars, cfg, start_utc, end_utc, strategy_name)
+            init_backtest_worker(optimize_bars, cfg, start_utc, end_utc, strategy_name)
             for i, res in enumerate(result_iter, start=1):
                 if res is not None:
                     all_results.append((tf_label, res))
@@ -1612,7 +1694,7 @@ def main() -> None:
             with ProcessPoolExecutor(
                 max_workers=optimizer_jobs,
                 initializer=init_backtest_worker,
-                initargs=(tf_bars, cfg, start_utc, end_utc, strategy_name),
+                initargs=(optimize_bars, cfg, start_utc, end_utc, strategy_name),
             ) as executor:
                 for i, res in enumerate(executor.map(safe_backtest_worker, sampled_params, chunksize=chunksize), start=1):
                     if res is not None:
@@ -1644,7 +1726,51 @@ def main() -> None:
         for tf_label, res in top:
             writer.writerow(result_row_for_timeframe(tf_label, res))
 
-    best_timeframe, best = top[0]
+    best_timeframe, best_train = top[0]
+    best_params = best_train.params
+    best_bars = bars_by_timeframe.get(best_timeframe)
+    best_full = best_train
+    full_error = None
+    if best_bars is not None:
+        best_full, full_error = result_or_error(strategy_name, best_bars, best_params, cfg, start_utc, end_utc)
+        if best_full is None:
+            best_full = best_train
+
+    train_result = best_train
+    test_result = None
+    test_error = None
+    if args.validation_enabled and best_bars is not None:
+        train_bars, test_bars = split_train_test_bars(best_bars, args.validation_train_ratio)
+        train_result, train_error = result_or_error(strategy_name, train_bars, best_params, cfg, start_utc, end_utc)
+        if train_result is None:
+            train_result = best_train
+        test_result, test_error = result_or_error(strategy_name, test_bars, best_params, cfg, start_utc, end_utc)
+    else:
+        train_error = None
+
+    best = best_full
+    train_row = result_row_for_timeframe(best_timeframe, train_result) if train_result is not None else None
+    test_row = result_row_for_timeframe(best_timeframe, test_result) if test_result is not None else None
+    full_row = result_row_for_timeframe(best_timeframe, best_full)
+    validation = {
+        "enabled": bool(args.validation_enabled),
+        "method": "single_train_test_split",
+        "train_ratio": float(args.validation_train_ratio),
+        "train_date_range_utc": train_ranges_by_timeframe.get(best_timeframe),
+        "test_date_range_utc": test_ranges_by_timeframe.get(best_timeframe),
+        "thresholds": {
+            "min_net_profit": float(args.validation_min_net_profit),
+            "min_trades": int(args.validation_min_trades),
+            "min_win_rate_pct": float(args.validation_min_win_rate),
+            "min_profit_factor": float(args.validation_min_profit_factor),
+            "max_drawdown_pct": float(args.validation_max_drawdown_pct),
+        },
+        "optimization_result": train_row,
+        "test_result": test_row,
+        "full_result": full_row,
+        "status": validation_status(test_row, args) if args.validation_enabled else {"passed": True, "checks": {}, "reason": "disabled"},
+        "errors": {"train": train_error, "test": test_error, "full": full_error},
+    }
     report = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "strategy": strategy_name,
@@ -1659,12 +1785,15 @@ def main() -> None:
         "date_range_utc": {"start": start_utc.isoformat(), "end": end_utc.isoformat()},
         "bars_count": int(bars_count_by_timeframe.get(best_timeframe, 0)),
         "bars_count_by_timeframe": bars_count_by_timeframe,
+        "train_bars_count_by_timeframe": train_bars_count_by_timeframe,
+        "test_bars_count_by_timeframe": test_bars_count_by_timeframe,
         "session_filter": args.session,
         "config": asdict(cfg),
         "reference_properties": {k: str(v) for k, v in ref_props.items()},
         "reference_metrics": ref_data,
         "reference_result": result_row_for_timeframe(reference_timeframe or best_timeframe, reference_result or best),
-        "best_result": result_row_for_timeframe(best_timeframe, best),
+        "best_result": full_row,
+        "validation": validation,
         "best_trades": best.trades,
         "top_results": [result_row_for_timeframe(tf_label, res) for tf_label, res in top],
     }
@@ -1678,6 +1807,8 @@ def main() -> None:
     print(f"Net profit: {best.net_profit:.2f} USD ({best.return_pct:.2f}%)")
     print(f"Profit factor: {best.profit_factor:.3f} | Sharpe: {best.sharpe:.3f}")
     print(f"Trades: {best.total_trades} | Win rate: {best.win_rate_pct:.2f}% | Max DD: {best.max_drawdown_pct:.2f}%")
+    if args.validation_enabled:
+        print(f"Out-of-sample validation: {'PASS' if validation['status'].get('passed') else 'FAIL'}")
     print("Params:")
     for k, v in asdict(best.params).items():
         print(f"  - {k}: {v}")
