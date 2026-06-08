@@ -83,7 +83,7 @@ def main() -> int:
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--work-dir", default=str(PROJECT_ROOT / ".remote_optimizer_work"))
     parser.add_argument("--poll-seconds", type=int, default=10)
-    parser.add_argument("--request-timeout", type=int, default=30)
+    parser.add_argument("--request-timeout", type=int, default=180)
     parser.add_argument("--workers", type=int, default=1, help="Parallel queue workers for multiple queued symbols.")
     parser.add_argument("--accelerator", choices=["auto", "cpu", "gpu"], default=os.getenv("STRATEGY_ACCELERATOR", "auto"))
     parser.add_argument("--log-file", default=str(PROJECT_ROOT / "strategy_agent.log"))

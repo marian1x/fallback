@@ -74,10 +74,10 @@ def get_default_strategy_config() -> Dict:
         "accelerator": "auto",
         "validation_enabled": True,
         "validation_train_ratio": 0.70,
-        "validation_min_trades": 30,
-        "validation_min_win_rate_pct": 55,
-        "validation_min_profit_factor": 1.3,
-        "validation_max_drawdown_pct": 8,
+        "validation_min_trades": 5,
+        "validation_min_win_rate_pct": 45,
+        "validation_min_profit_factor": 1.05,
+        "validation_max_drawdown_pct": 15,
         "validation_min_net_profit": 0,
         "daily_max_trades_per_symbol": 3,
         "daily_max_losses_per_symbol": 2,
@@ -97,6 +97,9 @@ def get_default_strategy_config() -> Dict:
         "initial_capital": 8000,
         "base_currency": "USD",
         "order_size": 2000,
+        "order_size_keltner": 2000,
+        "order_size_macd_sma": 5000,
+        "macd_priority_enabled": True,
         "pyramiding": 0,
         "commission_pct": 0.04,
         "verify_price_ticks": 0,
@@ -160,7 +163,7 @@ def normalize_universe(raw_entries) -> List[Dict]:
         if not isinstance(item, dict):
             continue
         symbol = normalize_symbol(item.get("symbol", ""))
-        if not symbol or symbol in seen:
+        if not symbol:
             continue
         mode = str(item.get("mode", "both")).strip().lower()
         if mode not in SIGNAL_MODES:
@@ -173,6 +176,9 @@ def normalize_universe(raw_entries) -> List[Dict]:
         strategy = str(item.get("strategy") or (backtest or {}).get("strategy") or "keltner").strip().lower()
         if strategy not in STRATEGY_CHOICES:
             strategy = "keltner"
+        key = (symbol, strategy)
+        if key in seen:
+            continue
         entries.append({
             "symbol": symbol,
             "strategy": strategy,
@@ -181,7 +187,7 @@ def normalize_universe(raw_entries) -> List[Dict]:
             "notes": notes,
             "backtest": backtest,
         })
-        seen.add(symbol)
+        seen.add(key)
     return entries
 
 
@@ -232,12 +238,43 @@ def save_strategy_config(cfg: Dict) -> None:
 def strategy_mode_for_symbol(symbol: str, cfg: Dict | None = None) -> str:
     cfg = cfg or load_strategy_config()
     target = normalize_symbol(symbol)
+    modes = set()
+    seen_symbol = False
+    enabled_rows = 0
     for entry in normalize_universe(cfg.get("universe")):
-        if entry["symbol"] == target:
-            if not entry.get("enabled", True):
-                return "disabled"
-            return entry.get("mode", "both")
+        if entry["symbol"] != target:
+            continue
+        seen_symbol = True
+        if not entry.get("enabled", True):
+            continue
+        enabled_rows += 1
+        mode = str(entry.get("mode", "both") or "both").strip().lower()
+        if mode == "both":
+            return "both"
+        if mode in {"local", "tw"}:
+            modes.add(mode)
+    if "local" in modes and "tw" in modes:
+        return "both"
+    if "local" in modes:
+        return "local"
+    if "tw" in modes:
+        return "tw"
+    if seen_symbol and enabled_rows == 0:
+        return "disabled"
     return "tw"
+
+
+def strategy_entries_for_symbol(symbol: str, cfg: Dict | None = None, *, enabled_only: bool = False) -> List[Dict]:
+    cfg = cfg or load_strategy_config()
+    target = normalize_symbol(symbol)
+    out = []
+    for entry in normalize_universe(cfg.get("universe")):
+        if entry["symbol"] != target:
+            continue
+        if enabled_only and not entry.get("enabled", True):
+            continue
+        out.append(entry)
+    return out
 
 
 def tradingview_allowed_for_symbol(symbol: str, cfg: Dict | None = None) -> bool:

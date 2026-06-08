@@ -116,7 +116,7 @@ def test_macd_sma_entry_uses_strategy_payload(tmp_path):
     engine.evaluate_entry_macd_sma(
         user=user,
         api=api,
-        cfg={"order_size": 500},
+        cfg={"order_size": 500, "order_size_macd_sma": 5000},
         symbol="AAPL",
         latest_price=101,
         params=params,
@@ -130,6 +130,7 @@ def test_macd_sma_entry_uses_strategy_payload(tmp_path):
     assert executed[0]["action"] == "buy"
     assert executed[0]["strategy"] == "macd_sma"
     assert executed[0]["strategy_job_id"] == "job2"
+    assert executed[0]["amount"] == 5000
 
 
 def test_strategy_backtest_mismatch_rejects_entry(tmp_path):
@@ -174,9 +175,49 @@ def test_oos_quality_gate_requires_passed_validation(tmp_path):
     app = SimpleNamespace(instance_path=str(tmp_path))
     engine = LocalStrategyEngine(app, lambda *_: None, "https://paper-api.alpaca.markets", logging.getLogger("test"))
 
-    assert "missing" in engine.oos_entry_rejection_reason({}) 
+    assert engine.oos_entry_rejection_reason({}) is None
     failed = {"validation": {"enabled": True, "status": {"passed": False, "failed_checks": ["min_profit_factor"]}}}
     passed = {"validation": {"enabled": True, "status": {"passed": True}}}
 
     assert "min_profit_factor" in engine.oos_entry_rejection_reason(failed)
     assert engine.oos_entry_rejection_reason(passed) is None
+
+
+def test_oos_quality_gate_recalculates_with_current_thresholds(tmp_path):
+    app = SimpleNamespace(instance_path=str(tmp_path))
+    engine = LocalStrategyEngine(app, lambda *_: None, "https://paper-api.alpaca.markets", logging.getLogger("test"))
+
+    backtest = {
+        "validation": {
+            "enabled": True,
+            "status": {
+                "passed": False,
+                "failed_checks": ["min_profit_factor", "max_drawdown_pct"],
+                "checks": {
+                    "min_trades": {"actual": 8},
+                    "min_win_rate_pct": {"actual": 48},
+                    "min_profit_factor": {"actual": 1.08},
+                    "max_drawdown_pct": {"actual": 14},
+                    "min_net_profit": {"actual": 250},
+                },
+            },
+        }
+    }
+
+    strict_cfg = {
+        "validation_min_trades": 10,
+        "validation_min_win_rate_pct": 55,
+        "validation_min_profit_factor": 1.2,
+        "validation_max_drawdown_pct": 10,
+        "validation_min_net_profit": 0,
+    }
+    relaxed_cfg = {
+        "validation_min_trades": 5,
+        "validation_min_win_rate_pct": 45,
+        "validation_min_profit_factor": 1.05,
+        "validation_max_drawdown_pct": 15,
+        "validation_min_net_profit": 0,
+    }
+
+    assert "min_trades" in engine.oos_entry_rejection_reason(backtest, strict_cfg)
+    assert engine.oos_entry_rejection_reason(backtest, relaxed_cfg) is None

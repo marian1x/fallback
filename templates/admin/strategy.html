@@ -361,20 +361,20 @@
                                                     <input type="text" name="macd_sma_range" class="form-control" value="{{ config.macd_sma_range|default('100:250:10') }}">
                                                 </div>
                                                 <div class="col-6 col-lg-3">
-                                                    <label class="form-label">OOS Min Trades {{ tip('Minimum number of trades required in the out-of-sample validation segment before a run is considered promotable.') }}</label>
-                                                    <input type="number" min="1" name="validation_min_trades" class="form-control" value="{{ config.validation_min_trades|default(30) }}">
+                                                    <label class="form-label">OOS Min Trades {{ tip('Minimum number of trades required in the out-of-sample validation segment before a run is considered promotable. Lower values work better for slower strategies like MACD + SMA.') }}</label>
+                                                    <input type="number" min="1" name="validation_min_trades" class="form-control" value="{{ config.validation_min_trades|default(5) }}">
                                                 </div>
                                                 <div class="col-6 col-lg-3">
                                                     <label class="form-label">OOS Min Win % {{ tip('Minimum out-of-sample win rate percentage required by the validation gate.') }}</label>
-                                                    <input type="number" step="0.1" name="validation_min_win_rate_pct" class="form-control" value="{{ config.validation_min_win_rate_pct|default(55) }}">
+                                                    <input type="number" step="0.1" name="validation_min_win_rate_pct" class="form-control" value="{{ config.validation_min_win_rate_pct|default(45) }}">
                                                 </div>
                                                 <div class="col-6 col-lg-3">
                                                     <label class="form-label">OOS Min PF {{ tip('Minimum out-of-sample profit factor required by the validation gate. Values above 1 mean gross profit exceeds gross loss.') }}</label>
-                                                    <input type="number" step="0.1" name="validation_min_profit_factor" class="form-control" value="{{ config.validation_min_profit_factor|default(1.3) }}">
+                                                    <input type="number" step="0.1" name="validation_min_profit_factor" class="form-control" value="{{ config.validation_min_profit_factor|default(1.05) }}">
                                                 </div>
                                                 <div class="col-6 col-lg-3">
                                                     <label class="form-label">OOS Max DD % {{ tip('Maximum drawdown percentage allowed in the out-of-sample validation slice.') }}</label>
-                                                    <input type="number" step="0.1" name="validation_max_drawdown_pct" class="form-control" value="{{ config.validation_max_drawdown_pct|default(8) }}">
+                                                    <input type="number" step="0.1" name="validation_max_drawdown_pct" class="form-control" value="{{ config.validation_max_drawdown_pct|default(15) }}">
                                                 </div>
                                             </div>
                                         </div>
@@ -442,6 +442,20 @@
                                     <label class="form-label">Daily Loss $</label>
                                     <input type="number" min="0" step="1" name="daily_max_loss_usd_per_symbol" class="form-control" value="{{ config.daily_max_loss_usd_per_symbol|default(100) }}">
                                 </div>
+                                <div class="col-6 col-lg-2">
+                                    <label class="form-label">Keltner $ {{ tip('Live local notional used when the Keltner strategy opens a new position.') }}</label>
+                                    <input type="number" min="1" step="1" name="order_size_keltner" class="form-control" value="{{ config.order_size_keltner|default(config.order_size|default(2000)) }}">
+                                </div>
+                                <div class="col-6 col-lg-2">
+                                    <label class="form-label">MACD $ {{ tip('Live local notional used when the MACD + SMA strategy opens a new position. Use a larger size here for lower-frequency setups.') }}</label>
+                                    <input type="number" min="1" step="1" name="order_size_macd_sma" class="form-control" value="{{ config.order_size_macd_sma|default(5000) }}">
+                                </div>
+                                <div class="col-12 col-lg-4 d-flex align-items-end">
+                                    <div class="form-check form-switch mb-2">
+                                        <input class="form-check-input" type="checkbox" name="macd_priority_enabled" id="macdPriorityEnabled" {% if config.macd_priority_enabled|default(true) %}checked{% endif %}>
+                                        <label class="form-check-label" for="macdPriorityEnabled">MACD priority on shared symbols {{ tip('When the same symbol exists in the local universe for both MACD + SMA and Keltner, evaluate MACD first. If MACD owns the open position, Keltner stays paused until that trade is closed.') }}</label>
+                                    </div>
+                                </div>
                             </div>
 
                             <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2 mb-2">
@@ -455,7 +469,7 @@
                                     <thead>
                                         <tr>
                                             <th>Symbol {{ tip('Must be available in the Alpaca tradable list.') }}</th>
-                                            <th>Strategy {{ tip('Strategia locala folosita pentru acest simbol. Parametrii vin din backtestul salvat pe rand.') }}</th>
+                                            <th>Strategy {{ tip('Strategia locala folosita pentru acest simbol. You can keep the same symbol on multiple rows if each row uses a different strategy/backtest.') }}</th>
                                             <th>Mode {{ tip('Local: ignore TW and use local strategy later. TradingView: TW only. Both: compare both. Disabled: block symbol.') }}</th>
                                             <th>Active {{ tip('Fast on/off switch for this row.') }}</th>
                                             <th>Backtest Result {{ tip('Rezultatul salvat pentru acest stock. Parametrii castigatori sunt ascunsi in Details.') }}</th>

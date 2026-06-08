@@ -66,10 +66,10 @@ class LocalStrategyEngine:
         self.close_recovery_max_attempts = int(os.getenv("LOCAL_STRATEGY_CLOSE_RECOVERY_MAX_ATTEMPTS", "0"))
         self.api_failure_cooldown_seconds = int(os.getenv("LOCAL_STRATEGY_API_FAILURE_COOLDOWN_SECONDS", "120"))
         self.log_throttle_seconds = int(os.getenv("LOCAL_STRATEGY_LOG_THROTTLE_SECONDS", "900"))
-        self.min_backtest_trades = int(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_TRADES", "30"))
-        self.min_backtest_win_rate_pct = float(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_WIN_RATE_PCT", "55"))
-        self.min_backtest_profit_factor = float(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_PROFIT_FACTOR", "1.3"))
-        self.max_backtest_drawdown_pct = float(os.getenv("LOCAL_STRATEGY_MAX_BACKTEST_DRAWDOWN_PCT", "8"))
+        self.min_backtest_trades = int(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_TRADES", "5"))
+        self.min_backtest_win_rate_pct = float(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_WIN_RATE_PCT", "45"))
+        self.min_backtest_profit_factor = float(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_PROFIT_FACTOR", "1.05"))
+        self.max_backtest_drawdown_pct = float(os.getenv("LOCAL_STRATEGY_MAX_BACKTEST_DRAWDOWN_PCT", "15"))
         self.min_backtest_net_profit = float(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_NET_PROFIT", "0"))
         self.daily_max_trades_per_symbol = int(os.getenv("LOCAL_STRATEGY_DAILY_MAX_TRADES_PER_SYMBOL", "3"))
         self.daily_max_losses_per_symbol = int(os.getenv("LOCAL_STRATEGY_DAILY_MAX_LOSSES_PER_SYMBOL", "2"))
@@ -153,8 +153,8 @@ class LocalStrategyEngine:
             self.state["api_cooldown_reason"] = str(reason)[:500]
         self.save_state()
 
-    def log_symbol_throttled(self, symbol: str, key: str, level: int, message: str, *args, interval: Optional[int] = None) -> None:
-        st = self.symbol_state(symbol)
+    def log_symbol_throttled(self, symbol: str, key: str, level: int, message: str, *args, interval: Optional[int] = None, strategy: Optional[str] = None) -> None:
+        st = self.symbol_state(symbol, strategy)
         now = datetime.now(timezone.utc)
         state_key = f"last_log_{key}_utc"
         last = self._parse_state_time(st.get(state_key))
@@ -201,12 +201,24 @@ class LocalStrategyEngine:
             )
             return
 
+        entries = []
         for entry in strategy_store.normalize_universe(cfg.get("universe")):
             if not entry.get("enabled", True):
                 continue
             symbol = strategy_store.normalize_symbol(entry.get("symbol", ""))
             if not symbol or not strategy_store.local_allowed_for_symbol(symbol, cfg):
                 continue
+            entries.append(entry)
+
+        entries.sort(
+            key=lambda item: (
+                strategy_store.normalize_symbol(item.get("symbol", "")),
+                self.strategy_priority(item.get("strategy"), cfg),
+            )
+        )
+
+        for entry in entries:
+            symbol = strategy_store.normalize_symbol(entry.get("symbol", ""))
             backtest = entry.get("backtest")
             if not isinstance(backtest, dict):
                 self.log_symbol_throttled(
@@ -215,6 +227,7 @@ class LocalStrategyEngine:
                     logging.INFO,
                     "[LOCAL_STRATEGY] %s skipped: no saved backtest config.",
                     symbol,
+                    strategy=entry.get("strategy"),
                 )
                 continue
             try:
@@ -246,9 +259,17 @@ class LocalStrategyEngine:
             return None
         return LegacyCompatibleAlpacaClient(api_key, api_secret, self.base_url)
 
-    def symbol_state(self, symbol: str) -> Dict:
+    def state_symbol_key(self, symbol: str, strategy: Optional[str] = None) -> str:
+        normalized_symbol = strategy_store.normalize_symbol(symbol)
+        normalized_strategy = str(strategy or "").strip().lower()
+        if normalized_strategy:
+            return f"{normalized_symbol}::{normalized_strategy}"
+        return normalized_symbol
+
+    def symbol_state(self, symbol: str, strategy: Optional[str] = None) -> Dict:
+        state_key = self.state_symbol_key(symbol, strategy)
         with self.state_lock:
-            return self.state.setdefault("symbols", {}).setdefault(symbol, {})
+            return self.state.setdefault("symbols", {}).setdefault(state_key, {})
 
     def _parse_state_time(self, value) -> Optional[datetime]:
         if not value:
@@ -261,8 +282,8 @@ class LocalStrategyEngine:
         except Exception:
             return None
 
-    def entry_check_deferred(self, symbol: str, timeframe: str) -> bool:
-        st = self.symbol_state(symbol)
+    def entry_check_deferred(self, symbol: str, timeframe: str, strategy: Optional[str] = None) -> bool:
+        st = self.symbol_state(symbol, strategy)
         due = self._parse_state_time(st.get("next_entry_check_utc"))
         now = datetime.now(timezone.utc)
         max_delay = max(self.poll_seconds, self.entry_refetch_seconds)
@@ -274,8 +295,8 @@ class LocalStrategyEngine:
             return True
         return False
 
-    def defer_next_entry_check(self, symbol: str, timeframe: str) -> None:
-        st = self.symbol_state(symbol)
+    def defer_next_entry_check(self, symbol: str, timeframe: str, strategy: Optional[str] = None) -> None:
+        st = self.symbol_state(symbol, strategy)
         delay = max(self.poll_seconds, self.entry_refetch_seconds)
         st["next_entry_check_utc"] = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
 
@@ -301,6 +322,51 @@ class LocalStrategyEngine:
             "max_intraday_loss_pct": float(params.get("max_intraday_loss_pct", cfg.get("max_intraday_loss_pct", 50))),
         }
 
+    def strategy_priority(self, strategy: str, cfg: Optional[Dict] = None) -> int:
+        normalized = str(strategy or "").strip().lower()
+        if cfg and not bool(cfg.get("macd_priority_enabled", True)):
+            return 0
+        if normalized == "macd_sma":
+            return 0
+        if normalized == "keltner":
+            return 1
+        return 99
+
+    def local_strategies_for_symbol(self, cfg: Dict, symbol: str) -> list[str]:
+        strategies = []
+        for entry in strategy_store.strategy_entries_for_symbol(symbol, cfg, enabled_only=True):
+            mode = str(entry.get("mode", "both") or "both").strip().lower()
+            if mode in {"local", "both"}:
+                strategy = str(entry.get("strategy") or "keltner").strip().lower()
+                if strategy not in strategies:
+                    strategies.append(strategy)
+        strategies.sort(key=lambda item: self.strategy_priority(item, cfg))
+        return strategies
+
+    def order_amount_for_strategy(self, cfg: Dict, strategy: str, user: User) -> float:
+        normalized = str(strategy or "").strip().lower()
+        fallback = float(cfg.get("order_size", user.per_trade_amount))
+        if normalized == "macd_sma":
+            return float(cfg.get("order_size_macd_sma", fallback))
+        if normalized == "keltner":
+            return float(cfg.get("order_size_keltner", fallback))
+        return fallback
+
+    def active_open_trade(self, user: User, symbol: str) -> Optional[Trade]:
+        return (
+            Trade.query
+            .filter_by(user_id=user.id, symbol=symbol, status="open")
+            .order_by(Trade.open_time.desc(), Trade.id.desc())
+            .first()
+        )
+
+    def active_open_trade_strategy(self, user: User, symbol: str) -> Optional[str]:
+        trade = self.active_open_trade(user, symbol)
+        if not trade:
+            return None
+        strategy = str(trade.strategy or "").strip().lower()
+        return strategy or None
+
     def backtest_entry_rejection_reason(self, backtest: Dict) -> Optional[str]:
         metrics = backtest.get("metrics") if isinstance(backtest.get("metrics"), dict) else {}
         total_trades = self._metric_float(metrics, "total_trades")
@@ -320,13 +386,64 @@ class LocalStrategyEngine:
             return f"backtest max drawdown {max_drawdown:.2f}% > {self.max_backtest_drawdown_pct:.2f}%"
         return None
 
-    def oos_entry_rejection_reason(self, backtest: Dict) -> Optional[str]:
+    def validation_thresholds(self, cfg: Optional[Dict]) -> Dict[str, float]:
+        cfg = cfg or {}
+        return {
+            "min_net_profit": float(cfg.get("validation_min_net_profit", 0)),
+            "min_trades": float(cfg.get("validation_min_trades", 5)),
+            "min_win_rate_pct": float(cfg.get("validation_min_win_rate_pct", 45)),
+            "min_profit_factor": float(cfg.get("validation_min_profit_factor", 1.05)),
+            "max_drawdown_pct": float(cfg.get("validation_max_drawdown_pct", 15)),
+        }
+
+    def validation_actuals(self, validation: Dict) -> Dict[str, Optional[float]]:
+        status = validation.get("status") if isinstance(validation.get("status"), dict) else {}
+        checks = status.get("checks") if isinstance(status.get("checks"), dict) else {}
+        test_metrics = validation.get("test_metrics") if isinstance(validation.get("test_metrics"), dict) else {}
+
+        def actual(check_key: str, metric_key: Optional[str] = None) -> Optional[float]:
+            metric_name = metric_key or check_key
+            if metric_name in test_metrics:
+                return self._metric_float(test_metrics, metric_name)
+            check = checks.get(check_key) if isinstance(checks.get(check_key), dict) else {}
+            return self._metric_float(check, "actual")
+
+        return {
+            "min_net_profit": actual("min_net_profit", "net_profit"),
+            "min_trades": actual("min_trades", "total_trades"),
+            "min_win_rate_pct": actual("min_win_rate_pct", "win_rate_pct"),
+            "min_profit_factor": actual("min_profit_factor", "profit_factor"),
+            "max_drawdown_pct": actual("max_drawdown_pct", "max_drawdown_pct"),
+        }
+
+    def failed_validation_checks(self, actuals: Dict[str, Optional[float]], cfg: Optional[Dict]) -> list[str]:
+        thresholds = self.validation_thresholds(cfg)
+        failed = []
+        if actuals.get("min_net_profit") is not None and actuals["min_net_profit"] < thresholds["min_net_profit"]:
+            failed.append("min_net_profit")
+        if actuals.get("min_trades") is not None and actuals["min_trades"] < thresholds["min_trades"]:
+            failed.append("min_trades")
+        if actuals.get("min_win_rate_pct") is not None and actuals["min_win_rate_pct"] < thresholds["min_win_rate_pct"]:
+            failed.append("min_win_rate_pct")
+        if actuals.get("min_profit_factor") is not None and actuals["min_profit_factor"] < thresholds["min_profit_factor"]:
+            failed.append("min_profit_factor")
+        if actuals.get("max_drawdown_pct") is not None and actuals["max_drawdown_pct"] > thresholds["max_drawdown_pct"]:
+            failed.append("max_drawdown_pct")
+        return failed
+
+    def oos_entry_rejection_reason(self, backtest: Dict, cfg: Optional[Dict] = None) -> Optional[str]:
         validation = backtest.get("validation") if isinstance(backtest.get("validation"), dict) else None
         if not validation or not validation.get("enabled", True):
-            return "missing out-of-sample validation"
+            return None
         status = validation.get("status") if isinstance(validation.get("status"), dict) else {}
-        if not status.get("passed"):
-            failed = status.get("failed_checks") or []
+        actuals = self.validation_actuals(validation)
+        if any(value is not None for value in actuals.values()):
+            failed = self.failed_validation_checks(actuals, cfg)
+        elif not status.get("passed"):
+            failed = list(status.get("failed_checks") or [])
+        else:
+            failed = []
+        if failed:
             if failed:
                 return f"out-of-sample validation failed: {', '.join(map(str, failed))}"
             return "out-of-sample validation failed"
@@ -419,6 +536,7 @@ class LocalStrategyEngine:
         row_strategy = str(entry.get("strategy") or "").strip().lower()
         if row_strategy:
             params["strategy"] = row_strategy
+        strategy_name = params.get("strategy")
         if params.get("strategy") not in {"keltner", "macd_sma"}:
             self.log_symbol_throttled(
                 symbol,
@@ -427,8 +545,9 @@ class LocalStrategyEngine:
                 "[LOCAL_STRATEGY] %s skipped: strategy '%s' is not implemented in local execution.",
                 symbol,
                 params.get("strategy"),
+                strategy=strategy_name,
             )
-            self.defer_next_entry_check(symbol, str(backtest.get("timeframe") or cfg.get("timeframe", "30Min")))
+            self.defer_next_entry_check(symbol, str(backtest.get("timeframe") or cfg.get("timeframe", "30Min")), strategy_name)
             self.save_state()
             return
         timeframe = normalize_timeframe_token(backtest.get("timeframe") or cfg.get("timeframe", "30Min"))
@@ -436,8 +555,37 @@ class LocalStrategyEngine:
         session = str(backtest.get("session") or cfg.get("session", "regular"))
 
         position = self.get_position(api, symbol)
-        if position is None and self.entry_check_deferred(symbol, timeframe):
+        if position is None and self.entry_check_deferred(symbol, timeframe, strategy_name):
             return
+        if position is not None:
+            active_strategy = self.active_open_trade_strategy(user, symbol)
+            if active_strategy and active_strategy != strategy_name:
+                self.log_symbol_throttled(
+                    symbol,
+                    "position_owned_by_other_strategy",
+                    logging.INFO,
+                    "[LOCAL_STRATEGY] %s skipped for %s: open position is owned by strategy '%s'.",
+                    symbol,
+                    strategy_name,
+                    active_strategy,
+                    strategy=strategy_name,
+                )
+                return
+            if not active_strategy:
+                strategies = self.local_strategies_for_symbol(cfg, symbol)
+                preferred = strategies[0] if strategies else None
+                if preferred and len(strategies) > 1 and strategy_name != preferred:
+                    self.log_symbol_throttled(
+                        symbol,
+                        "position_owner_unknown",
+                        logging.INFO,
+                        "[LOCAL_STRATEGY] %s skipped for %s: open position owner is unknown and strategy '%s' has priority.",
+                        symbol,
+                        strategy_name,
+                        preferred,
+                        strategy=strategy_name,
+                    )
+                    return
         if position is None:
             saved_strategy = str(backtest.get("strategy") or "keltner").strip().lower()
             if saved_strategy != params.get("strategy"):
@@ -449,8 +597,9 @@ class LocalStrategyEngine:
                     symbol,
                     params.get("strategy"),
                     saved_strategy,
+                    strategy=strategy_name,
                 )
-                self.defer_next_entry_check(symbol, timeframe)
+                self.defer_next_entry_check(symbol, timeframe, strategy_name)
                 self.save_state()
                 self.emit_event("entry_rejected", symbol, reason="strategy_backtest_mismatch", row_strategy=params.get("strategy"), backtest_strategy=saved_strategy)
                 return
@@ -463,12 +612,13 @@ class LocalStrategyEngine:
                     "[LOCAL_STRATEGY] %s entry disabled: %s",
                     symbol,
                     daily_rejection,
+                    strategy=strategy_name,
                 )
-                self.defer_next_entry_check(symbol, timeframe)
+                self.defer_next_entry_check(symbol, timeframe, strategy_name)
                 self.save_state()
                 self.emit_event("entry_rejected", symbol, reason="daily_guard", detail=daily_rejection)
                 return
-            oos_rejection = self.oos_entry_rejection_reason(backtest)
+            oos_rejection = self.oos_entry_rejection_reason(backtest, cfg)
             if oos_rejection:
                 self.log_symbol_throttled(
                     symbol,
@@ -477,8 +627,9 @@ class LocalStrategyEngine:
                     "[LOCAL_STRATEGY] %s entry disabled: %s",
                     symbol,
                     oos_rejection,
+                    strategy=strategy_name,
                 )
-                self.defer_next_entry_check(symbol, timeframe)
+                self.defer_next_entry_check(symbol, timeframe, strategy_name)
                 self.save_state()
                 self.emit_event("entry_rejected", symbol, reason="oos_validation", detail=oos_rejection)
                 return
@@ -491,8 +642,9 @@ class LocalStrategyEngine:
                     "[LOCAL_STRATEGY] %s entry disabled: %s",
                     symbol,
                     rejection,
+                    strategy=strategy_name,
                 )
-                self.defer_next_entry_check(symbol, timeframe)
+                self.defer_next_entry_check(symbol, timeframe, strategy_name)
                 self.save_state()
                 self.emit_event("entry_rejected", symbol, reason="backtest_quality", detail=rejection)
                 return
@@ -515,9 +667,10 @@ class LocalStrategyEngine:
                 len(bars),
                 min_bars,
                 timeframe,
+                strategy=strategy_name,
             )
             if position is None:
-                self.defer_next_entry_check(symbol, timeframe)
+                self.defer_next_entry_check(symbol, timeframe, strategy_name)
                 self.save_state()
             return
 
@@ -528,7 +681,7 @@ class LocalStrategyEngine:
             frame = bars.assign(mid_inner=mid, up_inner=upper, low_inner=lower).dropna()
         if len(frame) < 2:
             if position is None:
-                self.defer_next_entry_check(symbol, timeframe)
+                self.defer_next_entry_check(symbol, timeframe, strategy_name)
                 self.save_state()
             return
         last_bar_ts = frame.index[-1].isoformat()
@@ -536,7 +689,7 @@ class LocalStrategyEngine:
         if latest_price <= 0:
             self.logger.warning("[LOCAL_STRATEGY] %s skipped: no latest price.", symbol)
             if position is None:
-                self.defer_next_entry_check(symbol, timeframe)
+                self.defer_next_entry_check(symbol, timeframe, strategy_name)
                 self.save_state()
             return
 
@@ -547,8 +700,8 @@ class LocalStrategyEngine:
                 self.evaluate_exit(user, symbol, position, latest_price, params, frame, last_bar_ts, timeframe)
             return
 
-        self.defer_next_entry_check(symbol, timeframe)
-        self.reset_position_state(symbol)
+        self.defer_next_entry_check(symbol, timeframe, strategy_name)
+        self.reset_position_state(symbol, strategy_name)
         if params.get("strategy") == "macd_sma":
             self.evaluate_entry_macd_sma(user, api, cfg, symbol, latest_price, params, frame, last_bar_ts, timeframe, backtest)
         else:
@@ -614,15 +767,16 @@ class LocalStrategyEngine:
         )
         return any(marker in text for marker in markers)
 
-    def reset_position_state(self, symbol: str) -> None:
-        st = self.symbol_state(symbol)
+    def reset_position_state(self, symbol: str, strategy: Optional[str] = None) -> None:
+        st = self.symbol_state(symbol, strategy)
         if st.get("trail_active") or st.get("trail_stop") is not None:
             st["trail_active"] = False
             st["trail_stop"] = None
             self.save_state()
 
     def evaluate_entry(self, user: User, api: LegacyCompatibleAlpacaClient, cfg: Dict, symbol: str, latest_price: float, params: Dict, frame: pd.DataFrame, last_bar_ts: str, timeframe: str, backtest: Dict) -> None:
-        st = self.symbol_state(symbol)
+        strategy_name = str(params.get("strategy") or "keltner").strip().lower()
+        st = self.symbol_state(symbol, strategy_name)
         if st.get("last_entry_bar") == last_bar_ts:
             return
         prev = frame.iloc[-2]
@@ -647,7 +801,7 @@ class LocalStrategyEngine:
         payload = self.build_payload(
             symbol=symbol,
             action=action,
-            amount=float(cfg.get("order_size", user.per_trade_amount)),
+            amount=self.order_amount_for_strategy(cfg, strategy_name, user),
             reason=reason,
             timeframe=timeframe,
             bar_ts=last_bar_ts,
@@ -662,7 +816,8 @@ class LocalStrategyEngine:
         self.save_state()
 
     def evaluate_entry_macd_sma(self, user: User, api: LegacyCompatibleAlpacaClient, cfg: Dict, symbol: str, latest_price: float, params: Dict, frame: pd.DataFrame, last_bar_ts: str, timeframe: str, backtest: Dict) -> None:
-        st = self.symbol_state(symbol)
+        strategy_name = "macd_sma"
+        st = self.symbol_state(symbol, strategy_name)
         if st.get("last_entry_bar") == last_bar_ts:
             return
         cur = frame.iloc[-1]
@@ -686,7 +841,7 @@ class LocalStrategyEngine:
         payload = self.build_payload(
             symbol=symbol,
             action=action,
-            amount=float(cfg.get("order_size", user.per_trade_amount)),
+            amount=self.order_amount_for_strategy(cfg, strategy_name, user),
             reason=reason,
             timeframe=timeframe,
             bar_ts=last_bar_ts,
@@ -784,7 +939,8 @@ class LocalStrategyEngine:
             return value
 
     def evaluate_exit(self, user: User, symbol: str, position, latest_price: float, params: Dict, frame: pd.DataFrame, last_bar_ts: str, timeframe: str) -> None:
-        st = self.symbol_state(symbol)
+        strategy_name = str(params.get("strategy") or "keltner").strip().lower()
+        st = self.symbol_state(symbol, strategy_name)
         if st.get("last_exit_bar") == last_bar_ts and st.get("last_exit_price") == latest_price:
             return
         try:
@@ -817,7 +973,7 @@ class LocalStrategyEngine:
         self.save_state()
 
     def evaluate_exit_macd_sma(self, user: User, symbol: str, position, latest_price: float, params: Dict, frame: pd.DataFrame, last_bar_ts: str, timeframe: str) -> None:
-        st = self.symbol_state(symbol)
+        st = self.symbol_state(symbol, "macd_sma")
         if st.get("last_exit_bar") == last_bar_ts and st.get("last_exit_price") == latest_price:
             return
         try:
@@ -927,7 +1083,8 @@ class LocalStrategyEngine:
         return None
 
     def build_payload(self, symbol: str, action: str, amount: float, reason: str, timeframe: str, bar_ts: str, backtest: Optional[Dict]) -> Dict:
-        digest = hashlib.sha1(f"{symbol}:{action}:{bar_ts}".encode("utf-8")).hexdigest()[:16]
+        strategy = str((backtest or {}).get("strategy", "keltner") or "keltner").strip().lower()
+        digest = hashlib.sha1(f"{symbol}:{strategy}:{action}:{bar_ts}".encode("utf-8")).hexdigest()[:16]
         client_order_id = f"ls_{symbol}_{action}_{digest}"
         return {
             "symbol": symbol,
@@ -938,7 +1095,7 @@ class LocalStrategyEngine:
             "timeframe": timeframe,
             "bar_time": bar_ts,
             "client_order_id": client_order_id[:48],
-            "strategy": (backtest or {}).get("strategy", "keltner"),
+            "strategy": strategy,
             "strategy_job_id": (backtest or {}).get("job_id"),
             "order_type": "market",
             "time_in_force": "day",

@@ -731,13 +731,16 @@ def enrich_strategy_jobs(jobs, config=None):
     universe = strategy_store.normalize_universe((config or {}).get('universe'))
     signal_job_ids = set()
     signal_symbols = {}
+    signal_strategies = {}
     for entry in universe:
         backtest = entry.get('backtest') if isinstance(entry, dict) else None
         if not isinstance(backtest, dict):
             continue
         symbol = strategy_store.normalize_symbol(entry.get('symbol', ''))
+        strategy = str(entry.get('strategy') or (backtest or {}).get('strategy') or 'keltner').strip().lower()
         if symbol:
-            signal_symbols[symbol] = entry
+            signal_symbols.setdefault(symbol, []).append(entry)
+            signal_strategies[(symbol, strategy)] = entry
         job_id = str(backtest.get('job_id') or '').strip()
         if job_id:
             signal_job_ids.add(job_id)
@@ -747,9 +750,11 @@ def enrich_strategy_jobs(jobs, config=None):
         item = dict(job)
         job_id = str(item.get('id') or '').strip()
         symbol = strategy_store.normalize_symbol(item.get('symbol', ''))
+        strategy = str(item.get('strategy') or (item.get('summary') or {}).get('strategy') or 'keltner').strip().lower()
         item['signal_exact_match'] = job_id in signal_job_ids
         item['signal_symbol_match'] = symbol in signal_symbols
-        item['signal_universe_entry'] = signal_symbols.get(symbol)
+        item['signal_strategy_match'] = (symbol, strategy) in signal_strategies
+        item['signal_universe_entry'] = signal_strategies.get((symbol, strategy)) or (signal_symbols.get(symbol) or [None])[0]
         report = load_strategy_job_report(item.get('id'))
         if isinstance(report, dict):
             item['report'] = report
@@ -936,11 +941,13 @@ def upsert_universe_backtest(config, summary, mode='local'):
     if not summary or not summary.get('symbol'):
         return False
     symbol = strategy_store.normalize_symbol(summary['symbol'])
+    strategy = str(summary.get('strategy') or 'keltner').strip().lower()
     universe = strategy_store.normalize_universe(config.get('universe'))
     found = False
     for item in universe:
-        if item['symbol'] == symbol:
-            item['strategy'] = summary.get('strategy') or item.get('strategy') or 'keltner'
+        item_strategy = str(item.get('strategy') or 'keltner').strip().lower()
+        if item['symbol'] == symbol and item_strategy == strategy:
+            item['strategy'] = strategy
             item['backtest'] = summary
             item['mode'] = item.get('mode') or mode
             item['enabled'] = bool(item.get('enabled', True))
@@ -949,7 +956,7 @@ def upsert_universe_backtest(config, summary, mode='local'):
     if not found:
         universe.append({
             'symbol': symbol,
-            'strategy': summary.get('strategy') or 'keltner',
+            'strategy': strategy,
             'mode': mode,
             'enabled': True,
             'notes': 'Added from Strategy Tester',
@@ -1122,10 +1129,10 @@ def build_strategy_optimizer_args(config, report_path, top_path, bars_csv_path=N
         "--trade-direction", str(config.get("trade_direction", "Both")),
         "--validation-enabled" if bool(config.get("validation_enabled", True)) else "--no-validation-enabled",
         "--validation-train-ratio", str(config.get("validation_train_ratio", 0.70)),
-        "--validation-min-trades", str(int(config.get("validation_min_trades", 30))),
-        "--validation-min-win-rate", str(config.get("validation_min_win_rate_pct", 55)),
-        "--validation-min-profit-factor", str(config.get("validation_min_profit_factor", 1.3)),
-        "--validation-max-drawdown-pct", str(config.get("validation_max_drawdown_pct", 8)),
+        "--validation-min-trades", str(int(config.get("validation_min_trades", 5))),
+        "--validation-min-win-rate", str(config.get("validation_min_win_rate_pct", 45)),
+        "--validation-min-profit-factor", str(config.get("validation_min_profit_factor", 1.05)),
+        "--validation-max-drawdown-pct", str(config.get("validation_max_drawdown_pct", 15)),
         "--validation-min-net-profit", str(config.get("validation_min_net_profit", 0)),
         "--inner-len-range", inner_len_range,
         "--inner-mult-range", inner_mult_range,
@@ -1201,6 +1208,24 @@ def fetch_strategy_bars_csv(config):
     df[columns].to_csv(buf, index=False)
     return buf.getvalue()
 
+
+def ensure_remote_job_bars_csv(job):
+    job_id = str((job or {}).get('id') or '').strip()
+    if not job_id:
+        raise ValueError("Remote job is missing id.")
+    bars_path = strategy_job_bars_path(job_id)
+    if os.path.exists(bars_path):
+        with open(bars_path, "r", encoding="utf-8") as f:
+            return f.read()
+    job_config = job.get('config') if isinstance(job.get('config'), dict) else job
+    bars_csv = fetch_strategy_bars_csv(job_config)
+    with open(bars_path, "w", encoding="utf-8") as f:
+        f.write(bars_csv)
+    job['bars_csv_file'] = os.path.basename(bars_path)
+    job['updated_at_utc'] = datetime.now(timezone.utc).isoformat()
+    save_strategy_job(job)
+    return bars_csv
+
 def create_strategy_job(config, compute_target):
     job_id = uuid.uuid4().hex
     config_fingerprint = strategy_run_fingerprint(config)
@@ -1228,11 +1253,6 @@ def create_strategy_job(config, compute_target):
         'stderr': '',
     }
     if compute_target == 'remote':
-        bars_csv = fetch_strategy_bars_csv(config)
-        bars_path = strategy_job_bars_path(job_id)
-        with open(bars_path, "w", encoding="utf-8") as f:
-            f.write(bars_csv)
-        job['bars_csv_file'] = os.path.basename(bars_path)
         job['optimizer_args'] = build_strategy_optimizer_args(config, "__REPORT_JSON__", "__TOP_CSV__", bars_csv_path="__BARS_CSV__")
 
     save_strategy_job(job)
@@ -1497,6 +1517,9 @@ def admin_strategy():
         config['initial_capital'] = as_float(request.form.get('initial_capital', config.get('initial_capital', 8000)), 8000)
         config['base_currency'] = request.form.get('base_currency', config.get('base_currency', 'USD')).strip().upper() or 'USD'
         config['order_size'] = as_float(request.form.get('order_size', config.get('order_size', 2000)), 2000)
+        config['order_size_keltner'] = as_float(request.form.get('order_size_keltner', config.get('order_size_keltner', config.get('order_size', 2000))), config.get('order_size', 2000))
+        config['order_size_macd_sma'] = as_float(request.form.get('order_size_macd_sma', config.get('order_size_macd_sma', 5000)), 5000)
+        config['macd_priority_enabled'] = 'macd_priority_enabled' in request.form
         config['pyramiding'] = max(0, as_int(request.form.get('pyramiding', config.get('pyramiding', 0)), 0))
         config['commission_pct'] = as_float(request.form.get('commission_pct', config.get('commission_pct', 0.04)), 0.04)
         config['verify_price_ticks'] = max(0, as_int(request.form.get('verify_price_ticks', config.get('verify_price_ticks', 0)), 0))
@@ -1509,10 +1532,10 @@ def admin_strategy():
         config['optimizer_jobs'] = max(0, as_int(request.form.get('optimizer_jobs', config.get('optimizer_jobs', 0)), 0))
         config['top_k'] = max(1, as_int(request.form.get('top_k', config.get('top_k', 20)), 20))
         config['validation_train_ratio'] = min(0.95, max(0.2, as_float(request.form.get('validation_train_ratio', config.get('validation_train_ratio', 0.70)), 0.70)))
-        config['validation_min_trades'] = max(1, as_int(request.form.get('validation_min_trades', config.get('validation_min_trades', 30)), 30))
-        config['validation_min_win_rate_pct'] = as_float(request.form.get('validation_min_win_rate_pct', config.get('validation_min_win_rate_pct', 55)), 55)
-        config['validation_min_profit_factor'] = as_float(request.form.get('validation_min_profit_factor', config.get('validation_min_profit_factor', 1.3)), 1.3)
-        config['validation_max_drawdown_pct'] = as_float(request.form.get('validation_max_drawdown_pct', config.get('validation_max_drawdown_pct', 8)), 8)
+        config['validation_min_trades'] = max(1, as_int(request.form.get('validation_min_trades', config.get('validation_min_trades', 5)), 5))
+        config['validation_min_win_rate_pct'] = as_float(request.form.get('validation_min_win_rate_pct', config.get('validation_min_win_rate_pct', 45)), 45)
+        config['validation_min_profit_factor'] = as_float(request.form.get('validation_min_profit_factor', config.get('validation_min_profit_factor', 1.05)), 1.05)
+        config['validation_max_drawdown_pct'] = as_float(request.form.get('validation_max_drawdown_pct', config.get('validation_max_drawdown_pct', 15)), 15)
         config['validation_min_net_profit'] = as_float(request.form.get('validation_min_net_profit', config.get('validation_min_net_profit', 0)), 0)
         config['daily_max_trades_per_symbol'] = max(1, as_int(request.form.get('daily_max_trades_per_symbol', config.get('daily_max_trades_per_symbol', 3)), 3))
         config['daily_max_losses_per_symbol'] = max(1, as_int(request.form.get('daily_max_losses_per_symbol', config.get('daily_max_losses_per_symbol', 2)), 2))
@@ -1795,36 +1818,50 @@ def api_strategy_remote_next():
     if not is_strategy_worker_authorized():
         return jsonify({'error': 'unauthorized'}), 401
     worker_name = request.args.get('worker') or request.headers.get('X-Strategy-Worker') or 'remote-worker'
-    with STRATEGY_JOB_LOCK:
-        queued = [job for job in list_strategy_jobs(limit=200) if job.get('status') == 'queued']
-        queued.sort(key=lambda item: item.get('created_at_utc', ''))
-        if not queued:
-            return jsonify({'job': None})
-        job = queued[0]
-        now_iso = datetime.now(timezone.utc).isoformat()
-        job['status'] = 'running'
-        job['worker'] = worker_name
-        job['started_at_utc'] = now_iso
-        job['updated_at_utc'] = now_iso
-        save_strategy_job(job)
-    bars_csv = job.get('bars_csv', '')
-    if not bars_csv:
-        bars_path = strategy_job_bars_path(job['id'])
-        if os.path.exists(bars_path):
-            with open(bars_path, "r", encoding="utf-8") as f:
-                bars_csv = f.read()
-    return jsonify({
-        'job': {
-            'id': job['id'],
-            'symbol': job.get('symbol'),
-            'strategy': job.get('strategy', 'keltner'),
-            'timeframe': job.get('timeframe'),
-            'optimizer_engine': job.get('optimizer_engine', 'tpe'),
-            'accelerator': job.get('accelerator', 'auto'),
-            'optimizer_args': job.get('optimizer_args', []),
-            'bars_csv': bars_csv,
-        }
-    })
+    while True:
+        with STRATEGY_JOB_LOCK:
+            queued = [job for job in list_strategy_jobs(limit=200) if job.get('status') == 'queued']
+            queued.sort(key=lambda item: item.get('created_at_utc', ''))
+            if not queued:
+                return jsonify({'job': None})
+            job = queued[0]
+            now_iso = datetime.now(timezone.utc).isoformat()
+            job['status'] = 'running'
+            job['worker'] = worker_name
+            job['started_at_utc'] = now_iso
+            job['updated_at_utc'] = now_iso
+            save_strategy_job(job)
+        try:
+            bars_csv = job.get('bars_csv', '') or ensure_remote_job_bars_csv(job)
+            return jsonify({
+                'job': {
+                    'id': job['id'],
+                    'symbol': job.get('symbol'),
+                    'strategy': job.get('strategy', 'keltner'),
+                    'timeframe': job.get('timeframe'),
+                    'optimizer_engine': job.get('optimizer_engine', 'tpe'),
+                    'accelerator': job.get('accelerator', 'auto'),
+                    'optimizer_args': job.get('optimizer_args', []),
+                    'bars_csv': bars_csv,
+                }
+            })
+        except Exception as e:
+            app.logger.error("[STRATEGY] Failed to prepare remote job %s for %s: %s", job.get('id'), job.get('symbol'), e)
+            job['status'] = 'failed'
+            job['error'] = str(e)
+            job['updated_at_utc'] = datetime.now(timezone.utc).isoformat()
+            job['completed_at_utc'] = job['updated_at_utc']
+            save_strategy_job(job)
+            emit_strategy_event(
+                'optimizer_job_failed',
+                job_id=job.get('id'),
+                symbol=job.get('symbol'),
+                strategy=job.get('strategy'),
+                compute_target='remote',
+                worker=worker_name,
+                error=job.get('error'),
+            )
+            continue
 
 @app.route('/api/admin/strategy/remote_jobs/<job_id>/complete', methods=['POST'])
 def api_strategy_remote_complete(job_id):
