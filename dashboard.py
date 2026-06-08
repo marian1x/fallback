@@ -700,6 +700,33 @@ def load_strategy_job_report(job_id):
         app.logger.error(f"[STRATEGY] Failed to load job report {job_id}: {e}")
         return None
 
+
+def parse_strategy_job_timestamp(raw_value):
+    raw = str(raw_value or '').strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith('Z'):
+            raw = raw[:-1] + '+00:00'
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(ZoneInfo("Europe/Bucharest"))
+    except Exception:
+        return None
+
+
+def strategy_metric_float(summary, key):
+    if not isinstance(summary, dict):
+        return None
+    metrics = summary.get('metrics')
+    if not isinstance(metrics, dict):
+        return None
+    try:
+        return float(metrics.get(key))
+    except Exception:
+        return None
+
 def enrich_strategy_jobs(jobs, config=None):
     universe = strategy_store.normalize_universe((config or {}).get('universe'))
     signal_job_ids = set()
@@ -730,6 +757,16 @@ def enrich_strategy_jobs(jobs, config=None):
             item['top_results'] = report.get('top_results') or []
         if not isinstance(item.get('summary'), dict):
             item['summary'] = strategy_summary_from_job(item, report)
+        run_dt = parse_strategy_job_timestamp(item.get('created_at_utc') or item.get('updated_at_utc'))
+        updated_dt = parse_strategy_job_timestamp(item.get('updated_at_utc'))
+        completed_dt = parse_strategy_job_timestamp(item.get('completed_at_utc'))
+        item['run_date_local'] = run_dt.strftime("%Y-%m-%d") if run_dt else ''
+        item['run_at_local'] = run_dt.strftime("%Y-%m-%d %H:%M") if run_dt else ''
+        item['updated_at_local'] = updated_dt.strftime("%Y-%m-%d %H:%M") if updated_dt else ''
+        item['completed_at_local'] = completed_dt.strftime("%Y-%m-%d %H:%M") if completed_dt else ''
+        item['summary_return_pct'] = strategy_metric_float(item.get('summary'), 'return_pct')
+        item['summary_win_rate_pct'] = strategy_metric_float(item.get('summary'), 'win_rate_pct')
+        item['summary_max_drawdown_pct'] = strategy_metric_float(item.get('summary'), 'max_drawdown_pct')
         current = item.get('signal_universe_entry') or {}
         current_bt = current.get('backtest') if isinstance(current, dict) else None
         if isinstance(item.get('summary'), dict) and isinstance(current_bt, dict):
@@ -763,6 +800,22 @@ def parse_strategy_symbols(raw_value):
             symbols.append(symbol)
             seen.add(symbol)
     return symbols
+
+
+def parse_strategy_tester_symbols_from_form(form):
+    symbols = form.getlist('tester_symbol[]')
+    selected_values = form.getlist('tester_symbol_selected[]')
+    entries = []
+    for idx, raw_symbol in enumerate(symbols):
+        symbol = strategy_store.normalize_symbol(raw_symbol)
+        if not symbol:
+            continue
+        selected_raw = selected_values[idx] if idx < len(selected_values) else '1'
+        entries.append({
+            'symbol': symbol,
+            'selected': str(selected_raw).strip().lower() in ('1', 'true', 'yes', 'on'),
+        })
+    return strategy_store.normalize_tester_symbols(entries)
 
 def find_active_strategy_job(config, compute_target):
     fingerprint = strategy_run_fingerprint(config)
@@ -843,6 +896,18 @@ def delete_strategy_job(job_id):
             app.logger.warning("[STRATEGY] Failed to remove artifact %s: %s", path, e)
     return True
 
+
+def collect_selected_strategy_job_ids(form):
+    selected = []
+    seen = set()
+    for raw in form.getlist('selected_job_ids'):
+        job_id = str(raw or '').strip()
+        if not job_id or job_id in seen:
+            continue
+        selected.append(job_id)
+        seen.add(job_id)
+    return selected
+
 def strategy_summary_from_job(job, report=None):
     if not isinstance(job, dict):
         return None
@@ -910,6 +975,46 @@ def local_strategy_datetime_to_utc_iso(date_value, time_value, cap_now=False):
 
 def exact_range(value, step='0.1'):
     return f"{value}:{value}:{step}"
+
+
+REMOTE_WORKER_LEGACY_VALIDATION_OPTIONS = (
+    "--validation-enabled",
+    "--no-validation-enabled",
+    "--validation-train-ratio",
+    "--validation-min-trades",
+    "--validation-min-win-rate",
+    "--validation-min-profit-factor",
+    "--validation-max-drawdown-pct",
+    "--validation-min-net-profit",
+)
+
+
+def strip_optimizer_options(args: list[str], options: tuple[str, ...]) -> list[str]:
+    options_with_values = {
+        "--validation-train-ratio",
+        "--validation-min-trades",
+        "--validation-min-win-rate",
+        "--validation-min-profit-factor",
+        "--validation-max-drawdown-pct",
+        "--validation-min-net-profit",
+    }
+    out = []
+    idx = 0
+    while idx < len(args):
+        arg = args[idx]
+        if arg in options:
+            idx += 2 if arg in options_with_values else 1
+            continue
+        out.append(arg)
+        idx += 1
+    return out
+
+
+def is_legacy_remote_validation_arg_error(returncode: int, stderr: str) -> bool:
+    if int(returncode or 0) != 2:
+        return False
+    detail = str(stderr or "")
+    return "unrecognized arguments:" in detail and "--validation-" in detail
 
 def build_strategy_timeframes(config):
     if not bool(config.get('timeframe_sweep_enabled')):
@@ -1362,7 +1467,11 @@ def admin_strategy():
         accelerator = request.form.get('accelerator', config.get('accelerator', 'auto')).strip().lower()
         config['accelerator'] = accelerator if accelerator in strategy_store.ACCELERATOR_CHOICES else 'auto'
         config['alpaca_user'] = request.form.get('alpaca_user', '').strip()
-        config['symbol'] = request.form.get('symbol', config.get('symbol', 'TSM')).strip().upper()
+        tester_symbols = parse_strategy_tester_symbols_from_form(request.form)
+        if not tester_symbols:
+            tester_symbols = strategy_store.normalize_tester_symbols(config.get('tester_symbols'), config.get('symbol', 'TSM'))
+        config['tester_symbols'] = tester_symbols
+        config['symbol'] = ', '.join(item['symbol'] for item in tester_symbols if item.get('selected', True))
         config['timeframe'] = request.form.get('timeframe', config.get('timeframe', '30Min')).strip()
         config['session'] = request.form.get('session', config.get('session', 'regular')).strip()
         config['feed'] = request.form.get('feed', config.get('feed', 'iex')).strip()
@@ -1433,12 +1542,22 @@ def admin_strategy():
         tradable_symbols = set(load_cached_tradable_symbols())
         invalid_symbols = []
         if tradable_symbols:
+            valid_tester_symbols = []
+            for item in config.get('tester_symbols', []):
+                symbol = item.get('symbol')
+                if symbol in tradable_symbols:
+                    valid_tester_symbols.append(item)
+                else:
+                    invalid_symbols.append(symbol)
+            config['tester_symbols'] = valid_tester_symbols
+            config['symbol'] = ', '.join(item['symbol'] for item in valid_tester_symbols if item.get('selected', True))
             valid_universe = []
             for item in universe:
                 if item['symbol'] in tradable_symbols:
                     valid_universe.append(item)
                 else:
-                    invalid_symbols.append(item['symbol'])
+                    if item['symbol'] not in invalid_symbols:
+                        invalid_symbols.append(item['symbol'])
             universe = valid_universe
         config['universe'] = universe
 
@@ -1463,7 +1582,39 @@ def admin_strategy():
         if invalid_symbols:
             flash(f"Skipped symbols not found in Alpaca tradable list: {', '.join(invalid_symbols[:12])}", "warning")
 
-        if action == 'delete_job':
+        if action == 'delete_selected_jobs':
+            selected_job_ids = collect_selected_strategy_job_ids(request.form)
+            if not selected_job_ids:
+                flash("No optimizer runs selected.", "warning")
+            else:
+                deleted = []
+                missing = []
+                for job_id in selected_job_ids:
+                    if delete_strategy_job(job_id):
+                        deleted.append(job_id)
+                        emit_strategy_event('optimizer_job_deleted', actor=getattr(g.user, 'username', None), job_id=job_id)
+                    else:
+                        missing.append(job_id)
+                if deleted:
+                    flash(f"Deleted {len(deleted)} optimizer run(s).", "success")
+                if missing:
+                    flash(f"Some optimizer runs were not found: {', '.join(missing[:8])}", "warning")
+        elif action == 'delete_queued_jobs':
+            queued_ids = [
+                str(job.get('id') or '').strip()
+                for job in list_strategy_jobs(limit=1000)
+                if str(job.get('status') or '').strip().lower() == 'queued' and str(job.get('id') or '').strip()
+            ]
+            if not queued_ids:
+                flash("No queued optimizer runs found.", "warning")
+            else:
+                deleted_count = 0
+                for job_id in queued_ids:
+                    if delete_strategy_job(job_id):
+                        deleted_count += 1
+                        emit_strategy_event('optimizer_job_deleted', actor=getattr(g.user, 'username', None), job_id=job_id)
+                flash(f"Deleted {deleted_count} queued optimizer run(s).", "success")
+        elif action == 'delete_job':
             job_id = request.form.get('job_id', '').strip()
             if job_id and delete_strategy_job(job_id):
                 emit_strategy_event('optimizer_job_deleted', actor=getattr(g.user, 'username', None), job_id=job_id)
@@ -1495,9 +1646,13 @@ def admin_strategy():
             else:
                 flash("Selected optimizer run has no valid completed summary.", "warning")
         elif action == 'run':
-            symbols = parse_strategy_symbols(request.form.get('symbol', ''))
+            symbols = [
+                item['symbol']
+                for item in strategy_store.normalize_tester_symbols(config.get('tester_symbols'))
+                if item.get('selected', True)
+            ]
             if not symbols:
-                flash("No valid symbols provided for run.", "warning")
+                flash("No selected backtest stocks provided for run.", "warning")
                 return redirect(url_for('admin_strategy'))
 
             compute_target = config.get('compute_target', 'local')
@@ -1726,6 +1881,34 @@ def api_strategy_remote_complete(job_id):
         )
         save_strategy_job(job)
         return jsonify({'ok': True, 'summary': summary})
+
+    if is_legacy_remote_validation_arg_error(returncode, stderr) and not bool(job.get('compat_retry_without_validation')):
+        prior_worker = job.get('worker')
+        job['status'] = 'queued'
+        job['worker'] = None
+        job['started_at_utc'] = None
+        job['completed_at_utc'] = None
+        job['compat_retry_without_validation'] = True
+        job['compatibility_note'] = 'Requeued without validation CLI flags for legacy remote worker compatibility.'
+        job['optimizer_args'] = strip_optimizer_options(
+            list(job.get('optimizer_args') or []),
+            REMOTE_WORKER_LEGACY_VALIDATION_OPTIONS,
+        )
+        emit_strategy_event(
+            'optimizer_job_requeued_compat',
+            job_id=job_id,
+            symbol=job.get('symbol'),
+            strategy=job.get('strategy'),
+            compute_target='remote',
+            worker=prior_worker,
+            note=job.get('compatibility_note'),
+        )
+        save_strategy_job(job)
+        return jsonify({
+            'ok': True,
+            'requeued': True,
+            'note': job['compatibility_note'],
+        })
 
     job['status'] = 'failed'
     job['error'] = stderr or stdout or 'Remote optimizer failed.'

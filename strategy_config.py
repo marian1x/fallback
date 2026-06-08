@@ -22,11 +22,48 @@ def normalize_symbol(symbol: str) -> str:
     return (symbol or "").upper().replace("/", "").strip()
 
 
+def normalize_tester_symbols(raw_entries, fallback_symbols: str | None = None) -> List[Dict]:
+    entries = []
+    seen = set()
+    if isinstance(raw_entries, list):
+        for item in raw_entries:
+            if isinstance(item, dict):
+                symbol = normalize_symbol(item.get("symbol", ""))
+                if not symbol or symbol in seen:
+                    continue
+                entries.append({
+                    "symbol": symbol,
+                    "selected": bool(item.get("selected", True)),
+                })
+                seen.add(symbol)
+            else:
+                symbol = normalize_symbol(item)
+                if not symbol or symbol in seen:
+                    continue
+                entries.append({"symbol": symbol, "selected": True})
+                seen.add(symbol)
+    if not entries and fallback_symbols:
+        normalized = str(fallback_symbols or "").replace(";", ",").replace("\n", ",").replace("\r", ",")
+        for chunk in normalized.split(","):
+            symbol = normalize_symbol(chunk)
+            if not symbol or symbol in seen:
+                continue
+            entries.append({"symbol": symbol, "selected": True})
+            seen.add(symbol)
+    return entries
+
+
 def get_default_strategy_config() -> Dict:
     return {
         "enabled": False,
         "alpaca_user": "",
         "symbol": "TSM",
+        "tester_symbols": [
+            {
+                "symbol": "TSM",
+                "selected": True,
+            }
+        ],
         "strategy": "keltner",
         "timeframe": "30Min",
         "session": "regular",
@@ -160,6 +197,8 @@ def load_strategy_config() -> Dict:
     except Exception:
         return data
     data["universe"] = normalize_universe(data.get("universe"))
+    data["tester_symbols"] = normalize_tester_symbols(data.get("tester_symbols"), data.get("symbol"))
+    data["symbol"] = ", ".join(item["symbol"] for item in data["tester_symbols"] if item.get("selected", True))
     if str(data.get("strategy", "")).strip().lower() not in STRATEGY_CHOICES:
         data["strategy"] = "keltner"
     if str(data.get("optimizer_engine", "")).strip().lower() not in OPTIMIZER_ENGINES:
@@ -174,6 +213,8 @@ def save_strategy_config(cfg: Dict) -> None:
     if isinstance(cfg, dict):
         data.update(cfg)
     data["universe"] = normalize_universe(data.get("universe"))
+    data["tester_symbols"] = normalize_tester_symbols(data.get("tester_symbols"), data.get("symbol"))
+    data["symbol"] = ", ".join(item["symbol"] for item in data["tester_symbols"] if item.get("selected", True))
     data["strategy"] = str(data.get("strategy", "keltner")).strip().lower()
     if data["strategy"] not in STRATEGY_CHOICES:
         data["strategy"] = "keltner"

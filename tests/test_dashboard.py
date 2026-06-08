@@ -73,3 +73,26 @@ def test_visible_closed_trades_query_excludes_synthetic_mirror_rows_by_default(a
             rows = dashboard.visible_closed_trades_query(Trade.query.filter_by(status='closed')).all()
 
         assert [row.trade_id for row in rows] == ['real_order']
+
+
+def test_strip_optimizer_options_removes_legacy_validation_args():
+    args = [
+        "misc/pine_optimizer.py",
+        "--strategy", "macd_sma",
+        "--validation-enabled",
+        "--validation-train-ratio", "0.7",
+        "--validation-min-trades", "5",
+        "--top-k", "20",
+    ]
+    stripped = dashboard.strip_optimizer_options(args, dashboard.REMOTE_WORKER_LEGACY_VALIDATION_OPTIONS)
+    assert stripped == [
+        "misc/pine_optimizer.py",
+        "--strategy", "macd_sma",
+        "--top-k", "20",
+    ]
+
+
+def test_legacy_remote_validation_arg_error_detection():
+    stderr = "pine_optimizer.py: error: unrecognized arguments: --validation-enabled --validation-train-ratio 0.7"
+    assert dashboard.is_legacy_remote_validation_arg_error(2, stderr) is True
+    assert dashboard.is_legacy_remote_validation_arg_error(1, stderr) is False

@@ -55,8 +55,9 @@
                                         <input type="hidden" name="symbol" id="backtestSymbolsField" value="{{ config.symbol }}">
                                         <div class="strategy-symbol-picker">
                                             <input type="text" id="backtestSymbolSearch" class="form-control" placeholder="Search symbol or company name">
-                                            <div id="backtestSelectedSymbols" class="strategy-selected-symbols mt-2"></div>
+                                            <div id="backtestPreferredSymbols" class="strategy-selected-symbols mt-2"></div>
                                             <div id="backtestSymbolResults" class="strategy-symbol-results mt-2"></div>
+                                            <div id="backtestSymbolInputs"></div>
                                         </div>
                                     </div>
                                     <div class="col-6 col-md-2">
@@ -340,52 +341,52 @@
                                                     </select>
                                                 </div>
                                                 <div class="col-12 col-lg-3" data-strategy-scope="keltner">
-                                                    <label class="form-label">Trail Offset Range {{ tip('Current Pine script uses 4 ticks. Keep 4:4:1 for best TW parity.') }}</label>
+                                                    <label class="form-label">Trail Offset Range {{ tip('Trailing stop activation offset in ticks for Keltner runs. Keep 4:4:1 when you want TradingView parity instead of parameter hunting.') }}</label>
                                                     <input type="text" name="trail_offset_range" class="form-control" value="{{ config.trail_offset_range }}">
                                                 </div>
                                                 <div class="col-6 col-lg-3" data-strategy-scope="macd_sma">
-                                                    <label class="form-label">MACD Fast Range</label>
+                                                    <label class="form-label">MACD Fast Range {{ tip('Optimizer range for MACD fast moving average. Example 8:20:1 tests every integer from 8 to 20.') }}</label>
                                                     <input type="text" name="macd_fast_range" class="form-control" value="{{ config.macd_fast_range|default('8:20:1') }}">
                                                 </div>
                                                 <div class="col-6 col-lg-3" data-strategy-scope="macd_sma">
-                                                    <label class="form-label">MACD Slow Range</label>
+                                                    <label class="form-label">MACD Slow Range {{ tip('Optimizer range for MACD slow moving average. This should stay above the fast range for meaningful MACD values.') }}</label>
                                                     <input type="text" name="macd_slow_range" class="form-control" value="{{ config.macd_slow_range|default('20:40:1') }}">
                                                 </div>
                                                 <div class="col-6 col-lg-3" data-strategy-scope="macd_sma">
-                                                    <label class="form-label">MACD Signal Range</label>
+                                                    <label class="form-label">MACD Signal Range {{ tip('Optimizer range for the MACD signal line smoothing length.') }}</label>
                                                     <input type="text" name="macd_signal_range" class="form-control" value="{{ config.macd_signal_range|default('5:15:1') }}">
                                                 </div>
                                                 <div class="col-6 col-lg-3" data-strategy-scope="macd_sma">
-                                                    <label class="form-label">SMA Trend Range</label>
+                                                    <label class="form-label">SMA Trend Range {{ tip('Optimizer range for the long-term trend SMA filter used by the MACD + SMA strategy.') }}</label>
                                                     <input type="text" name="macd_sma_range" class="form-control" value="{{ config.macd_sma_range|default('100:250:10') }}">
                                                 </div>
                                                 <div class="col-6 col-lg-3">
-                                                    <label class="form-label">OOS Min Trades</label>
+                                                    <label class="form-label">OOS Min Trades {{ tip('Minimum number of trades required in the out-of-sample validation segment before a run is considered promotable.') }}</label>
                                                     <input type="number" min="1" name="validation_min_trades" class="form-control" value="{{ config.validation_min_trades|default(30) }}">
                                                 </div>
                                                 <div class="col-6 col-lg-3">
-                                                    <label class="form-label">OOS Min Win %</label>
+                                                    <label class="form-label">OOS Min Win % {{ tip('Minimum out-of-sample win rate percentage required by the validation gate.') }}</label>
                                                     <input type="number" step="0.1" name="validation_min_win_rate_pct" class="form-control" value="{{ config.validation_min_win_rate_pct|default(55) }}">
                                                 </div>
                                                 <div class="col-6 col-lg-3">
-                                                    <label class="form-label">OOS Min PF</label>
+                                                    <label class="form-label">OOS Min PF {{ tip('Minimum out-of-sample profit factor required by the validation gate. Values above 1 mean gross profit exceeds gross loss.') }}</label>
                                                     <input type="number" step="0.1" name="validation_min_profit_factor" class="form-control" value="{{ config.validation_min_profit_factor|default(1.3) }}">
                                                 </div>
                                                 <div class="col-6 col-lg-3">
-                                                    <label class="form-label">OOS Max DD %</label>
+                                                    <label class="form-label">OOS Max DD % {{ tip('Maximum drawdown percentage allowed in the out-of-sample validation slice.') }}</label>
                                                     <input type="number" step="0.1" name="validation_max_drawdown_pct" class="form-control" value="{{ config.validation_max_drawdown_pct|default(8) }}">
                                                 </div>
                                             </div>
                                         </div>
                                         <div class="row g-3 mt-1">
-                                            <div class="col-6 col-xl-3" data-strategy-scope="keltner"><label class="form-label">Inner Len Range</label><input type="text" name="inner_len_range" class="form-control" value="{{ config.inner_len_range }}"></div>
-                                            <div class="col-6 col-xl-3" data-strategy-scope="keltner"><label class="form-label">Inner Mult Range</label><input type="text" name="inner_mult_range" class="form-control" value="{{ config.inner_mult_range }}"></div>
-                                            <div class="col-6 col-xl-3" data-strategy-scope="keltner"><label class="form-label">Outer Len Range</label><input type="text" name="outer_len_range" class="form-control" value="{{ config.outer_len_range }}"></div>
-                                            <div class="col-6 col-xl-3" data-strategy-scope="keltner"><label class="form-label">Outer Mult Range</label><input type="text" name="outer_mult_range" class="form-control" value="{{ config.outer_mult_range }}"></div>
-                                            <div class="col-6 col-xl-3"><label class="form-label">Fixed SL Range</label><input type="text" name="fixed_sl_range" class="form-control" value="{{ config.fixed_sl_range }}"></div>
-                                            <div class="col-6 col-xl-3"><label class="form-label">Fixed TP Range</label><input type="text" name="fixed_tp_range" class="form-control" value="{{ config.fixed_tp_range }}"></div>
-                                            <div class="col-6 col-xl-3"><label class="form-label">Forced SL Range</label><input type="text" name="forced_sl_range" class="form-control" value="{{ config.forced_sl_range }}"></div>
-                                            <div class="col-6 col-xl-3"><label class="form-label">Forced TP Range</label><input type="text" name="forced_tp_range" class="form-control" value="{{ config.forced_tp_range }}"></div>
+                                            <div class="col-6 col-xl-3" data-strategy-scope="keltner"><label class="form-label">Inner Len Range {{ tip('Optimizer range for the inner Keltner EMA length.') }}</label><input type="text" name="inner_len_range" class="form-control" value="{{ config.inner_len_range }}"></div>
+                                            <div class="col-6 col-xl-3" data-strategy-scope="keltner"><label class="form-label">Inner Mult Range {{ tip('Optimizer range for the inner Keltner ATR multiplier.') }}</label><input type="text" name="inner_mult_range" class="form-control" value="{{ config.inner_mult_range }}"></div>
+                                            <div class="col-6 col-xl-3" data-strategy-scope="keltner"><label class="form-label">Outer Len Range {{ tip('Optimizer range for the outer Keltner EMA length.') }}</label><input type="text" name="outer_len_range" class="form-control" value="{{ config.outer_len_range }}"></div>
+                                            <div class="col-6 col-xl-3" data-strategy-scope="keltner"><label class="form-label">Outer Mult Range {{ tip('Optimizer range for the outer Keltner ATR multiplier.') }}</label><input type="text" name="outer_mult_range" class="form-control" value="{{ config.outer_mult_range }}"></div>
+                                            <div class="col-6 col-xl-3"><label class="form-label">Fixed SL Range {{ tip('Optimizer range for bar-close stop loss percentage used by both strategies.') }}</label><input type="text" name="fixed_sl_range" class="form-control" value="{{ config.fixed_sl_range }}"></div>
+                                            <div class="col-6 col-xl-3"><label class="form-label">Fixed TP Range {{ tip('Optimizer range for bar-close take profit percentage used by both strategies.') }}</label><input type="text" name="fixed_tp_range" class="form-control" value="{{ config.fixed_tp_range }}"></div>
+                                            <div class="col-6 col-xl-3"><label class="form-label">Forced SL Range {{ tip('Optimizer range for intrabar stop-style exits.') }}</label><input type="text" name="forced_sl_range" class="form-control" value="{{ config.forced_sl_range }}"></div>
+                                            <div class="col-6 col-xl-3"><label class="form-label">Forced TP Range {{ tip('Optimizer range for intrabar take-profit exits.') }}</label><input type="text" name="forced_tp_range" class="form-control" value="{{ config.forced_tp_range }}"></div>
                                         </div>
                                     </div>
                                 </div>
@@ -578,11 +579,22 @@
                                 <div class="strategy-panel-header">Optimizer Runs</div>
                                 <div class="strategy-panel-body">
                                     {% if all_jobs %}
+                                    <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-2 mb-3">
+                                        <div class="small text-muted">Select rows to delete multiple runs or clear the queued backlog.</div>
+                                        <div class="d-flex gap-2">
+                                            <button type="submit" name="action" value="delete_selected_jobs" class="btn btn-sm btn-outline-danger" id="deleteSelectedJobsBtn">
+                                                <i class="fa-solid fa-trash me-1"></i>Delete Selected
+                                            </button>
+                                            <button type="submit" name="action" value="delete_queued_jobs" class="btn btn-sm btn-outline-warning" id="deleteQueuedJobsBtn">
+                                                <i class="fa-solid fa-broom me-1"></i>Delete All Queued
+                                            </button>
+                                        </div>
+                                    </div>
                                     <div class="row g-2 mb-3">
-                                        <div class="col-12 col-lg-4">
+                                        <div class="col-12 col-lg-3">
                                             <input type="text" id="jobFilterText" class="form-control form-control-sm" placeholder="Filter by symbol or job id">
                                         </div>
-                                        <div class="col-6 col-lg-3">
+                                        <div class="col-6 col-lg-2">
                                             <select id="jobFilterStrategy" class="form-select form-select-sm">
                                                 <option value="">All strategies</option>
                                                 <option value="keltner">Keltner Channel</option>
@@ -598,7 +610,7 @@
                                                 <option value="failed">Failed</option>
                                             </select>
                                         </div>
-                                        <div class="col-6 col-lg-3">
+                                        <div class="col-6 col-lg-2">
                                             <select id="jobFilterValidation" class="form-select form-select-sm">
                                                 <option value="">All validation</option>
                                                 <option value="pass">OOS pass</option>
@@ -606,16 +618,44 @@
                                                 <option value="none">No OOS data</option>
                                             </select>
                                         </div>
+                                        <div class="col-12 col-lg-3">
+                                            <input type="date" id="jobFilterRunDate" class="form-control form-control-sm" title="Filter by Romania local run date">
+                                        </div>
+                                    </div>
+                                    <div class="row g-2 mb-3">
+                                        <div class="col-6 col-lg-2">
+                                            <input type="number" step="0.1" id="jobFilterReturnMin" class="form-control form-control-sm" placeholder="Min Return %">
+                                        </div>
+                                        <div class="col-6 col-lg-2">
+                                            <input type="number" step="0.1" id="jobFilterReturnMax" class="form-control form-control-sm" placeholder="Max Return %">
+                                        </div>
+                                        <div class="col-6 col-lg-2">
+                                            <input type="number" step="0.1" id="jobFilterWinMin" class="form-control form-control-sm" placeholder="Min Win %">
+                                        </div>
+                                        <div class="col-6 col-lg-2">
+                                            <input type="number" step="0.1" id="jobFilterWinMax" class="form-control form-control-sm" placeholder="Max Win %">
+                                        </div>
+                                        <div class="col-6 col-lg-2">
+                                            <input type="number" step="0.1" id="jobFilterDdMin" class="form-control form-control-sm" placeholder="Min DD %">
+                                        </div>
+                                        <div class="col-6 col-lg-2">
+                                            <input type="number" step="0.1" id="jobFilterDdMax" class="form-control form-control-sm" placeholder="Max DD %">
+                                        </div>
+                                        <div class="col-12 col-lg-2">
+                                            <button type="button" id="clearJobFiltersBtn" class="btn btn-sm btn-outline-secondary w-100">Clear Filters</button>
+                                        </div>
                                     </div>
                                     <div class="table-responsive strategy-runs-wrap">
                                         <table class="table table-sm align-middle mb-0 strategy-runs-table">
                                             <thead>
                                                 <tr>
+                                                    <th><input type="checkbox" id="selectAllJobs"></th>
                                                     <th>Stock</th>
                                                     <th>Strategy</th>
                                                     <th>Interval</th>
                                                     <th>Compute</th>
                                                     <th>Status</th>
+                                                    <th>Run Date</th>
                                                     <th>Return</th>
                                                     <th>Win</th>
                                                     <th>DD</th>
@@ -634,10 +674,11 @@
                                                         {% set validation_state = 'fail' %}
                                                     {% endif %}
                                                 {% endif %}
-                                                <tr class="strategy-job-row" data-job-symbol="{{ job.symbol }}" data-job-strategy="{{ job.strategy }}" data-job-status="{{ job.status }}" data-job-validation="{{ validation_state }}" data-job-id="{{ job.id }}">
+                                                <tr class="strategy-job-row" data-job-symbol="{{ job.symbol }}" data-job-strategy="{{ job.strategy }}" data-job-status="{{ job.status }}" data-job-validation="{{ validation_state }}" data-job-id="{{ job.id }}" data-job-run-date="{{ job.run_date_local or '' }}" data-job-return="{{ job.summary_return_pct if job.summary_return_pct is not none else '' }}" data-job-win="{{ job.summary_win_rate_pct if job.summary_win_rate_pct is not none else '' }}" data-job-dd="{{ job.summary_max_drawdown_pct if job.summary_max_drawdown_pct is not none else '' }}">
+                                                    <td><input type="checkbox" class="form-check-input job-select" name="selected_job_ids" value="{{ job.id }}"></td>
                                                     <td>
                                                         <div class="d-flex align-items-center gap-1 flex-wrap">
-                                                            <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none load-job-config" data-config='{{ job.config|tojson|forceescape }}'>{{ job.symbol }}</button>
+                                                            <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none load-job-config" data-config='{{ (job.config if job.config is defined and job.config else {})|tojson|forceescape }}'>{{ job.symbol }}</button>
                                                             {% if job.signal_exact_match %}
                                                             <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle" data-strategy-tip title="Aceasta configuratie exacta a fost adaugata in Signal Universe.">In Signals</span>
                                                             {% elif job.signal_symbol_match %}
@@ -649,6 +690,7 @@
                                                     <td>{{ job.summary.timeframe if job.summary else job.timeframe }}</td>
                                                     <td>{{ job.compute_target or '-' }}</td>
                                                     <td><span class="badge bg-neutral">{{ job.status }}</span></td>
+                                                    <td>{{ job.run_at_local or '-' }}</td>
                                                     <td>{{ job.summary.metrics.return_pct if job.summary else '-' }}{% if job.summary %}%{% endif %}</td>
                                                     <td>{{ job.summary.metrics.win_rate_pct if job.summary else '-' }}{% if job.summary %}%{% endif %}</td>
                                                     <td>{{ job.summary.metrics.max_drawdown_pct if job.summary else '-' }}{% if job.summary %}%{% endif %}</td>
@@ -668,7 +710,7 @@
                                                     </td>
                                                     <td class="strategy-run-actions">
                                                         <button class="btn btn-sm btn-link px-1" type="button" data-bs-toggle="collapse" data-bs-target="#runDetails{{ loop.index }}">Details</button>
-                                                        <button class="btn btn-sm btn-outline-secondary px-2 load-job-config" type="button" data-config='{{ job.config|tojson|forceescape }}'>Load</button>
+                                                        <button class="btn btn-sm btn-outline-secondary px-2 load-job-config" type="button" data-config='{{ (job.config if job.config is defined and job.config else {})|tojson|forceescape }}'>Load</button>
                                                         {% if job.status == 'completed' and job.summary %}
                                                             {% if job.signal_exact_match %}
                                                             <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">Already added</span>
@@ -682,11 +724,11 @@
                                                     </td>
                                                 </tr>
                                                 <tr class="strategy-job-detail-row" data-parent-job-id="{{ job.id }}">
-                                                    <td colspan="11" class="p-0 border-0">
+                                                    <td colspan="13" class="p-0 border-0">
                                                         <div class="collapse strategy-detail-collapse" id="runDetails{{ loop.index }}">
                                                             <div class="p-3">
                                                                 <div class="small text-muted mb-2">
-                                                                    Job {{ job.id }} | Worker {{ job.worker or '-' }} | Updated {{ job.updated_at_utc or job.created_at_utc }}
+                                                                    Job {{ job.id }} | Worker {{ job.worker or '-' }} | Run {{ job.run_at_local or '-' }} | Updated {{ job.updated_at_local or job.run_at_local or '-' }}
                                                                 </div>
                                                                 {% if job.summary %}
                                                                 <div class="strategy-metrics mb-3">
@@ -876,7 +918,8 @@
 $(document).ready(function() {
     let tradableSymbols = new Set();
     let tradableAssets = [];
-    let selectedBacktestSymbols = [];
+    let preferredBacktestSymbols = [];
+    const initialTesterSymbols = {{ config.tester_symbols|default([])|tojson }};
     const tradableSymbolsUrl = "{{ url_for('api_tradable_symbols') }}";
     const liveSnapshotUrl = "{{ url_for('api_admin_strategy_live_snapshot') }}";
     const strategyForm = $('#strategyConfigForm');
@@ -940,25 +983,85 @@ $(document).ready(function() {
         });
     }
 
-    function syncBacktestSymbolsField() {
-        $('#backtestSymbolsField').val(selectedBacktestSymbols.join(', '));
+    function findTradableAsset(symbol) {
+        const normalized = normalizeSymbol(symbol);
+        return tradableAssets.find((asset) => asset.symbol === normalized) || null;
     }
 
-    function renderSelectedBacktestSymbols() {
-        const container = $('#backtestSelectedSymbols');
+    function syncBacktestSymbolsField() {
+        $('#backtestSymbolsField').val(
+            preferredBacktestSymbols
+                .filter((item) => item.selected)
+                .map((item) => item.symbol)
+                .join(', ')
+        );
+    }
+
+    function syncBacktestSymbolInputs() {
+        const container = $('#backtestSymbolInputs');
         container.empty();
-        if (!selectedBacktestSymbols.length) {
-            container.append('<div class="small text-muted">No stocks selected.</div>');
+        preferredBacktestSymbols.forEach((item) => {
+            container.append(`<input type="hidden" name="tester_symbol[]" value="${escapeHtml(item.symbol)}">`);
+            container.append(`<input type="hidden" name="tester_symbol_selected[]" value="${item.selected ? '1' : '0'}">`);
+        });
+    }
+
+    function upsertPreferredBacktestSymbol(symbol, selected = true) {
+        const normalized = normalizeSymbol(symbol);
+        if (!normalized) return;
+        const existing = preferredBacktestSymbols.find((item) => item.symbol === normalized);
+        if (existing) {
+            existing.selected = selected;
+            const asset = findTradableAsset(normalized);
+            if (asset && !existing.name) existing.name = asset.name || '';
             return;
         }
-        selectedBacktestSymbols.forEach((symbol) => {
+        const asset = findTradableAsset(normalized);
+        preferredBacktestSymbols.push({
+            symbol: normalized,
+            name: asset?.name || '',
+            selected: selected,
+        });
+    }
+
+    function removePreferredBacktestSymbol(symbol) {
+        const normalized = normalizeSymbol(symbol);
+        preferredBacktestSymbols = preferredBacktestSymbols.filter((item) => item.symbol !== normalized);
+    }
+
+    function renderPreferredBacktestSymbols() {
+        const container = $('#backtestPreferredSymbols');
+        container.empty();
+        if (!preferredBacktestSymbols.length) {
+            container.append('<div class="small text-muted">No preferred stocks saved yet.</div>');
+            syncBacktestSymbolsField();
+            syncBacktestSymbolInputs();
+            return;
+        }
+        preferredBacktestSymbols.forEach((item) => {
+            const selectedBadge = item.selected
+                ? '<span class="badge bg-success-subtle text-success-emphasis border">Run</span>'
+                : '<span class="badge bg-secondary-subtle text-secondary-emphasis border">Keep only</span>';
             container.append(`
-                <span class="badge bg-primary-subtle text-primary-emphasis border me-1 mb-1">
-                    ${escapeHtml(symbol)}
-                    <button type="button" class="btn btn-link btn-sm p-0 ms-1 text-decoration-none remove-backtest-symbol" data-symbol="${escapeHtml(symbol)}">&times;</button>
-                </span>
+                <div class="d-flex align-items-start justify-content-between gap-2 border rounded px-2 py-1 mb-1 preferred-backtest-symbol-row">
+                    <label class="d-flex align-items-start gap-2 mb-0 flex-grow-1">
+                        <input type="checkbox" class="form-check-input mt-1 preferred-backtest-symbol-toggle" data-symbol="${escapeHtml(item.symbol)}" ${item.selected ? 'checked' : ''}>
+                        <span>
+                            <strong>${escapeHtml(item.symbol)}</strong>
+                            <span class="text-muted small d-block">${escapeHtml(item.name || '')}</span>
+                        </span>
+                    </label>
+                    <div class="d-flex align-items-center gap-2">
+                        ${selectedBadge}
+                        <button type="button" class="btn btn-sm btn-outline-danger remove-backtest-symbol" data-symbol="${escapeHtml(item.symbol)}" title="Remove from preferred list">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                </div>
             `);
         });
+        syncBacktestSymbolsField();
+        syncBacktestSymbolInputs();
     }
 
     function renderBacktestSymbolResults() {
@@ -969,8 +1072,11 @@ $(document).ready(function() {
             container.append('<div class="small text-muted">Loading Alpaca tradable assets...</div>');
             return;
         }
+        if (!query) {
+            container.append('<div class="small text-muted">Search by symbol or company name to add more stocks to the preferred list.</div>');
+            return;
+        }
         const matches = tradableAssets.filter((asset) => {
-            if (!query) return selectedBacktestSymbols.includes(asset.symbol);
             return asset.symbol.toLowerCase().includes(query) || String(asset.name || '').toLowerCase().includes(query);
         }).slice(0, 40);
         if (!matches.length) {
@@ -978,7 +1084,11 @@ $(document).ready(function() {
             return;
         }
         matches.forEach((asset) => {
-            const checked = selectedBacktestSymbols.includes(asset.symbol) ? 'checked' : '';
+            const existing = preferredBacktestSymbols.find((item) => item.symbol === asset.symbol);
+            const checked = existing && existing.selected ? 'checked' : '';
+            const status = existing
+                ? (existing.selected ? '<span class="badge bg-success-subtle text-success-emphasis border">In run list</span>' : '<span class="badge bg-secondary-subtle text-secondary-emphasis border">Saved only</span>')
+                : '<span class="badge bg-light text-muted border">New</span>';
             container.append(`
                 <label class="strategy-symbol-result d-flex align-items-start gap-2 border rounded px-2 py-1 mb-1">
                     <input type="checkbox" class="form-check-input mt-1 backtest-symbol-toggle" data-symbol="${escapeHtml(asset.symbol)}" ${checked}>
@@ -986,15 +1096,38 @@ $(document).ready(function() {
                         <strong>${escapeHtml(asset.symbol)}</strong>
                         <span class="text-muted small d-block">${escapeHtml(asset.name || '')}</span>
                     </span>
+                    <span class="ms-auto">${status}</span>
                 </label>
             `);
         });
     }
 
-    function setSelectedBacktestSymbols(symbols) {
-        selectedBacktestSymbols = parseSymbols(Array.isArray(symbols) ? symbols.join(',') : symbols);
+    function setPreferredBacktestSymbols(entries) {
+        if (Array.isArray(entries) && entries.length && typeof entries[0] === 'object') {
+            preferredBacktestSymbols = entries
+                .map((item) => {
+                    const symbol = normalizeSymbol(item.symbol);
+                    if (!symbol) return null;
+                    const asset = findTradableAsset(symbol);
+                    return {
+                        symbol: symbol,
+                        name: asset?.name || item.name || '',
+                        selected: item.selected !== false,
+                    };
+                })
+                .filter(Boolean);
+        } else {
+            preferredBacktestSymbols = parseSymbols(Array.isArray(entries) ? entries.join(',') : entries).map((symbol) => {
+                const asset = findTradableAsset(symbol);
+                return {
+                    symbol,
+                    name: asset?.name || '',
+                    selected: true,
+                };
+            });
+        }
         syncBacktestSymbolsField();
-        renderSelectedBacktestSymbols();
+        renderPreferredBacktestSymbols();
         renderBacktestSymbolResults();
     }
 
@@ -1006,17 +1139,13 @@ $(document).ready(function() {
             first.prop('checked', Boolean(value));
             return;
         }
-        if (name === 'symbol') {
-            setSelectedBacktestSymbols(value);
-            return;
-        }
         first.val(value);
     }
 
     function loadTesterConfig(config) {
         if (!config || typeof config !== 'object') return;
         const fieldNames = [
-            'symbol', 'strategy', 'timeframe', 'compute_target', 'alpaca_user', 'session', 'feed',
+            'strategy', 'timeframe', 'compute_target', 'alpaca_user', 'session', 'feed',
             'trade_direction', 'inner_kc_length', 'inner_kc_mult', 'outer_kc_length', 'outer_kc_mult',
             'backtest_start_date', 'backtest_start_time', 'backtest_end_date', 'backtest_end_time',
             'fixed_stop_loss_pct', 'fixed_take_profit_pct', 'forced_stop_loss_pct', 'forced_take_profit_pct',
@@ -1033,6 +1162,11 @@ $(document).ready(function() {
                 setFieldValue(name, config[name]);
             }
         });
+        if (Array.isArray(config.tester_symbols) && config.tester_symbols.length) {
+            setPreferredBacktestSymbols(config.tester_symbols);
+        } else if (Object.prototype.hasOwnProperty.call(config, 'symbol')) {
+            setPreferredBacktestSymbols(config.symbol);
+        }
         ['optimize_enabled', 'timeframe_sweep_enabled', 'validation_enabled', 'recalc_after_order_filled', 'recalc_on_every_tick'].forEach((name) => {
             if (Object.prototype.hasOwnProperty.call(config, name)) {
                 setFieldValue(name, config[name]);
@@ -1052,6 +1186,13 @@ $(document).ready(function() {
         const strategy = $('#jobFilterStrategy').val() || '';
         const status = $('#jobFilterStatus').val() || '';
         const validation = $('#jobFilterValidation').val() || '';
+        const runDate = $('#jobFilterRunDate').val() || '';
+        const returnMin = parseOptionalNumber($('#jobFilterReturnMin').val());
+        const returnMax = parseOptionalNumber($('#jobFilterReturnMax').val());
+        const winMin = parseOptionalNumber($('#jobFilterWinMin').val());
+        const winMax = parseOptionalNumber($('#jobFilterWinMax').val());
+        const ddMin = parseOptionalNumber($('#jobFilterDdMin').val());
+        const ddMax = parseOptionalNumber($('#jobFilterDdMax').val());
         $('.strategy-job-row').each(function() {
             const row = $(this);
             const symbol = String(row.data('job-symbol') || '').toLowerCase();
@@ -1059,13 +1200,47 @@ $(document).ready(function() {
             const rowStrategy = String(row.data('job-strategy') || '');
             const rowStatus = String(row.data('job-status') || '');
             const rowValidation = String(row.data('job-validation') || '');
+            const rowRunDate = String(row.attr('data-job-run-date') || '');
+            const rowReturn = parseOptionalNumber(row.attr('data-job-return'));
+            const rowWin = parseOptionalNumber(row.attr('data-job-win'));
+            const rowDd = parseOptionalNumber(row.attr('data-job-dd'));
             const visible = (!text || symbol.includes(text) || jobId.includes(text))
                 && (!strategy || rowStrategy === strategy)
                 && (!status || rowStatus === status)
-                && (!validation || rowValidation === validation);
+                && (!validation || rowValidation === validation)
+                && (!runDate || rowRunDate === runDate)
+                && matchesNumericRange(rowReturn, returnMin, returnMax)
+                && matchesNumericRange(rowWin, winMin, winMax)
+                && matchesNumericRange(rowDd, ddMin, ddMax);
             row.toggle(visible);
             row.next('.strategy-job-detail-row').toggle(visible);
         });
+        syncSelectAllJobsState();
+    }
+
+    function parseOptionalNumber(value) {
+        const raw = String(value ?? '').trim();
+        if (!raw) return null;
+        const parsed = Number(raw);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    function matchesNumericRange(value, min, max) {
+        if (min === null && max === null) return true;
+        if (value === null) return false;
+        if (min !== null && value < min) return false;
+        if (max !== null && value > max) return false;
+        return true;
+    }
+
+    function visibleJobCheckboxes() {
+        return $('.strategy-job-row:visible').find('.job-select');
+    }
+
+    function syncSelectAllJobsState() {
+        const boxes = visibleJobCheckboxes();
+        const allChecked = boxes.length > 0 && boxes.filter(':checked').length === boxes.length;
+        $('#selectAllJobs').prop('checked', allChecked);
     }
 
     function syncEnabledHidden(row) {
@@ -1105,26 +1280,26 @@ $(document).ready(function() {
             })).filter((asset) => asset.symbol);
             tradableSymbols = new Set(tradableAssets.map((asset) => asset.symbol));
             tradableAssets.forEach((asset) => datalist.append(`<option value="${escapeHtml(asset.symbol)}" label="${escapeHtml(asset.name)}"></option>`));
-            setSelectedBacktestSymbols($('#backtestSymbolsField').val());
+            setPreferredBacktestSymbols(initialTesterSymbols && initialTesterSymbols.length ? initialTesterSymbols : $('#backtestSymbolsField').val());
         });
 
     $('#backtestSymbolSearch').on('input', renderBacktestSymbolResults);
     $('#backtestSymbolResults').on('change', '.backtest-symbol-toggle', function() {
         const symbol = normalizeSymbol($(this).data('symbol'));
-        if ($(this).is(':checked')) {
-            if (!selectedBacktestSymbols.includes(symbol)) selectedBacktestSymbols.push(symbol);
-        } else {
-            selectedBacktestSymbols = selectedBacktestSymbols.filter((item) => item !== symbol);
-        }
-        syncBacktestSymbolsField();
-        renderSelectedBacktestSymbols();
+        upsertPreferredBacktestSymbol(symbol, $(this).is(':checked'));
+        renderPreferredBacktestSymbols();
         renderBacktestSymbolResults();
     });
-    $('#backtestSelectedSymbols').on('click', '.remove-backtest-symbol', function() {
+    $('#backtestPreferredSymbols').on('change', '.preferred-backtest-symbol-toggle', function() {
         const symbol = normalizeSymbol($(this).data('symbol'));
-        selectedBacktestSymbols = selectedBacktestSymbols.filter((item) => item !== symbol);
-        syncBacktestSymbolsField();
-        renderSelectedBacktestSymbols();
+        upsertPreferredBacktestSymbol(symbol, $(this).is(':checked'));
+        renderPreferredBacktestSymbols();
+        renderBacktestSymbolResults();
+    });
+    $('#backtestPreferredSymbols').on('click', '.remove-backtest-symbol', function() {
+        const symbol = normalizeSymbol($(this).data('symbol'));
+        removePreferredBacktestSymbol(symbol);
+        renderPreferredBacktestSymbols();
         renderBacktestSymbolResults();
     });
 
@@ -1184,7 +1359,38 @@ $(document).ready(function() {
         strategyForm.trigger('submit');
     });
 
-    $('#jobFilterText, #jobFilterStrategy, #jobFilterStatus, #jobFilterValidation').on('input change', applyJobFilters);
+    $('#jobFilterText, #jobFilterStrategy, #jobFilterStatus, #jobFilterValidation, #jobFilterRunDate, #jobFilterReturnMin, #jobFilterReturnMax, #jobFilterWinMin, #jobFilterWinMax, #jobFilterDdMin, #jobFilterDdMax').on('input change', applyJobFilters);
+    $('#clearJobFiltersBtn').on('click', function() {
+        $('#jobFilterText, #jobFilterRunDate, #jobFilterReturnMin, #jobFilterReturnMax, #jobFilterWinMin, #jobFilterWinMax, #jobFilterDdMin, #jobFilterDdMax').val('');
+        $('#jobFilterStrategy, #jobFilterStatus, #jobFilterValidation').val('');
+        applyJobFilters();
+    });
+    $('#selectAllJobs').on('change', function() {
+        const checked = $(this).is(':checked');
+        visibleJobCheckboxes().prop('checked', checked);
+    });
+    $(document).on('change', '.job-select', syncSelectAllJobsState);
+    $('#deleteSelectedJobsBtn').on('click', function(event) {
+        if ($('.job-select:checked').length === 0) {
+            event.preventDefault();
+            window.alert('No optimizer runs selected.');
+            return;
+        }
+        if (!window.confirm(`Delete ${$('.job-select:checked').length} selected optimizer run(s)?`)) {
+            event.preventDefault();
+        }
+    });
+    $('#deleteQueuedJobsBtn').on('click', function(event) {
+        const queuedVisible = $('.strategy-job-row[data-job-status="queued"]').length;
+        if (!queuedVisible) {
+            event.preventDefault();
+            window.alert('No queued optimizer runs found.');
+            return;
+        }
+        if (!window.confirm(`Delete all queued optimizer runs (${queuedVisible})?`)) {
+            event.preventDefault();
+        }
+    });
     applyJobFilters();
 
     $('#refreshLiveSnapshot').on('click', function() {

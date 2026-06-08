@@ -1,5 +1,26 @@
 # Release Notes
 
+## Version 2.7.1 - 2026-06-09
+
+### Strategy Lab
+- Reworked **Backtest Stocks** into a persistent preferred list:
+  - unchecking a stock now keeps it saved but skips it for the next run,
+  - removing a stock is now an explicit action,
+  - the saved tester list is preserved in strategy config.
+- Added missing field tooltips for strategy-specific optimizer and OOS validation inputs.
+- Expanded **Optimizer Runs** filtering with:
+  - Romania-local run date,
+  - min/max Return %,
+  - min/max Win %,
+  - min/max Drawdown %,
+  - combined filtering behavior across date and metric filters.
+- Added a visible **Run Date** column in Optimizer Runs using local Romania time.
+
+### Remote Worker Compatibility
+- Added PI5-side compatibility handling for legacy Windows strategy workers that still run an older `pine_optimizer.py`.
+- Remote jobs that fail with argparse `returncode=2` because of unsupported validation CLI flags are now automatically requeued once with those flags removed.
+- Requeued the broken remote `MACD + SMA` jobs so stale Windows workers can continue processing them without manual recreation.
+
 ## Version 2.7.0 - 2026-06-07
 
 ### Strategy Lab
