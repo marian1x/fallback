@@ -432,6 +432,8 @@ class LocalStrategyEngine:
         return failed
 
     def oos_entry_rejection_reason(self, backtest: Dict, cfg: Optional[Dict] = None) -> Optional[str]:
+        if cfg is not None and not bool(cfg.get("validation_enabled", True)):
+            return None
         validation = backtest.get("validation") if isinstance(backtest.get("validation"), dict) else None
         if not validation or not validation.get("enabled", True):
             return None
