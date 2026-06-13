@@ -1323,15 +1323,26 @@ def describe_accelerator(requested: str) -> Dict[str, object]:
         return info
 
     probes: List[str] = []
+    # NOTE: the backtest is a sequential, path-dependent state machine (entries,
+    # intrabar trailing stops, forced SL/TP per bar). That does not map onto GPU
+    # SIMD without a full vectorized rewrite, so even when a GPU is present the
+    # simulation runs on the CPU and trials are parallelized across CPU processes
+    # (see --jobs). Detection below reports the GPU honestly rather than pretending
+    # to offload work to it.
     try:
         import torch_directml  # type: ignore
 
         device = torch_directml.device()
+        try:
+            device_name = torch_directml.device_name(0)
+        except Exception:
+            device_name = str(device)
         info["gpu_available"] = True
         info["backend"] = "torch-directml"
+        info["device_name"] = device_name
         info["message"] = (
-            f"DirectML device detected ({device}), but this pandas/OHLC simulator has no GPU kernel yet; "
-            "running backtest on CPU."
+            f"GPU detected via DirectML ({device_name}). The OHLC simulator is sequential and runs on CPU; "
+            "trials are parallelized across CPU cores (set optimizer jobs to 0 for auto)."
         )
         return info
     except Exception as exc:
@@ -1345,9 +1356,10 @@ def describe_accelerator(requested: str) -> Dict[str, object]:
         if devices:
             info["gpu_available"] = True
             info["backend"] = "opencl"
+            info["device_name"] = devices[0]
             info["message"] = (
-                f"OpenCL GPU detected ({devices[0]}), but this pandas/OHLC simulator has no GPU kernel yet; "
-                "running backtest on CPU."
+                f"GPU detected via OpenCL ({devices[0]}). The OHLC simulator is sequential and runs on CPU; "
+                "trials are parallelized across CPU cores (set optimizer jobs to 0 for auto)."
             )
             return info
     except Exception as exc:
