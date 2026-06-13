@@ -70,6 +70,8 @@
 
 {% block scripts %}
 <script>
+/* Turbo: function-scope page init so re-evaluation on navigation is safe */
+(function() {
 (function() {
     const form = document.getElementById('stockIntelForm');
     const answer = document.getElementById('stockIntelAnswer');
@@ -177,6 +179,7 @@
             submit.disabled = false;
         }
     });
+})();
 })();
 </script>
 {% endblock %}

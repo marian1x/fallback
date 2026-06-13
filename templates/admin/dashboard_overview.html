@@ -29,6 +29,8 @@
 
 {% block scripts %}
 <script>
+/* Turbo: function-scope page init so re-evaluation on navigation is safe */
+(function() {
     const adminDashboardSummaryUrl = "{{ url_for('api_admin_dashboard_summary') }}";
 
     function colorPL(valStr) {
@@ -74,5 +76,6 @@
         fetchAdminSummary();
         setInterval(fetchAdminSummary, 15000); // Refresh every 15 seconds
     });
+})();
 </script>
 {% endblock %}

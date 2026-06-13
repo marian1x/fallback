@@ -110,8 +110,10 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/js/luxon.min.js') }}"></script>
 <script>
+/* Turbo: function-scope page init so re-evaluation on navigation is safe */
+(function() {
     let allClosedOrders = [];
     let closedOrdersTable;
     let leaderboardTable;
@@ -278,6 +280,7 @@
             fetchAndRenderTrades();
         });
     });
+})();
 </script>
 <style>
 .stat-item { padding: 0.35rem 0; font-size: 0.95rem; display: flex; justify-content: space-between; }

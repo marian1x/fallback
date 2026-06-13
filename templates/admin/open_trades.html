@@ -45,6 +45,8 @@
 
 {% block scripts %}
 <script>
+/* Turbo: function-scope page init so re-evaluation on navigation is safe */
+(function() {
     const adminAllOpenPositionsUrl = "{{ url_for('api_admin_all_open_positions') }}";
     const adminCloseTradesUrl = "{{ url_for('api_admin_close_trades') }}";
 
@@ -166,5 +168,6 @@
     // Initial load
     fetchAndRenderTable();
 });
+})();
 </script>
 {% endblock %}

@@ -929,6 +929,8 @@
 
 {% block scripts %}
 <script>
+/* Turbo: function-scope page init so re-evaluation on navigation is safe */
+(function() {
 $(document).ready(function() {
     let tradableSymbols = new Set();
     let tradableAssets = [];
@@ -1442,5 +1444,6 @@ $(document).ready(function() {
         });
     }
 });
+})();
 </script>
 {% endblock %}

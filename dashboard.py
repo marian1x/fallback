@@ -16,6 +16,7 @@ import secrets
 import re
 from urllib.parse import urlsplit
 from functools import wraps
+from concurrent.futures import ThreadPoolExecutor
 from zoneinfo import ZoneInfo
 
 from flask import (
@@ -263,15 +264,74 @@ def superuser_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+# --- Alpaca client + response caching ---------------------------------------
+# The dashboard runs on a single Gunicorn worker and several pages poll Alpaca
+# every few seconds. Rebuilding a TradingClient per request forced a fresh TLS
+# handshake each time, and concurrent polls fanned out one network call per user
+# serially. Caching the client per user (so the HTTPS connection is reused) plus
+# a short TTL cache on positions/account keeps menu navigation responsive.
+_ALPACA_CLIENT_CACHE = {}
+_ALPACA_CLIENT_LOCK = threading.Lock()
+_ALPACA_RESP_CACHE = {}
+_ALPACA_RESP_LOCK = threading.Lock()
+ALPACA_POSITIONS_TTL_SEC = float(os.getenv('ALPACA_POSITIONS_TTL_SEC', '5'))
+ALPACA_ACCOUNT_TTL_SEC = float(os.getenv('ALPACA_ACCOUNT_TTL_SEC', '8'))
+ALPACA_FETCH_MAX_WORKERS = int(os.getenv('ALPACA_FETCH_MAX_WORKERS', '8'))
+
+
 def get_user_api(user):
     key = decrypt_data(user.encrypted_alpaca_key)
     secret = decrypt_data(user.encrypted_alpaca_secret)
-    if not key or not secret: return None
+    if not key or not secret:
+        return None
+    fingerprint = hashlib.sha1(f"{key}:{secret}:{BASE_URL}".encode("utf-8")).hexdigest()
+    with _ALPACA_CLIENT_LOCK:
+        cached = _ALPACA_CLIENT_CACHE.get(user.id)
+        if cached and cached[0] == fingerprint:
+            return cached[1]
     try:
-        return LegacyCompatibleAlpacaClient(key, secret, BASE_URL)
+        client = LegacyCompatibleAlpacaClient(key, secret, BASE_URL)
     except Exception as e:
         app.logger.error(f"[API_FAIL] Failed to initialize Alpaca API for {user.username}: {e}")
         return None
+    with _ALPACA_CLIENT_LOCK:
+        _ALPACA_CLIENT_CACHE[user.id] = (fingerprint, client)
+    return client
+
+
+def _cached_alpaca_call(cache_key, ttl, loader):
+    """Return a recent Alpaca response if one was fetched within `ttl` seconds,
+    otherwise call `loader()` and cache it. The network call runs outside the
+    lock so concurrent pollers never serialize behind each other."""
+    now = time.monotonic()
+    with _ALPACA_RESP_LOCK:
+        entry = _ALPACA_RESP_CACHE.get(cache_key)
+        if entry and (now - entry[0]) < ttl:
+            return entry[1]
+    value = loader()
+    with _ALPACA_RESP_LOCK:
+        _ALPACA_RESP_CACHE[cache_key] = (time.monotonic(), value)
+    return value
+
+
+def _map_users_parallel(users, fn):
+    """Run `fn(user)` for each user concurrently and return {user_id: result}.
+    Workers must only touch already-loaded attributes / network calls — never the
+    SQLAlchemy session — because they run off the request thread."""
+    users = [u for u in users if u]
+    if not users:
+        return {}
+    workers = min(max(1, len(users)), ALPACA_FETCH_MAX_WORKERS)
+    results = {}
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_map = {executor.submit(fn, u): u for u in users}
+        for future, user in future_map.items():
+            try:
+                results[user.id] = future.result()
+            except Exception as e:
+                app.logger.warning(f"[PARALLEL_FETCH] Failed for {getattr(user, 'username', '?')}: {e}")
+                results[user.id] = None
+    return results
 
 def regular_users_query():
     return User.query.filter_by(is_superuser=False)
@@ -2522,23 +2582,34 @@ def api_admin_health_data():
 @superuser_required
 def api_admin_dashboard_summary():
     users = User.query.filter_by(is_superuser=False).all()
+
+    def load_summary(user):
+        api = get_user_api(user)
+        if not api:
+            return {'has_api': False}
+        account = _cached_alpaca_call(f"account:{user.id}", ALPACA_ACCOUNT_TTL_SEC, api.get_account)
+        positions = _cached_alpaca_call(f"positions:{user.id}", ALPACA_POSITIONS_TTL_SEC, api.list_positions)
+        total_pl = sum(float(p.unrealized_pl) for p in positions)
+        return {
+            'has_api': True,
+            'equity': f"${float(account.equity):,.2f}",
+            'open_pl': f"${total_pl:,.2f}",
+            'open_trades_count': len(positions),
+        }
+
+    results_by_user = _map_users_parallel(users, load_summary)
     summary_data = []
     for user in users:
-        api = get_user_api(user)
         user_data = {'username': user.username, 'equity': 'N/A', 'open_pl': 'N/A', 'open_trades_count': 0}
-        if api:
-            try:
-                account = api.get_account()
-                positions = api.list_positions()
-                total_pl = sum(float(p.unrealized_pl) for p in positions)
-                user_data['equity'] = f"${float(account.equity):,.2f}"
-                user_data['open_pl'] = f"${total_pl:,.2f}"
-                user_data['open_trades_count'] = len(positions)
-            except Exception as e:
-                app.logger.warning(f"[API_FAIL] Could not fetch account summary for {user.username}: {e}")
-                user_data['equity'] = 'Error'
-        else:
+        result = results_by_user.get(user.id)
+        if result is None:
+            user_data['equity'] = 'Error'
+        elif not result.get('has_api'):
             user_data['equity'] = 'No API Keys'
+        else:
+            user_data['equity'] = result['equity']
+            user_data['open_pl'] = result['open_pl']
+            user_data['open_trades_count'] = result['open_trades_count']
         summary_data.append(user_data)
     return jsonify(summary_data)
 
@@ -2595,25 +2666,28 @@ def api_admin_all_open_positions():
     users_with_keys = [u for u in query.all() if u.encrypted_alpaca_key]
     all_positions = []
 
-    for user in users_with_keys:
+    def load_positions(user):
         api = get_user_api(user)
         if not api:
+            return None
+        return _cached_alpaca_call(f"positions:{user.id}", ALPACA_POSITIONS_TTL_SEC, api.list_positions)
+
+    positions_by_user = _map_users_parallel(users_with_keys, load_positions)
+    for user in users_with_keys:
+        positions = positions_by_user.get(user.id)
+        if not positions:
             continue
-        try:
-            positions = api.list_positions()
-            for p in positions:
-                all_positions.append({
-                    'user_id': user.id,
-                    'username': user.username,
-                    'symbol': p.symbol,
-                    'side': p.side,
-                    'qty': float(p.qty),
-                    'open_price': float(p.avg_entry_price),
-                    'current_price': float(p.current_price),
-                    'unrealized_pl': float(p.unrealized_pl),
-                })
-        except Exception as e:
-            app.logger.error(f"[API_FAIL] Could not fetch positions for {user.username}: {e}")
+        for p in positions:
+            all_positions.append({
+                'user_id': user.id,
+                'username': user.username,
+                'symbol': p.symbol,
+                'side': p.side,
+                'qty': float(p.qty),
+                'open_price': float(p.avg_entry_price),
+                'current_price': float(p.current_price),
+                'unrealized_pl': float(p.unrealized_pl),
+            })
 
     return jsonify(all_positions)
 
@@ -2688,16 +2762,26 @@ def api_open_positions():
     else:
         users = [g.user]
 
-    for user in users:
+    # Prefetch DB open-times in the request thread (SQLAlchemy session is not
+    # thread-safe), then fan out the Alpaca network calls in parallel.
+    db_trades_by_user = {
+        user.id: {t.symbol: t.open_time for t in Trade.query.filter_by(status='open', user_id=user.id).all()}
+        for user in users
+    }
+
+    def load_positions(user):
         api = get_user_api(user)
         if not api:
+            return None
+        return _cached_alpaca_call(f"positions:{user.id}", ALPACA_POSITIONS_TTL_SEC, api.list_positions)
+
+    positions_by_user = _map_users_parallel(users, load_positions)
+
+    for user in users:
+        positions = positions_by_user.get(user.id)
+        if not positions:
             continue
-        try:
-            positions = api.list_positions()
-            db_trades = {t.symbol: t.open_time for t in Trade.query.filter_by(status='open', user_id=user.id).all()}
-        except Exception as e:
-            app.logger.error(f"[API_FAIL] Error fetching positions for user {user.username}: {e}")
-            continue
+        db_trades = db_trades_by_user.get(user.id, {})
         for p in positions:
             open_time_utc = db_trades.get(p.symbol, datetime.now(timezone.utc))
             out.append({
@@ -2801,18 +2885,25 @@ def api_stock_intelligence_ask():
 @login_required
 def api_account():
     if g.user.is_superuser and str(request.args.get('dashboard_scope', '')).strip().lower() == 'all_users':
-        total_equity = 0.0
-        total_cash = 0.0
-        for user in regular_users_query().order_by(User.username).all():
+        users = regular_users_query().order_by(User.username).all()
+
+        def load_account(user):
             api = get_user_api(user)
             if not api:
+                return None
+            return _cached_alpaca_call(f"account:{user.id}", ALPACA_ACCOUNT_TTL_SEC, api.get_account)
+
+        accounts_by_user = _map_users_parallel(users, load_account)
+        total_equity = 0.0
+        total_cash = 0.0
+        for acct in accounts_by_user.values():
+            if not acct:
                 continue
             try:
-                acct = api.get_account()
                 total_equity += float(acct.equity)
                 total_cash += float(acct.cash)
-            except Exception as e:
-                app.logger.warning(f"[API_FAIL] Could not fetch aggregate account for {user.username}: {e}")
+            except (TypeError, ValueError):
+                continue
         return jsonify({'equity': total_equity, 'cash': total_cash})
     if g.user.is_superuser and str(request.args.get('dashboard_scope', '')).strip().lower() == 'pool':
         target_user = get_pooled_trading_user()
@@ -2823,7 +2914,7 @@ def api_account():
     api = get_user_api(target_user)
     if not api: return jsonify({'equity': 0, 'cash': 0})
     try:
-        acct = api.get_account()
+        acct = _cached_alpaca_call(f"account:{target_user.id}", ALPACA_ACCOUNT_TTL_SEC, api.get_account)
         return jsonify({'equity': float(acct.equity), 'cash': float(acct.cash)})
     except: return jsonify({'equity': 0, 'cash': 0})
 

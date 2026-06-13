@@ -98,8 +98,10 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/js/luxon.min.js') }}"></script>
 <script>
+/* Turbo: function-scope page init so re-evaluation on navigation is safe */
+(function() {
 let openAnalyticsCharts = {};
 const openPositionsUrl = "{{ url_for('api_open_positions') }}";
 
@@ -312,6 +314,7 @@ $(document).ready(function(){
     fetchOpenAnalytics();
     setInterval(fetchOpenAnalytics, 15000); // Refresh every 15 seconds
 });
+})();
 </script>
 <style>
 .open-analytics-chart { min-height: 180px; }

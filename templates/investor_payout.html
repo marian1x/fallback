@@ -59,6 +59,8 @@
 
 {% block scripts %}
 <script>
+/* Turbo: function-scope page init so re-evaluation on navigation is safe */
+(function() {
     const investorPayoutDataUrl = "{{ url_for('api_investor_payout_data') }}";
 
     function formatCurrency(value) {
@@ -115,5 +117,6 @@
 
     document.getElementById('refreshBtn').addEventListener('click', fetchPayoutData);
     document.addEventListener('DOMContentLoaded', fetchPayoutData);
+})();
 </script>
 {% endblock %}
