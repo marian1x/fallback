@@ -1398,14 +1398,12 @@ def backtest_macd_sma(df: pd.DataFrame, params: StrategyParams, cfg: BacktestCon
     df["long_signal"] = (
         crossed_above(df["hist"], 0.0)
         & (df["macd_line"] > 0)
-        & (df["fast_ma"] > df["slow_ma"])
-        & (df["close"].shift(params.macd_slow_length) > df["veryslow_ma"])
+        & (df["close"] > df["veryslow_ma"])
     )
     df["short_signal"] = (
         crossed_below(df["hist"], 0.0)
         & (df["macd_line"] < 0)
-        & (df["fast_ma"] < df["slow_ma"])
-        & (df["close"].shift(params.macd_slow_length) < df["veryslow_ma"])
+        & (df["close"] < df["veryslow_ma"])
     )
     df = df.dropna()
     if df.empty:
@@ -1468,8 +1466,17 @@ def backtest_macd_sma(df: pd.DataFrame, params: StrategyParams, cfg: BacktestCon
         entry_index = -1
         entry_time = None
 
+    close_min = cfg.market_close_utc_hour * 60 + cfg.market_close_utc_minute
+    preclose_start = close_min - cfg.close_before_minutes
+
     for i in range(1, len(df)):
         if position != 0:
+            # Force close before market end to avoid overnight holds.
+            bar_min = idx[i].hour * 60 + idx[i].minute
+            if preclose_start <= bar_min < close_min:
+                close_position(i, c[i], "MACD Market Close")
+                continue
+
             exit_price: Optional[float] = None
             exit_reason: Optional[str] = None
             if position > 0:

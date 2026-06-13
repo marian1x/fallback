@@ -664,17 +664,17 @@
                                             <thead>
                                                 <tr>
                                                     <th><input type="checkbox" id="selectAllJobs"></th>
-                                                    <th>Stock</th>
-                                                    <th>Strategy</th>
-                                                    <th>Interval</th>
-                                                    <th>Compute</th>
-                                                    <th>Status</th>
-                                                    <th>Run Date</th>
-                                                    <th>Return</th>
-                                                    <th>Win</th>
-                                                    <th>DD</th>
-                                                    <th>OOS</th>
-                                                    <th>Vs Current</th>
+                                                    <th class="job-sortable" data-sort-attr="job-symbol" data-sort-type="text">Stock <span class="sort-icon"></span></th>
+                                                    <th class="job-sortable" data-sort-attr="job-strategy" data-sort-type="text">Strategy <span class="sort-icon"></span></th>
+                                                    <th class="job-sortable" data-sort-cell="3" data-sort-type="text">Interval <span class="sort-icon"></span></th>
+                                                    <th class="job-sortable" data-sort-cell="4" data-sort-type="text">Compute <span class="sort-icon"></span></th>
+                                                    <th class="job-sortable" data-sort-attr="job-status" data-sort-type="text">Status <span class="sort-icon"></span></th>
+                                                    <th class="job-sortable" data-sort-attr="job-run-date" data-sort-type="text">Run Date <span class="sort-icon"></span></th>
+                                                    <th class="job-sortable" data-sort-attr="job-return" data-sort-type="num">Return <span class="sort-icon"></span></th>
+                                                    <th class="job-sortable" data-sort-attr="job-win" data-sort-type="num">Win <span class="sort-icon"></span></th>
+                                                    <th class="job-sortable" data-sort-attr="job-dd" data-sort-type="num">DD <span class="sort-icon"></span></th>
+                                                    <th class="job-sortable" data-sort-attr="job-validation" data-sort-type="text">OOS <span class="sort-icon"></span></th>
+                                                    <th class="job-sortable" data-sort-cell="11" data-sort-type="text">Vs Current <span class="sort-icon"></span></th>
                                                     <th>Action</th>
                                                 </tr>
                                             </thead>
@@ -1239,6 +1239,57 @@ $(document).ready(function() {
         if (max !== null && value > max) return false;
         return true;
     }
+
+    // --- Optimizer Runs column sort -------------------------------------------
+    let _jobSortCol = null;
+    let _jobSortDir = 'asc';
+
+    $('.strategy-runs-table thead th.job-sortable').on('click', function() {
+        const th = $(this);
+        const attr = th.data('sort-attr');
+        const cellIdx = th.data('sort-cell');
+        const colKey = attr || ('cell-' + cellIdx);
+
+        if (_jobSortCol === colKey) {
+            _jobSortDir = _jobSortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+            _jobSortCol = colKey;
+            _jobSortDir = 'asc';
+        }
+
+        // Update header indicators.
+        $('.strategy-runs-table thead th.job-sortable').removeClass('sort-asc sort-desc').find('.sort-icon').text('');
+        th.addClass('sort-' + _jobSortDir);
+        th.find('.sort-icon').text(_jobSortDir === 'asc' ? ' ▲' : ' ▼');
+
+        const tbody = $('.strategy-runs-table tbody');
+        const pairs = [];
+        tbody.find('.strategy-job-row').each(function() {
+            const row = $(this);
+            const detailRow = row.next('.strategy-job-detail-row');
+            let val;
+            if (attr) {
+                val = row.attr('data-' + attr) || '';
+            } else {
+                val = row.find('td').eq(Number(cellIdx)).text().trim();
+            }
+            const num = parseFloat(val);
+            pairs.push({ jobRow: row, detailRow: detailRow, val: val, num: Number.isFinite(num) ? num : null });
+        });
+
+        pairs.sort(function(a, b) {
+            let cmp;
+            if (a.num !== null && b.num !== null) {
+                cmp = a.num - b.num;
+            } else {
+                cmp = String(a.val).localeCompare(String(b.val));
+            }
+            return _jobSortDir === 'asc' ? cmp : -cmp;
+        });
+
+        pairs.forEach(function(p) { tbody.append(p.jobRow).append(p.detailRow); });
+        applyJobFilters();
+    });
 
     function visibleJobCheckboxes() {
         return $('.strategy-job-row:visible').find('.job-select');

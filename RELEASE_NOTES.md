@@ -1,5 +1,22 @@
 # Release Notes
 
+## Version 2.8.2 - 2026-06-13
+
+### MACD+SMA strategy fixes
+- **Signal condition bug.** `fast_ma > slow_ma` is mathematically identical to `macd_line > 0` (since
+  `macd_line = fast_ma - slow_ma`). The redundant check was replaced with `close > veryslow_ma`
+  (current close above the 200-SMA), a genuinely independent trend filter.
+- **Lagged SMA filter.** The 200-SMA confirmation used `close.shift(macd_slow_length)` — price 26
+  bars ago — which was stale and incoherent. Fixed to use the current bar's close vs. current 200-SMA
+  in both the backtest engine and the live strategy engine.
+- **Pre-close exit.** MACD trades now force-close N minutes before the configured market close
+  (same `close_before_minutes` used by Keltner), preventing overnight gap exposure.
+
+### UI
+- **Optimizer Runs sortable columns.** Clicking any column header in the Results → Optimizer Runs
+  table sorts the rows by that column (▲ ascending / ▼ descending, click again to reverse).
+  Works alongside the existing filters.
+
 ## Version 2.8.1 - 2026-06-13
 
 ### UI

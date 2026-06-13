@@ -424,6 +424,22 @@ body.dark-mode .navbar-toggler-icon {
 .strategy-runs-table .badge {
     font-size: 0.68rem;
 }
+.strategy-runs-table th.job-sortable {
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+.strategy-runs-table th.job-sortable:hover {
+    background: rgba(var(--accent-color-rgb), 0.1);
+}
+.strategy-runs-table th.sort-asc,
+.strategy-runs-table th.sort-desc {
+    color: var(--accent-color);
+}
+.sort-icon {
+    font-size: 0.7em;
+    opacity: 0.7;
+}
 .strategy-run-actions {
     min-width: 118px;
 }

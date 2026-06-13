@@ -851,14 +851,12 @@ class LocalStrategyEngine:
         frame["long_signal"] = (
             crossed_above(frame["hist"], 0.0)
             & (frame["macd_line"] > 0)
-            & (frame["fast_ma"] > frame["slow_ma"])
-            & (frame["close"].shift(params["macd_slow_length"]) > frame["veryslow_ma"])
+            & (frame["close"] > frame["veryslow_ma"])
         )
         frame["short_signal"] = (
             crossed_below(frame["hist"], 0.0)
             & (frame["macd_line"] < 0)
-            & (frame["fast_ma"] < frame["slow_ma"])
-            & (frame["close"].shift(params["macd_slow_length"]) < frame["veryslow_ma"])
+            & (frame["close"] < frame["veryslow_ma"])
         )
         return frame.dropna()
 
