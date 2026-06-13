@@ -45,7 +45,7 @@ DEFAULT_PINE = DEFAULT_KELTNER_PINE
 DEFAULT_XLSX = PROJECT_ROOT / "misc" / "Keltner_channel_strategy_stocks_NYSE_TSM_2026-06-02.xlsx"
 DEFAULT_REPORT = PROJECT_ROOT / "misc" / "optimizer_report.json"
 DEFAULT_TOP_CSV = PROJECT_ROOT / "misc" / "optimizer_top.csv"
-SUPPORTED_STRATEGIES = {"keltner", "macd_sma"}
+SUPPORTED_STRATEGIES = {"keltner", "macd_sma", "rsi_reversion"}
 
 
 @dataclass
@@ -70,6 +70,14 @@ class StrategyParams:
     macd_signal_length: int = 9
     macd_sma_length: int = 200
     max_intraday_loss_pct: float = 50.0
+    # RSI(2) mean-reversion strategy. Few parameters on purpose: short-term
+    # mean reversion in equities is a documented, robust edge, and keeping the
+    # parameter count low is what stops the optimizer from overfitting it.
+    rsi_length: int = 2
+    rsi_oversold: float = 10.0
+    rsi_overbought: float = 90.0
+    rsi_exit_level: float = 55.0
+    rsi_trend_length: int = 200
 
 
 @dataclass
@@ -153,6 +161,11 @@ def parse_pine_defaults(pine_path: Path) -> Dict[str, object]:
         "macd_signal_length": 9,
         "macd_sma_length": 200,
         "max_intraday_loss_pct": 50.0,
+        "rsi_length": 2,
+        "rsi_oversold": 10.0,
+        "rsi_overbought": 90.0,
+        "rsi_exit_level": 55.0,
+        "rsi_trend_length": 200,
     }
 
     # Parse strategy(...) line for initial capital and commission.
@@ -506,6 +519,21 @@ def ema(series: pd.Series, length: int) -> pd.Series:
 
 def sma(series: pd.Series, length: int) -> pd.Series:
     return series.rolling(window=length, min_periods=length).mean()
+
+
+def rsi(series: pd.Series, length: int) -> pd.Series:
+    """Wilder's RSI, matching TradingView's ta.rsi (RMA-smoothed gains/losses)."""
+    delta = series.diff()
+    gain = delta.clip(lower=0.0)
+    loss = (-delta).clip(lower=0.0)
+    alpha = 1.0 / float(length)
+    avg_gain = gain.ewm(alpha=alpha, adjust=False, min_periods=length).mean()
+    avg_loss = loss.ewm(alpha=alpha, adjust=False, min_periods=length).mean()
+    rs = avg_gain / avg_loss
+    out = 100.0 - (100.0 / (1.0 + rs))
+    # When there are no losses in the window RSI is 100 by definition.
+    out = out.where(avg_loss > 0, 100.0)
+    return out
 
 
 def crossed_above(series: pd.Series, level: float = 0.0) -> pd.Series:
@@ -1284,15 +1312,7 @@ def backtest(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, star
 
     avg_bars = float(np.mean(trade_bars)) if trade_bars else 0.0
 
-    score = (
-        return_pct
-        + (win_rate * 0.35)
-        + (min(profit_factor, 10.0) * 4.0)
-        + (sharpe * 2.0)
-        - (max_dd_pct * 1.5)
-    )
-    if total_trades < 3:
-        score -= 25.0
+    score = _compute_score(return_pct, winners, losers, profit_factor, sharpe, max_dd_pct)
 
     return BacktestResult(
         params=params,
@@ -1313,6 +1333,63 @@ def backtest(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, star
         score=score,
         trades=trades,
     )
+
+
+def _compute_score(
+    return_pct: float,
+    winners: int,
+    losers: int,
+    profit_factor: float,
+    sharpe: float,
+    max_dd_pct: float,
+) -> float:
+    """Sample-size-aware optimizer objective.
+
+    A 100% win rate over a handful of trades is almost always overfit noise, not a
+    real edge: with only ~10 trades in 5 years it is trivial for a parameter combo to
+    avoid every loss by luck, and the old objective (raw win_rate * 0.35 plus a
+    capped profit factor that goes straight to its ceiling when gross_loss == 0)
+    actively rewarded exactly those fragile combos.
+
+    Two changes fix that:
+      * The win-rate term uses the Wilson 95% lower bound of the win proportion, which
+        collapses toward 50% as the sample shrinks. 100% over 10 trades scores ~72;
+        over 50 trades ~93; over 3 trades ~44. High win rate is still rewarded, but
+        only once there is enough evidence to trust it.
+      * An explicit trade-frequency reward ramps up to a target so trading more often
+        is valued rather than ignored.
+
+    Net effect: a config that trades more and compounds real return outranks a
+    brittle few-trade / 100%-win combo, which is what we want for live use.
+    """
+    total_trades = winners + losers
+    if total_trades <= 0:
+        return -1000.0
+
+    p = winners / total_trades
+    z = 1.96
+    denom = 1.0 + (z * z) / total_trades
+    centre = p + (z * z) / (2.0 * total_trades)
+    margin = z * math.sqrt((p * (1.0 - p) + (z * z) / (4.0 * total_trades)) / total_trades)
+    wilson_low = max(0.0, (centre - margin) / denom)  # 0..1, sample-discounted win rate
+
+    # Reward more trades up to a sane target so frequency is valued, not punished.
+    trade_factor = min(total_trades / 40.0, 1.0) * 12.0
+
+    score = (
+        return_pct
+        + (wilson_low * 100.0 * 0.35)
+        + (min(profit_factor, 10.0) * 4.0)
+        + (sharpe * 2.0)
+        + trade_factor
+        - (max_dd_pct * 1.5)
+    )
+    # Statistical-significance floors: tiny samples cannot be trusted at all.
+    if total_trades < 5:
+        score -= 40.0
+    elif total_trades < 10:
+        score -= 15.0
+    return score
 
 
 def _finalize_result(
@@ -1346,15 +1423,7 @@ def _finalize_result(
         sharpe = float(rets.mean() / rets.std(ddof=1) * math.sqrt(len(rets)))
 
     avg_bars = float(np.mean(trade_bars)) if trade_bars else 0.0
-    score = (
-        return_pct
-        + (win_rate * 0.35)
-        + (min(profit_factor, 10.0) * 4.0)
-        + (sharpe * 2.0)
-        - (max_dd_pct * 1.5)
-    )
-    if total_trades < 3:
-        score -= 25.0
+    score = _compute_score(return_pct, winners, losers, profit_factor, sharpe, max_dd_pct)
 
     return BacktestResult(
         params=params,
@@ -1548,9 +1617,182 @@ def backtest_macd_sma(df: pd.DataFrame, params: StrategyParams, cfg: BacktestCon
     )
 
 
+def backtest_rsi(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, start_utc: datetime, end_utc: datetime) -> BacktestResult:
+    """RSI(2) mean-reversion with a trend filter (Connors-style).
+
+    Edge being traded: in an uptrend, a short, sharp pullback (RSI(2) very low)
+    tends to snap back; symmetrically for downtrends. It fires often, so the win
+    rate it reports is backed by a real sample instead of a handful of lucky
+    trades — the opposite failure mode to the few-trade/100%-win combos.
+
+    Long  entry: close > trend SMA  AND  RSI < oversold
+    Short entry: close < trend SMA  AND  RSI > overbought
+    Exit: RSI reverts past the exit level, or forced/fixed SL/TP, or pre-close.
+    """
+    df = df[(df.index >= pd.Timestamp(start_utc)) & (df.index <= pd.Timestamp(end_utc))].copy()
+    warmup = max(100, params.rsi_trend_length + params.rsi_length + 5)
+    if len(df) < warmup:
+        raise RuntimeError("Not enough bars for RSI mean-reversion backtest after date filtering.")
+
+    rsi_series = rsi(df["close"], params.rsi_length)
+    trend_ma = sma(df["close"], params.rsi_trend_length)
+    df["rsi"] = rsi_series
+    df["trend_ma"] = trend_ma
+    df["long_signal"] = (df["close"] > df["trend_ma"]) & (df["rsi"] < params.rsi_oversold)
+    df["short_signal"] = (df["close"] < df["trend_ma"]) & (df["rsi"] > params.rsi_overbought)
+    short_exit_level = 100.0 - params.rsi_exit_level
+    df["long_exit"] = df["rsi"] > params.rsi_exit_level
+    df["short_exit"] = df["rsi"] < short_exit_level
+    df = df.dropna()
+    if df.empty:
+        raise RuntimeError("RSI indicator warm-up removed all bars; widen date range.")
+
+    idx = df.index
+    c = df["close"].to_numpy(dtype=float)
+    h = df["high"].to_numpy(dtype=float)
+    l = df["low"].to_numpy(dtype=float)
+    long_signal = df["long_signal"].to_numpy(dtype=bool)
+    short_signal = df["short_signal"].to_numpy(dtype=bool)
+    long_exit = df["long_exit"].to_numpy(dtype=bool)
+    short_exit = df["short_exit"].to_numpy(dtype=bool)
+
+    equity = cfg.initial_capital
+    equity_marks: List[float] = [equity]
+    position = 0
+    entry_price = 0.0
+    qty = 0
+    entry_index = -1
+    entry_time: Optional[pd.Timestamp] = None
+    gross_profit = 0.0
+    gross_loss = 0.0
+    winners = 0
+    losers = 0
+    trade_returns: List[float] = []
+    trade_bars: List[int] = []
+    trades: List[Dict[str, object]] = []
+
+    def close_position(i: int, exit_price: float, exit_reason: str) -> None:
+        nonlocal equity, position, entry_price, qty, entry_index, entry_time, gross_profit, gross_loss, winners, losers
+        notional_entry = qty * entry_price
+        notional_exit = qty * exit_price
+        fees = (notional_entry + notional_exit) * (cfg.commission_pct / 100.0)
+        pnl = (exit_price - entry_price) * qty * position - fees
+        pnl_pct = (pnl / notional_entry) * 100.0 if notional_entry else 0.0
+        if pnl >= 0:
+            gross_profit += pnl
+            winners += 1
+        else:
+            gross_loss += abs(pnl)
+            losers += 1
+        equity += pnl
+        equity_marks.append(equity)
+        trade_returns.append(pnl_pct)
+        trade_bars.append(i - entry_index)
+        trades.append({
+            "entry_time": entry_time.isoformat() if entry_time is not None else None,
+            "exit_time": idx[i].isoformat(),
+            "side": "long" if position > 0 else "short",
+            "entry_price": round(float(entry_price), 6),
+            "exit_price": round(float(exit_price), 6),
+            "qty": int(qty),
+            "pnl": round(float(pnl), 2),
+            "pnl_pct": round(float(pnl_pct), 4),
+            "reason": exit_reason,
+            "bars_held": int(i - entry_index),
+        })
+        position = 0
+        entry_price = 0.0
+        qty = 0
+        entry_index = -1
+        entry_time = None
+
+    close_min = cfg.market_close_utc_hour * 60 + cfg.market_close_utc_minute
+    preclose_start = close_min - cfg.close_before_minutes
+
+    for i in range(1, len(df)):
+        if position != 0:
+            # Force close before market end to avoid overnight holds.
+            bar_min = idx[i].hour * 60 + idx[i].minute
+            if preclose_start <= bar_min < close_min:
+                close_position(i, c[i], "RSI Market Close")
+                continue
+
+            exit_price: Optional[float] = None
+            exit_reason: Optional[str] = None
+            if position > 0:
+                if l[i] <= entry_price * (1 - params.forced_stop_loss_pct / 100.0):
+                    exit_price = entry_price * (1 - params.forced_stop_loss_pct / 100.0)
+                    exit_reason = "RSI Forced SL Long"
+                elif h[i] >= entry_price * (1 + params.forced_take_profit_pct / 100.0):
+                    exit_price = entry_price * (1 + params.forced_take_profit_pct / 100.0)
+                    exit_reason = "RSI Forced TP Long"
+                elif c[i] <= entry_price * (1 - params.fixed_stop_loss_pct / 100.0):
+                    exit_price = c[i]
+                    exit_reason = "RSI Fixed Stop Loss Long"
+                elif c[i] >= entry_price * (1 + params.fixed_take_profit_pct / 100.0):
+                    exit_price = c[i]
+                    exit_reason = "RSI Fixed Take Profit Long"
+                elif long_exit[i]:
+                    exit_price = c[i]
+                    exit_reason = "RSI Mean Reversion Exit Long"
+            else:
+                if h[i] >= entry_price * (1 + params.forced_stop_loss_pct / 100.0):
+                    exit_price = entry_price * (1 + params.forced_stop_loss_pct / 100.0)
+                    exit_reason = "RSI Forced SL Short"
+                elif l[i] <= entry_price * (1 - params.forced_take_profit_pct / 100.0):
+                    exit_price = entry_price * (1 - params.forced_take_profit_pct / 100.0)
+                    exit_reason = "RSI Forced TP Short"
+                elif c[i] >= entry_price * (1 + params.fixed_stop_loss_pct / 100.0):
+                    exit_price = c[i]
+                    exit_reason = "RSI Fixed Stop Loss Short"
+                elif c[i] <= entry_price * (1 - params.fixed_take_profit_pct / 100.0):
+                    exit_price = c[i]
+                    exit_reason = "RSI Fixed Take Profit Short"
+                elif short_exit[i]:
+                    exit_price = c[i]
+                    exit_reason = "RSI Mean Reversion Exit Short"
+            if exit_price is not None and exit_reason is not None:
+                close_position(i, float(exit_price), exit_reason)
+                continue
+
+        if position == 0:
+            entry_side = 0
+            if params.trade_direction in ("Both", "Long Only") and long_signal[i]:
+                entry_side = 1
+            elif params.trade_direction in ("Both", "Short Only") and short_signal[i]:
+                entry_side = -1
+            if entry_side:
+                q = math.floor(cfg.order_size_usd / c[i])
+                if q > 0:
+                    position = entry_side
+                    entry_price = c[i]
+                    qty = q
+                    entry_index = i
+                    entry_time = idx[i]
+
+    if position != 0 and qty > 0:
+        close_position(len(df) - 1, float(c[-1]), "Final Close")
+
+    return _finalize_result(
+        params=params,
+        cfg=cfg,
+        equity=equity,
+        equity_marks=equity_marks,
+        winners=winners,
+        losers=losers,
+        gross_profit=gross_profit,
+        gross_loss=gross_loss,
+        trade_returns=trade_returns,
+        trade_bars=trade_bars,
+        trades=trades,
+    )
+
+
 def run_strategy_backtest(strategy: str, df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, start_utc: datetime, end_utc: datetime) -> BacktestResult:
     if strategy == "macd_sma":
         return backtest_macd_sma(df, params, cfg, start_utc, end_utc)
+    if strategy == "rsi_reversion":
+        return backtest_rsi(df, params, cfg, start_utc, end_utc)
     if NUMBA_AVAILABLE:
         return backtest_fast(df, params, cfg, start_utc, end_utc)
     return backtest(df, params, cfg, start_utc, end_utc)
@@ -1597,6 +1839,11 @@ def sample_params(
         macd_signal_length=int(rng.choice(ranges.get("macd_signal_length", [base.macd_signal_length]))),
         macd_sma_length=int(rng.choice(ranges.get("macd_sma_length", [base.macd_sma_length]))),
         max_intraday_loss_pct=float(rng.choice(ranges.get("max_intraday_loss_pct", [base.max_intraday_loss_pct]))),
+        rsi_length=int(rng.choice(ranges.get("rsi_length", [base.rsi_length]))),
+        rsi_oversold=float(rng.choice(ranges.get("rsi_oversold", [base.rsi_oversold]))),
+        rsi_overbought=float(rng.choice(ranges.get("rsi_overbought", [base.rsi_overbought]))),
+        rsi_exit_level=float(rng.choice(ranges.get("rsi_exit_level", [base.rsi_exit_level]))),
+        rsi_trend_length=int(rng.choice(ranges.get("rsi_trend_length", [base.rsi_trend_length]))),
     )
 
 
@@ -1792,6 +2039,11 @@ def suggest_params_tpe(
         macd_signal_length=int(trial.suggest_categorical("macd_signal_length", ranges.get("macd_signal_length", [base.macd_signal_length]))),
         macd_sma_length=int(trial.suggest_categorical("macd_sma_length", ranges.get("macd_sma_length", [base.macd_sma_length]))),
         max_intraday_loss_pct=float(trial.suggest_categorical("max_intraday_loss_pct", ranges.get("max_intraday_loss_pct", [base.max_intraday_loss_pct]))),
+        rsi_length=int(trial.suggest_categorical("rsi_length", ranges.get("rsi_length", [base.rsi_length]))),
+        rsi_oversold=float(trial.suggest_categorical("rsi_oversold", ranges.get("rsi_oversold", [base.rsi_oversold]))),
+        rsi_overbought=float(trial.suggest_categorical("rsi_overbought", ranges.get("rsi_overbought", [base.rsi_overbought]))),
+        rsi_exit_level=float(trial.suggest_categorical("rsi_exit_level", ranges.get("rsi_exit_level", [base.rsi_exit_level]))),
+        rsi_trend_length=int(trial.suggest_categorical("rsi_trend_length", ranges.get("rsi_trend_length", [base.rsi_trend_length]))),
     )
 
 
@@ -1898,6 +2150,11 @@ def main() -> None:
     parser.add_argument("--macd-signal-range", type=str, default="5:15:1")
     parser.add_argument("--macd-sma-range", type=str, default="100:250:10")
     parser.add_argument("--max-intraday-loss-range", type=str, default="50:50:1")
+    parser.add_argument("--rsi-length-range", type=str, default="2:4:1")
+    parser.add_argument("--rsi-oversold-range", type=str, default="5:20:5")
+    parser.add_argument("--rsi-overbought-range", type=str, default="80:95:5")
+    parser.add_argument("--rsi-exit-range", type=str, default="50:75:5")
+    parser.add_argument("--rsi-trend-range", type=str, default="100:200:50")
 
     parser.add_argument("--report-json", type=Path, default=DEFAULT_REPORT)
     parser.add_argument("--top-csv", type=Path, default=DEFAULT_TOP_CSV)
@@ -1982,20 +2239,45 @@ def main() -> None:
         "macd_signal_length": parse_range(args.macd_signal_range, is_int=True),
         "macd_sma_length": parse_range(args.macd_sma_range, is_int=True),
         "max_intraday_loss_pct": parse_range(args.max_intraday_loss_range, is_int=False),
+        "rsi_length": parse_range(args.rsi_length_range, is_int=True),
+        "rsi_oversold": parse_range(args.rsi_oversold_range, is_int=False),
+        "rsi_overbought": parse_range(args.rsi_overbought_range, is_int=False),
+        "rsi_exit_level": parse_range(args.rsi_exit_range, is_int=False),
+        "rsi_trend_length": parse_range(args.rsi_trend_range, is_int=True),
     }
-    if strategy_name == "keltner":
+
+    def _pin_macd_ranges() -> None:
         ranges["macd_fast_length"] = [base_params.macd_fast_length]
         ranges["macd_slow_length"] = [base_params.macd_slow_length]
         ranges["macd_signal_length"] = [base_params.macd_signal_length]
         ranges["macd_sma_length"] = [base_params.macd_sma_length]
         ranges["max_intraday_loss_pct"] = [base_params.max_intraday_loss_pct]
-    elif strategy_name == "macd_sma":
+
+    def _pin_keltner_ranges() -> None:
         ranges["inner_kc_length"] = [base_params.inner_kc_length]
         ranges["inner_kc_mult"] = [base_params.inner_kc_mult]
         ranges["outer_kc_length"] = [base_params.outer_kc_length]
         ranges["outer_kc_mult"] = [base_params.outer_kc_mult]
         ranges["trailing_offset_ticks"] = [base_params.trailing_offset_ticks]
         ranges["trailing_offset_pct"] = [base_params.trailing_offset_pct]
+
+    def _pin_rsi_ranges() -> None:
+        ranges["rsi_length"] = [base_params.rsi_length]
+        ranges["rsi_oversold"] = [base_params.rsi_oversold]
+        ranges["rsi_overbought"] = [base_params.rsi_overbought]
+        ranges["rsi_exit_level"] = [base_params.rsi_exit_level]
+        ranges["rsi_trend_length"] = [base_params.rsi_trend_length]
+
+    # Only sweep parameters that belong to the selected strategy; pin the rest.
+    if strategy_name == "keltner":
+        _pin_macd_ranges()
+        _pin_rsi_ranges()
+    elif strategy_name == "macd_sma":
+        _pin_keltner_ranges()
+        _pin_rsi_ranges()
+    elif strategy_name == "rsi_reversion":
+        _pin_keltner_ranges()
+        _pin_macd_ranges()
 
     all_results: List[Tuple[str, BacktestResult]] = []
     reference_timeframe = None
@@ -2052,6 +2334,11 @@ def main() -> None:
                 macd_signal_length=int(ranges["macd_signal_length"][0]),
                 macd_sma_length=int(ranges["macd_sma_length"][0]),
                 max_intraday_loss_pct=float(ranges["max_intraday_loss_pct"][0]),
+                rsi_length=int(ranges["rsi_length"][0]),
+                rsi_oversold=float(ranges["rsi_oversold"][0]),
+                rsi_overbought=float(ranges["rsi_overbought"][0]),
+                rsi_exit_level=float(ranges["rsi_exit_level"][0]),
+                rsi_trend_length=int(ranges["rsi_trend_length"][0]),
             )
 
         rng = random.Random(args.seed + tf_index)

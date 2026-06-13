@@ -65,6 +65,7 @@
                                         <select name="strategy" class="form-select" id="testerStrategySelect">
                                             <option value="keltner" {% if config.strategy|default('keltner') == 'keltner' %}selected{% endif %}>Keltner Channel</option>
                                             <option value="macd_sma" {% if config.strategy|default('keltner') == 'macd_sma' %}selected{% endif %}>MACD + SMA</option>
+                                            <option value="rsi_reversion" {% if config.strategy|default('keltner') == 'rsi_reversion' %}selected{% endif %}>RSI(2) Mean Reversion</option>
                                         </select>
                                     </div>
                                     <div class="col-6 col-md-2">
@@ -196,6 +197,30 @@
                                             <div class="tw-row">
                                                 <label>Very Slow SMA Length {{ tip('Trend filter length. The Pine script default is SMA 200.') }}</label>
                                                 <input type="number" name="macd_sma_length" class="form-control" value="{{ config.macd_sma_length|default(200) }}" min="1" step="1">
+                                            </div>
+                                        </div>
+
+                                        <div data-strategy-scope="rsi_reversion">
+                                            <div class="tw-section-label">RSI(2) Mean Reversion Settings</div>
+                                            <div class="tw-row">
+                                                <label>RSI Length {{ tip('Lookback for the RSI oscillator. Connors-style mean reversion uses a very short period (2). Short = more, faster signals.') }}</label>
+                                                <input type="number" name="rsi_length" class="form-control" value="{{ config.rsi_length|default(2) }}" min="1" step="1">
+                                            </div>
+                                            <div class="tw-row">
+                                                <label>RSI Oversold (long entry) {{ tip('Go long when RSI drops below this AND price is above the trend SMA. Lower = stricter, fewer but deeper dips (e.g. 10).') }}</label>
+                                                <input type="number" name="rsi_oversold" class="form-control" value="{{ config.rsi_oversold|default(10) }}" min="1" max="50" step="1">
+                                            </div>
+                                            <div class="tw-row">
+                                                <label>RSI Overbought (short entry) {{ tip('Go short when RSI rises above this AND price is below the trend SMA. Higher = stricter (e.g. 90). Only used when Trade Direction allows shorts.') }}</label>
+                                                <input type="number" name="rsi_overbought" class="form-control" value="{{ config.rsi_overbought|default(90) }}" min="50" max="99" step="1">
+                                            </div>
+                                            <div class="tw-row">
+                                                <label>RSI Exit Level {{ tip('Close a long once RSI mean-reverts back above this (shorts cover at 100 minus this). Higher = let winners run longer; lower = take the bounce quickly (e.g. 55).') }}</label>
+                                                <input type="number" name="rsi_exit_level" class="form-control" value="{{ config.rsi_exit_level|default(55) }}" min="20" max="90" step="1">
+                                            </div>
+                                            <div class="tw-row">
+                                                <label>Trend SMA Length {{ tip('Only buy dips in an uptrend / sell rips in a downtrend, measured against this SMA. 200 is the classic regime filter.') }}</label>
+                                                <input type="number" name="rsi_trend_length" class="form-control" value="{{ config.rsi_trend_length|default(200) }}" min="1" step="1">
                                             </div>
                                         </div>
                                     </div>
@@ -360,6 +385,26 @@
                                                     <label class="form-label">SMA Trend Range {{ tip('Optimizer range for the long-term trend SMA filter used by the MACD + SMA strategy.') }}</label>
                                                     <input type="text" name="macd_sma_range" class="form-control" value="{{ config.macd_sma_range|default('100:250:10') }}">
                                                 </div>
+                                                <div class="col-6 col-lg-3" data-strategy-scope="rsi_reversion">
+                                                    <label class="form-label">RSI Length Range {{ tip('Optimizer range for the RSI lookback. 2:4:1 tests 2, 3, 4 — keep it short to stay in mean-reversion territory.') }}</label>
+                                                    <input type="text" name="rsi_length_range" class="form-control" value="{{ config.rsi_length_range|default('2:4:1') }}">
+                                                </div>
+                                                <div class="col-6 col-lg-3" data-strategy-scope="rsi_reversion">
+                                                    <label class="form-label">RSI Oversold Range {{ tip('Optimizer range for the long-entry oversold threshold, e.g. 5:20:5.') }}</label>
+                                                    <input type="text" name="rsi_oversold_range" class="form-control" value="{{ config.rsi_oversold_range|default('5:20:5') }}">
+                                                </div>
+                                                <div class="col-6 col-lg-3" data-strategy-scope="rsi_reversion">
+                                                    <label class="form-label">RSI Overbought Range {{ tip('Optimizer range for the short-entry overbought threshold, e.g. 80:95:5.') }}</label>
+                                                    <input type="text" name="rsi_overbought_range" class="form-control" value="{{ config.rsi_overbought_range|default('80:95:5') }}">
+                                                </div>
+                                                <div class="col-6 col-lg-3" data-strategy-scope="rsi_reversion">
+                                                    <label class="form-label">RSI Exit Range {{ tip('Optimizer range for the mean-reversion exit level, e.g. 50:75:5.') }}</label>
+                                                    <input type="text" name="rsi_exit_range" class="form-control" value="{{ config.rsi_exit_range|default('50:75:5') }}">
+                                                </div>
+                                                <div class="col-6 col-lg-3" data-strategy-scope="rsi_reversion">
+                                                    <label class="form-label">RSI Trend SMA Range {{ tip('Optimizer range for the regime trend SMA, e.g. 100:200:50.') }}</label>
+                                                    <input type="text" name="rsi_trend_range" class="form-control" value="{{ config.rsi_trend_range|default('100:200:50') }}">
+                                                </div>
                                                 <div class="col-6 col-lg-3">
                                                     <label class="form-label">OOS Min Trades {{ tip('Minimum number of trades required in the out-of-sample validation segment before a run is considered promotable. Lower values work better for slower strategies like MACD + SMA.') }}</label>
                                                     <input type="number" min="1" name="validation_min_trades" class="form-control" value="{{ config.validation_min_trades|default(5) }}">
@@ -489,6 +534,7 @@
                                                 <select name="universe_strategy[]" class="form-select form-select-sm">
                                                     <option value="keltner" {% if row_strategy == 'keltner' %}selected{% endif %}>Keltner</option>
                                                     <option value="macd_sma" {% if row_strategy == 'macd_sma' %}selected{% endif %}>MACD + SMA</option>
+                                                    <option value="rsi_reversion" {% if row_strategy == 'rsi_reversion' %}selected{% endif %}>RSI(2) Mean Reversion</option>
                                                 </select>
                                             </td>
                                             <td>
@@ -613,6 +659,7 @@
                                                 <option value="">All strategies</option>
                                                 <option value="keltner">Keltner Channel</option>
                                                 <option value="macd_sma">MACD + SMA</option>
+                                                <option value="rsi_reversion">RSI(2) Mean Reversion</option>
                                             </select>
                                         </div>
                                         <div class="col-6 col-lg-2">
@@ -700,7 +747,7 @@
                                                             {% endif %}
                                                         </div>
                                                     </td>
-                                                    <td><span class="badge bg-secondary-subtle text-secondary-emphasis border">{{ 'MACD + SMA' if job.strategy == 'macd_sma' else 'Keltner' }}</span></td>
+                                                    <td><span class="badge bg-secondary-subtle text-secondary-emphasis border">{% if job.strategy == 'macd_sma' %}MACD + SMA{% elif job.strategy == 'rsi_reversion' %}RSI(2) Mean Reversion{% else %}Keltner{% endif %}</span></td>
                                                     <td>{{ job.summary.timeframe if job.summary else job.timeframe }}</td>
                                                     <td>{{ job.compute_target or '-' }}</td>
                                                     <td><span class="badge bg-neutral">{{ job.status }}</span></td>
@@ -959,6 +1006,25 @@ $(document).ready(function() {
         });
     }
 
+    // Keep the active top-level Strategy Lab tab across reloads so actions taken in
+    // Results (delete run, bulk delete, etc.) submit the form and come back to Results
+    // instead of bouncing the user to Strategy Tester.
+    const STRATEGY_TAB_KEY = 'strategyLabActiveTab';
+    document.querySelectorAll('#tester-tab, #routing-tab, #results-tab').forEach((el) => {
+        el.addEventListener('shown.bs.tab', () => {
+            try { sessionStorage.setItem(STRATEGY_TAB_KEY, el.id); } catch (e) {}
+        });
+    });
+    try {
+        const savedTab = sessionStorage.getItem(STRATEGY_TAB_KEY);
+        if (savedTab && savedTab !== 'tester-tab') {
+            const savedTabEl = document.getElementById(savedTab);
+            if (savedTabEl && window.bootstrap?.Tab) {
+                window.bootstrap.Tab.getOrCreateInstance(savedTabEl).show();
+            }
+        }
+    } catch (e) {}
+
     function normalizeSymbol(value) {
         return String(value || '').toUpperCase().replace(/\//g, '').trim();
     }
@@ -979,7 +1045,9 @@ $(document).ready(function() {
     }
 
     function strategyLabel(strategy) {
-        return strategy === 'macd_sma' ? 'MACD + SMA' : 'Keltner Channel';
+        if (strategy === 'macd_sma') return 'MACD + SMA';
+        if (strategy === 'rsi_reversion') return 'RSI(2) Mean Reversion';
+        return 'Keltner Channel';
     }
 
     function applyStrategyVisibility() {
@@ -1372,6 +1440,7 @@ $(document).ready(function() {
                     <select name="universe_strategy[]" class="form-select form-select-sm">
                         <option value="keltner" selected>Keltner</option>
                         <option value="macd_sma">MACD + SMA</option>
+                        <option value="rsi_reversion">RSI(2) Mean Reversion</option>
                     </select>
                 </td>
                 <td>

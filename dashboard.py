@@ -617,6 +617,8 @@ def strategy_label(value):
         return 'MACD + SMA'
     if normalized == 'keltner':
         return 'Keltner Channel'
+    if normalized == 'rsi_reversion':
+        return 'RSI(2) Mean Reversion'
     return 'Unknown'
 
 
@@ -940,6 +942,7 @@ def summarize_strategy_report(report, source='local', job_id=None):
         'forced_stop_loss_pct', 'forced_take_profit_pct', 'trailing_offset_ticks',
         'trailing_offset_pct', 'tick_size', 'macd_fast_length', 'macd_slow_length',
         'macd_signal_length', 'macd_sma_length', 'max_intraday_loss_pct',
+        'rsi_length', 'rsi_oversold', 'rsi_overbought', 'rsi_exit_level', 'rsi_trend_length',
     ]
     return {
         'symbol': strategy_store.normalize_symbol(report.get('symbol_used') or report.get('symbol_input') or ''),
@@ -1187,6 +1190,11 @@ def build_strategy_optimizer_args(config, report_path, top_path, bars_csv_path=N
     macd_signal_range = str(config.get("macd_signal_range", "5:15:1")) if optimize_enabled else exact_range(int(config.get("macd_signal_length", 9)), "1")
     macd_sma_range = str(config.get("macd_sma_range", "100:250:10")) if optimize_enabled else exact_range(int(config.get("macd_sma_length", 200)), "1")
     max_intraday_loss_range = str(config.get("max_intraday_loss_range", "50:50:1")) if optimize_enabled else exact_range(config.get("max_intraday_loss_pct", 50), "1")
+    rsi_length_range = str(config.get("rsi_length_range", "2:4:1")) if optimize_enabled else exact_range(int(config.get("rsi_length", 2)), "1")
+    rsi_oversold_range = str(config.get("rsi_oversold_range", "5:20:5")) if optimize_enabled else exact_range(config.get("rsi_oversold", 10.0))
+    rsi_overbought_range = str(config.get("rsi_overbought_range", "80:95:5")) if optimize_enabled else exact_range(config.get("rsi_overbought", 90.0))
+    rsi_exit_range = str(config.get("rsi_exit_range", "50:75:5")) if optimize_enabled else exact_range(config.get("rsi_exit_level", 55.0))
+    rsi_trend_range = str(config.get("rsi_trend_range", "100:200:50")) if optimize_enabled else exact_range(int(config.get("rsi_trend_length", 200)), "1")
     args = [
         "misc/pine_optimizer.py",
         "--strategy", str(config.get("strategy", "keltner") or "keltner"),
@@ -1226,6 +1234,11 @@ def build_strategy_optimizer_args(config, report_path, top_path, bars_csv_path=N
         "--macd-signal-range", macd_signal_range,
         "--macd-sma-range", macd_sma_range,
         "--max-intraday-loss-range", max_intraday_loss_range,
+        "--rsi-length-range", rsi_length_range,
+        "--rsi-oversold-range", rsi_oversold_range,
+        "--rsi-overbought-range", rsi_overbought_range,
+        "--rsi-exit-range", rsi_exit_range,
+        "--rsi-trend-range", rsi_trend_range,
         "--initial-capital", str(config.get("initial_capital", 8000)),
         "--order-size", str(config.get("order_size", 2000)),
         "--commission-pct", str(config.get("commission_pct", 0.04)),
@@ -1592,11 +1605,17 @@ def admin_strategy():
         config['macd_signal_length'] = max(1, as_int(request.form.get('macd_signal_length', config.get('macd_signal_length', 9)), 9))
         config['macd_sma_length'] = max(1, as_int(request.form.get('macd_sma_length', config.get('macd_sma_length', 200)), 200))
         config['max_intraday_loss_pct'] = as_float(request.form.get('max_intraday_loss_pct', config.get('max_intraday_loss_pct', 50)), 50)
+        config['rsi_length'] = max(1, as_int(request.form.get('rsi_length', config.get('rsi_length', 2)), 2))
+        config['rsi_oversold'] = as_float(request.form.get('rsi_oversold', config.get('rsi_oversold', 10.0)), 10.0)
+        config['rsi_overbought'] = as_float(request.form.get('rsi_overbought', config.get('rsi_overbought', 90.0)), 90.0)
+        config['rsi_exit_level'] = as_float(request.form.get('rsi_exit_level', config.get('rsi_exit_level', 55.0)), 55.0)
+        config['rsi_trend_length'] = max(1, as_int(request.form.get('rsi_trend_length', config.get('rsi_trend_length', 200)), 200))
         config['initial_capital'] = as_float(request.form.get('initial_capital', config.get('initial_capital', 8000)), 8000)
         config['base_currency'] = request.form.get('base_currency', config.get('base_currency', 'USD')).strip().upper() or 'USD'
         config['order_size'] = as_float(request.form.get('order_size', config.get('order_size', 2000)), 2000)
         config['order_size_keltner'] = as_float(request.form.get('order_size_keltner', config.get('order_size_keltner', config.get('order_size', 2000))), config.get('order_size', 2000))
         config['order_size_macd_sma'] = as_float(request.form.get('order_size_macd_sma', config.get('order_size_macd_sma', 5000)), 5000)
+        config['order_size_rsi_reversion'] = as_float(request.form.get('order_size_rsi_reversion', config.get('order_size_rsi_reversion', config.get('order_size', 2000))), config.get('order_size', 2000))
         config['macd_priority_enabled'] = 'macd_priority_enabled' in request.form
         config['pyramiding'] = max(0, as_int(request.form.get('pyramiding', config.get('pyramiding', 0)), 0))
         config['commission_pct'] = as_float(request.form.get('commission_pct', config.get('commission_pct', 0.04)), 0.04)
@@ -1641,6 +1660,11 @@ def admin_strategy():
         config['macd_signal_range'] = request.form.get('macd_signal_range', config.get('macd_signal_range', '5:15:1')).strip()
         config['macd_sma_range'] = request.form.get('macd_sma_range', config.get('macd_sma_range', '100:250:10')).strip()
         config['max_intraday_loss_range'] = request.form.get('max_intraday_loss_range', config.get('max_intraday_loss_range', '50:50:1')).strip()
+        config['rsi_length_range'] = request.form.get('rsi_length_range', config.get('rsi_length_range', '2:4:1')).strip()
+        config['rsi_oversold_range'] = request.form.get('rsi_oversold_range', config.get('rsi_oversold_range', '5:20:5')).strip()
+        config['rsi_overbought_range'] = request.form.get('rsi_overbought_range', config.get('rsi_overbought_range', '80:95:5')).strip()
+        config['rsi_exit_range'] = request.form.get('rsi_exit_range', config.get('rsi_exit_range', '50:75:5')).strip()
+        config['rsi_trend_range'] = request.form.get('rsi_trend_range', config.get('rsi_trend_range', '100:200:50')).strip()
         universe = parse_strategy_universe_from_form(request.form)
         tradable_symbols = set(load_cached_tradable_symbols())
         invalid_symbols = []

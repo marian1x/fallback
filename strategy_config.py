@@ -13,7 +13,7 @@ DEFAULT_STRATEGY_CONFIG_FILE = os.path.join(PROJECT_ROOT, "instance", "strategy_
 STRATEGY_CONFIG_FILE = os.getenv("STRATEGY_CONFIG_FILE", DEFAULT_STRATEGY_CONFIG_FILE)
 
 SIGNAL_MODES = {"local", "tw", "both", "disabled"}
-STRATEGY_CHOICES = {"keltner", "macd_sma"}
+STRATEGY_CHOICES = {"keltner", "macd_sma", "rsi_reversion"}
 OPTIMIZER_ENGINES = {"random", "tpe"}
 ACCELERATOR_CHOICES = {"auto", "cpu", "gpu"}
 
@@ -152,6 +152,17 @@ def get_default_strategy_config() -> Dict:
         "macd_signal_range": "5:15:1",
         "macd_sma_range": "100:250:10",
         "max_intraday_loss_range": "50:50:1",
+        "order_size_rsi_reversion": 2000,
+        "rsi_length": 2,
+        "rsi_oversold": 10.0,
+        "rsi_overbought": 90.0,
+        "rsi_exit_level": 55.0,
+        "rsi_trend_length": 200,
+        "rsi_length_range": "2:4:1",
+        "rsi_oversold_range": "5:20:5",
+        "rsi_overbought_range": "80:95:5",
+        "rsi_exit_range": "50:75:5",
+        "rsi_trend_range": "100:200:50",
         "universe": [
             {
                 "symbol": "TSM",

@@ -1,5 +1,45 @@
 # Release Notes
 
+## Version 2.8.4 - 2026-06-13
+
+### New strategy: RSI(2) Mean Reversion
+- Added a third selectable strategy (`rsi_reversion`) alongside Keltner and MACD+SMA. It trades a
+  documented, robust edge — short-term mean reversion in equities (Connors-style RSI(2)):
+  - **Long:** price above the trend SMA **and** RSI below the oversold threshold (buy the dip in an uptrend).
+  - **Short:** price below the trend SMA **and** RSI above the overbought threshold.
+  - **Exit:** RSI mean-reverts past the exit level, or forced/fixed SL/TP, or the pre-close flat.
+- Few parameters on purpose (RSI length, oversold, overbought, exit level, trend SMA) so it stays hard
+  to overfit. By design it **fires often** — a typical run produces dozens to hundreds of trades, so the
+  win rate it reports is backed by a real sample instead of the handful of lucky trades that produce a
+  fragile "100% win rate." This is the constructive counterpart to the scoring fix below.
+- Fully wired for **testing**: selectable in Strategy Tester with its own Inputs panel and optimizer
+  ranges, sweeps under both the random and TPE engines, and validates out-of-sample. Tip: raise **OOS
+  Min Trades** for this strategy (e.g. 30+) so the validation gate demands a statistically meaningful
+  sample before promotion.
+- Note: this release wires RSI(2) for **backtesting/optimization only**. The live local execution
+  engine still runs Keltner and MACD+SMA; live routing for RSI(2) is a follow-up once you've validated
+  it backtests and passes OOS.
+
+## Version 2.8.3 - 2026-06-13
+
+### Optimizer objective — stop rewarding overfit few-trade combos
+- **Sample-size-aware scoring.** The optimizer used to rank combinations with
+  `win_rate * 0.35` plus a profit factor that jumps to its cap whenever there are no
+  losing trades. That made a fragile "100% win rate over ~10 trades in 5 years" combo
+  outrank configs that trade far more and return far more. The win-rate term now uses
+  the **Wilson 95% lower bound** of the win proportion (collapses toward 50% as the
+  sample shrinks), and an explicit **trade-frequency reward** ramps up to a target.
+  Tiny samples (<5, <10 trades) take a significance penalty. Net effect: the optimizer
+  now favors configs that trade more often and compound higher real return, instead of
+  a brittle few-trade run that won't survive live.
+- Applied to **both** strategies (Keltner pure-Python + Numba fast path, and
+  MACD+SMA) via a single shared `_compute_score()` helper.
+
+### UI
+- **Stay on the Results tab.** Deleting or bulk-deleting optimizer runs submits the
+  config form and reloads the page; it no longer bounces you back to Strategy Tester.
+  The active top-level Strategy Lab tab is remembered across reloads.
+
 ## Version 2.8.2 - 2026-06-13
 
 ### MACD+SMA strategy fixes
