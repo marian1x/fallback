@@ -10,3 +10,7 @@ numpy
 pandas
 openpyxl
 optuna
+
+# Optional: JIT-accelerates the Keltner backtest (~5-7x). Safe to omit; the
+# optimizer falls back to pure Python. Recommended on the Windows runner.
+numba

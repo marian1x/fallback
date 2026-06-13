@@ -655,6 +655,392 @@ def in_preclose_window(ts_utc: pd.Timestamp, cfg: BacktestConfig) -> bool:
     return start <= ts_utc < mc
 
 
+# ---------------------------------------------------------------------------
+# Optional Numba JIT fast path for the Keltner simulation.
+#
+# The bar loop is sequential and branch-heavy, so it dominates optimizer runtime.
+# The functions below are written in a Numba-compatible style (numpy + scalars,
+# no pandas/objects). When numba is importable they are JIT-compiled for a large
+# speedup; otherwise they run as plain Python with identical semantics. The
+# original backtest() remains the reference implementation and the fast path is
+# only used after parity is verified (see tests/test_pine_optimizer_numba.py).
+# Set STRATEGY_DISABLE_NUMBA=1 to force the reference path.
+# ---------------------------------------------------------------------------
+try:
+    if os.getenv("STRATEGY_DISABLE_NUMBA", "").strip().lower() in ("1", "true", "yes", "y"):
+        raise ImportError("numba disabled via STRATEGY_DISABLE_NUMBA")
+    from numba import njit as _njit  # type: ignore
+
+    NUMBA_AVAILABLE = True
+except Exception:  # pragma: no cover - environment without numba
+    NUMBA_AVAILABLE = False
+
+    def _njit(*args, **kwargs):  # type: ignore
+        def _decorator(func):
+            return func
+        if args and callable(args[0]):
+            return args[0]
+        return _decorator
+
+
+@_njit(cache=True)
+def _long_intrabar_exit_core(p0, p1, p2, p3, activation, forced_stop, forced_tp,
+                             trail_offset, trail_active, has_stop, stop, allow_trail):
+    # Returns: (hit, exit_price, reason_code, active, has_stop, stop)
+    active = trail_active
+    hs = has_stop
+    st = stop
+    path = (p0, p1, p2, p3)
+    for i in range(3):
+        a = path[i]
+        b = path[i + 1]
+        if b >= a:
+            if a <= forced_tp <= b:
+                return 1, forced_tp, 5, active, hs, st  # Forced TP Long
+        else:
+            if b <= forced_stop <= a:
+                return 1, forced_stop, 6, active, hs, st  # Forced SL Long
+        if allow_trail == 0:
+            continue
+        if active == 0:
+            if b >= a and a <= activation <= b:
+                active = 1
+                st = activation - trail_offset
+                hs = 1
+            elif a >= activation:
+                active = 1
+                st = a - trail_offset
+                hs = 1
+        if active == 1:
+            if b >= a:
+                candidate = b - trail_offset
+                if hs == 0:
+                    st = candidate
+                    hs = 1
+                elif candidate > st:
+                    st = candidate
+            else:
+                if hs == 1 and b <= st <= a:
+                    return 1, st, 9, active, hs, st  # Trailing Exit Long
+    return 0, 0.0, 0, active, hs, st
+
+
+@_njit(cache=True)
+def _short_intrabar_exit_core(p0, p1, p2, p3, activation, forced_stop, forced_tp,
+                              trail_offset, trail_active, has_stop, stop, allow_trail):
+    active = trail_active
+    hs = has_stop
+    st = stop
+    path = (p0, p1, p2, p3)
+    for i in range(3):
+        a = path[i]
+        b = path[i + 1]
+        if b <= a:
+            if b <= forced_tp <= a:
+                return 1, forced_tp, 7, active, hs, st  # Forced TP Short
+        else:
+            if a <= forced_stop <= b:
+                return 1, forced_stop, 8, active, hs, st  # Forced SL Short
+        if allow_trail == 0:
+            continue
+        if active == 0:
+            if b <= a and b <= activation <= a:
+                active = 1
+                st = activation + trail_offset
+                hs = 1
+            elif a <= activation:
+                active = 1
+                st = a + trail_offset
+                hs = 1
+        if active == 1:
+            if b <= a:
+                candidate = b + trail_offset
+                if hs == 0:
+                    st = candidate
+                    hs = 1
+                elif candidate < st:
+                    st = candidate
+            else:
+                if hs == 1 and a <= st <= b:
+                    return 1, st, 10, active, hs, st  # Trailing Exit Short
+    return 0, 0.0, 0, active, hs, st
+
+
+@_njit(cache=True)
+def _simulate_keltner_core(o, h, l, c, mid, uin, lin, preclose,
+                           long_allowed, short_allowed, order_size_usd, commission_pct,
+                           fixed_sl_pct, fixed_tp_pct, forced_sl_pct, forced_tp_pct,
+                           trailing_offset_ticks, tick_size, trailing_offset_pct,
+                           initial_capital):
+    n = o.shape[0]
+    ent_idx = np.empty(n, dtype=np.int64)
+    ex_idx = np.empty(n, dtype=np.int64)
+    ent_px = np.empty(n, dtype=np.float64)
+    ex_px = np.empty(n, dtype=np.float64)
+    qty_arr = np.empty(n, dtype=np.int64)
+    side_arr = np.empty(n, dtype=np.int64)
+    reason_arr = np.empty(n, dtype=np.int64)
+    pnl_arr = np.empty(n, dtype=np.float64)
+    pnlpct_arr = np.empty(n, dtype=np.float64)
+    equity_arr = np.empty(n + 1, dtype=np.float64)
+    equity_arr[0] = initial_capital
+    eq_count = 1
+    tcount = 0
+
+    equity = initial_capital
+    position = 0
+    entry_price = 0.0
+    qty = 0
+    entry_index = -1
+    trail_active = 0
+    has_stop = 0
+    trail_stop = 0.0
+
+    for i in range(1, n):
+        entered_this_bar = False
+
+        if position == 0:
+            long_cond = (c[i - 1] <= lin[i - 1]) and (c[i] > lin[i]) and (c[i] < mid[i])
+            short_cond = (c[i - 1] >= uin[i - 1]) and (c[i] < uin[i]) and (c[i] > mid[i])
+            entry_side = 0
+            if long_allowed == 1 and long_cond:
+                entry_side = 1
+            elif short_allowed == 1 and short_cond:
+                entry_side = -1
+            if entry_side != 0:
+                q = int(math.floor(order_size_usd / c[i]))
+                if q > 0:
+                    position = entry_side
+                    entry_price = c[i]
+                    qty = q
+                    entry_index = i
+                    trail_active = 0
+                    has_stop = 0
+                    trail_stop = 0.0
+                    entered_this_bar = True
+
+        if position != 0 and not entered_this_bar:
+            exit_price = 0.0
+            has_exit = 0
+            reason_code = 0
+
+            if trailing_offset_pct > 0:
+                trail_offset = c[i] * trailing_offset_pct / 100.0
+            else:
+                trail_offset = trailing_offset_ticks * tick_size
+
+            oi = o[i]
+            hi = h[i]
+            li = l[i]
+            ci = c[i]
+            if abs(hi - oi) <= abs(oi - li):
+                p0, p1, p2, p3 = oi, hi, li, ci
+            else:
+                p0, p1, p2, p3 = oi, li, hi, ci
+
+            fixed_code = 0
+            if position > 0:
+                fixed_stop = entry_price * (1 - fixed_sl_pct / 100.0)
+                fixed_tp = entry_price * (1 + fixed_tp_pct / 100.0)
+                forced_stop = entry_price * (1 - forced_sl_pct / 100.0)
+                forced_tp = entry_price * (1 + forced_tp_pct / 100.0)
+                if li <= fixed_stop:
+                    fixed_code = 1
+                if hi >= fixed_tp:
+                    fixed_code = 2
+                allow_trail = 1 if fixed_code == 0 else 0
+                hit, ex_p, rc, trail_active, has_stop, trail_stop = _long_intrabar_exit_core(
+                    p0, p1, p2, p3, mid[i], forced_stop, forced_tp, trail_offset,
+                    trail_active, has_stop, trail_stop, allow_trail,
+                )
+                if hit == 1:
+                    has_exit = 1
+                    exit_price = ex_p
+                    reason_code = rc
+                if has_exit == 0 and preclose[i] == 1 and ci > entry_price:
+                    has_exit = 1
+                    exit_price = ci
+                    reason_code = 5  # Forced TP Long
+            else:
+                fixed_stop = entry_price * (1 + fixed_sl_pct / 100.0)
+                fixed_tp = entry_price * (1 - fixed_tp_pct / 100.0)
+                forced_stop = entry_price * (1 + forced_sl_pct / 100.0)
+                forced_tp = entry_price * (1 - forced_tp_pct / 100.0)
+                if hi >= fixed_stop:
+                    fixed_code = 3
+                if li <= fixed_tp:
+                    fixed_code = 4
+                allow_trail = 1 if fixed_code == 0 else 0
+                hit, ex_p, rc, trail_active, has_stop, trail_stop = _short_intrabar_exit_core(
+                    p0, p1, p2, p3, mid[i], forced_stop, forced_tp, trail_offset,
+                    trail_active, has_stop, trail_stop, allow_trail,
+                )
+                if hit == 1:
+                    has_exit = 1
+                    exit_price = ex_p
+                    reason_code = rc
+                if has_exit == 0 and preclose[i] == 1 and ci < entry_price:
+                    has_exit = 1
+                    exit_price = ci
+                    reason_code = 7  # Forced TP Short
+
+            if has_exit == 0 and fixed_code != 0:
+                has_exit = 1
+                exit_price = ci
+                reason_code = fixed_code
+
+            if has_exit == 1:
+                notional_entry = qty * entry_price
+                notional_exit = qty * exit_price
+                fees = (notional_entry + notional_exit) * (commission_pct / 100.0)
+                pnl = (exit_price - entry_price) * qty * position - fees
+                pnl_pct = (pnl / notional_entry) * 100.0 if notional_entry != 0 else 0.0
+
+                equity += pnl
+                equity_arr[eq_count] = equity
+                eq_count += 1
+
+                ent_idx[tcount] = entry_index
+                ex_idx[tcount] = i
+                ent_px[tcount] = entry_price
+                ex_px[tcount] = exit_price
+                qty_arr[tcount] = qty
+                side_arr[tcount] = position
+                reason_arr[tcount] = reason_code
+                pnl_arr[tcount] = pnl
+                pnlpct_arr[tcount] = pnl_pct
+                tcount += 1
+
+                position = 0
+                entry_price = 0.0
+                qty = 0
+                entry_index = -1
+                trail_active = 0
+                has_stop = 0
+                trail_stop = 0.0
+
+    if position != 0 and qty > 0:
+        final_price = c[n - 1]
+        notional_entry = qty * entry_price
+        notional_exit = qty * final_price
+        fees = (notional_entry + notional_exit) * (commission_pct / 100.0)
+        pnl = (final_price - entry_price) * qty * position - fees
+        pnl_pct = (pnl / notional_entry) * 100.0 if notional_entry != 0 else 0.0
+        equity += pnl
+        equity_arr[eq_count] = equity
+        eq_count += 1
+        ent_idx[tcount] = entry_index
+        ex_idx[tcount] = n - 1
+        ent_px[tcount] = entry_price
+        ex_px[tcount] = final_price
+        qty_arr[tcount] = qty
+        side_arr[tcount] = position
+        reason_arr[tcount] = 11  # Final Close
+        pnl_arr[tcount] = pnl
+        pnlpct_arr[tcount] = pnl_pct
+        tcount += 1
+
+    return (tcount, ent_idx, ex_idx, ent_px, ex_px, qty_arr, side_arr, reason_arr,
+            pnl_arr, pnlpct_arr, eq_count, equity_arr)
+
+
+_REASON_CODE_TO_TEXT = {
+    1: "Fixed Stop Loss (Long)", 2: "Fixed Take Profit (Long)",
+    3: "Fixed Stop Loss (Short)", 4: "Fixed Take Profit (Short)",
+    5: "Forced TP Long", 6: "Forced SL Long",
+    7: "Forced TP Short", 8: "Forced SL Short",
+    9: "Trailing Exit Long", 10: "Trailing Exit Short",
+    11: "Final Close",
+}
+
+
+def _preclose_flags(idx, cfg: BacktestConfig) -> np.ndarray:
+    # Vectorized equivalent of in_preclose_window over the whole index. The window
+    # is [market_close - close_before, market_close) on the same day, which for
+    # bar-aligned timestamps reduces to a minute-of-day comparison.
+    minutes_of_day = np.asarray(idx.hour) * 60 + np.asarray(idx.minute)
+    close_min = cfg.market_close_utc_hour * 60 + cfg.market_close_utc_minute
+    start_min = close_min - cfg.close_before_minutes
+    return ((minutes_of_day >= start_min) & (minutes_of_day < close_min)).astype(np.int64)
+
+
+def backtest_fast(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, start_utc: datetime, end_utc: datetime) -> BacktestResult:
+    df = df[(df.index >= pd.Timestamp(start_utc)) & (df.index <= pd.Timestamp(end_utc))].copy()
+    if len(df) < 100:
+        raise RuntimeError("Not enough bars for backtest after date filtering.")
+
+    mid_inner, up_inner, low_inner = keltner_channel(df, params.inner_kc_length, params.inner_kc_mult)
+    df["mid_inner"] = mid_inner
+    df["up_inner"] = up_inner
+    df["low_inner"] = low_inner
+    df = df.dropna()
+    if df.empty:
+        raise RuntimeError("Indicator warm-up removed all bars; widen date range.")
+
+    idx = df.index
+    o = df["open"].to_numpy(dtype=float)
+    h = df["high"].to_numpy(dtype=float)
+    l = df["low"].to_numpy(dtype=float)
+    c = df["close"].to_numpy(dtype=float)
+    mid = df["mid_inner"].to_numpy(dtype=float)
+    uin = df["up_inner"].to_numpy(dtype=float)
+    lin = df["low_inner"].to_numpy(dtype=float)
+    preclose = _preclose_flags(idx, cfg)
+
+    long_allowed = 1 if params.trade_direction in ("Both", "Long Only") else 0
+    short_allowed = 1 if params.trade_direction in ("Both", "Short Only") else 0
+
+    (tcount, ent_idx, ex_idx, ent_px, ex_px, qty_arr, side_arr, reason_arr,
+     pnl_arr, pnlpct_arr, eq_count, equity_arr) = _simulate_keltner_core(
+        o, h, l, c, mid, uin, lin, preclose,
+        long_allowed, short_allowed, float(cfg.order_size_usd), float(cfg.commission_pct),
+        float(params.fixed_stop_loss_pct), float(params.fixed_take_profit_pct),
+        float(params.forced_stop_loss_pct), float(params.forced_take_profit_pct),
+        int(params.trailing_offset_ticks), float(params.tick_size), float(params.trailing_offset_pct),
+        float(cfg.initial_capital),
+    )
+
+    winners = 0
+    losers = 0
+    gross_profit = 0.0
+    gross_loss = 0.0
+    trades: List[Dict[str, object]] = []
+    trade_returns: List[float] = []
+    trade_bars: List[int] = []
+    for t in range(tcount):
+        pnl = float(pnl_arr[t])
+        if pnl >= 0:
+            gross_profit += pnl
+            winners += 1
+        else:
+            gross_loss += abs(pnl)
+            losers += 1
+        ei = int(ent_idx[t])
+        xi = int(ex_idx[t])
+        bars_held = xi - ei
+        trade_returns.append(float(pnlpct_arr[t]))
+        trade_bars.append(bars_held)
+        trades.append({
+            "entry_time": idx[ei].isoformat() if ei >= 0 else None,
+            "exit_time": idx[xi].isoformat(),
+            "side": "long" if side_arr[t] > 0 else "short",
+            "entry_price": round(float(ent_px[t]), 6),
+            "exit_price": round(float(ex_px[t]), 6),
+            "qty": int(qty_arr[t]),
+            "pnl": round(pnl, 2),
+            "pnl_pct": round(float(pnlpct_arr[t]), 4),
+            "reason": _REASON_CODE_TO_TEXT.get(int(reason_arr[t]), "Unknown"),
+            "bars_held": bars_held,
+        })
+
+    equity_marks = [float(x) for x in equity_arr[:eq_count]]
+    equity = equity_marks[-1] if equity_marks else cfg.initial_capital
+    return _finalize_result(
+        params, cfg, equity, equity_marks, winners, losers,
+        gross_profit, gross_loss, trade_returns, trade_bars, trades,
+    )
+
+
 def backtest(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, start_utc: datetime, end_utc: datetime) -> BacktestResult:
     df = df[(df.index >= pd.Timestamp(start_utc)) & (df.index <= pd.Timestamp(end_utc))].copy()
     if len(df) < 100:
@@ -1158,6 +1544,8 @@ def backtest_macd_sma(df: pd.DataFrame, params: StrategyParams, cfg: BacktestCon
 def run_strategy_backtest(strategy: str, df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, start_utc: datetime, end_utc: datetime) -> BacktestResult:
     if strategy == "macd_sma":
         return backtest_macd_sma(df, params, cfg, start_utc, end_utc)
+    if NUMBA_AVAILABLE:
+        return backtest_fast(df, params, cfg, start_utc, end_utc)
     return backtest(df, params, cfg, start_utc, end_utc)
 
 

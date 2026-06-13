@@ -76,7 +76,28 @@ def complete_job(server: str, token: str, job_id: str, payload: dict, timeout: i
     response.raise_for_status()
 
 
-def run_job(job: dict, python_bin: str, work_dir: Path, accelerator: str | None = None) -> dict:
+def resolve_optimizer_jobs_value(spec: str | None) -> str | None:
+    """Translate an --optimizer-jobs spec into a concrete --jobs value.
+
+    'max'     -> all logical cores on THIS machine (e.g. 16 on a Ryzen 9 8945HS)
+    'auto'    -> 0, letting the optimizer pick cpu_count-1
+    'inherit' -> None, keep whatever the dashboard sent
+    integer   -> that exact count
+    """
+    spec = (spec or "max").strip().lower()
+    if spec in ("inherit", "", "none"):
+        return None
+    if spec == "auto":
+        return "0"
+    if spec == "max":
+        return str(os.cpu_count() or 1)
+    try:
+        return str(max(1, int(spec)))
+    except ValueError:
+        return str(os.cpu_count() or 1)
+
+
+def run_job(job: dict, python_bin: str, work_dir: Path, accelerator: str | None = None, optimizer_jobs: str | None = "max") -> dict:
     job_id = job["id"]
     job_dir = work_dir / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -92,6 +113,9 @@ def run_job(job: dict, python_bin: str, work_dir: Path, accelerator: str | None 
         str(top_path),
     )
     optimizer_args = set_optimizer_option(optimizer_args, "--accelerator", accelerator)
+    jobs_value = resolve_optimizer_jobs_value(optimizer_jobs)
+    if jobs_value is not None:
+        optimizer_args = set_optimizer_option(optimizer_args, "--jobs", jobs_value)
     command = [python_bin] + optimizer_args
     result = subprocess.run(
         command,
@@ -126,7 +150,7 @@ def worker_loop(args, work_dir: Path, stop_event: threading.Event, worker_name: 
                 continue
 
             print(f"[{worker_name}] Running job {job['id']} for {job.get('symbol')} {job.get('timeframe')}", flush=True)
-            payload = run_job(job, args.python, work_dir, args.accelerator)
+            payload = run_job(job, args.python, work_dir, args.accelerator, args.optimizer_jobs)
             complete_job(args.server, args.token, job["id"], payload, args.request_timeout)
             processed += 1
             print(f"[{worker_name}] Completed job {job['id']} with returncode={payload['returncode']}", flush=True)
@@ -155,6 +179,11 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=1, help="Parallel queue workers. Use with optimizer --jobs carefully.")
     parser.add_argument("--once", action="store_true", help="Process at most one job and exit.")
     parser.add_argument("--accelerator", choices=["auto", "cpu", "gpu"], default=os.getenv("STRATEGY_ACCELERATOR", "auto"))
+    parser.add_argument(
+        "--optimizer-jobs",
+        default=os.getenv("STRATEGY_OPTIMIZER_JOBS", "max"),
+        help="Cores for the optimizer on THIS machine: 'max' (all logical cores), 'auto' (cpu_count-1), 'inherit', or an integer.",
+    )
     args = parser.parse_args()
 
     if not args.token:

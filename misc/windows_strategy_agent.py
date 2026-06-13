@@ -62,7 +62,7 @@ def agent_worker_loop(args, server: str, work_dir: Path, log_file: Path, stop_ev
                 stop_event.wait(max(1, args.poll_seconds))
                 continue
             log(f"[{worker_name}] Running job {job['id']} for {job.get('symbol')} {job.get('timeframe')}", log_file)
-            payload = run_job(job, args.python, work_dir, args.accelerator)
+            payload = run_job(job, args.python, work_dir, args.accelerator, args.optimizer_jobs)
             complete_job(server, args.token, job["id"], payload, args.request_timeout)
             processed += 1
             log(f"[{worker_name}] Completed job {job['id']} returncode={payload['returncode']}", log_file)
@@ -86,6 +86,11 @@ def main() -> int:
     parser.add_argument("--request-timeout", type=int, default=180)
     parser.add_argument("--workers", type=int, default=1, help="Parallel queue workers for multiple queued symbols.")
     parser.add_argument("--accelerator", choices=["auto", "cpu", "gpu"], default=os.getenv("STRATEGY_ACCELERATOR", "auto"))
+    parser.add_argument(
+        "--optimizer-jobs",
+        default=os.getenv("STRATEGY_OPTIMIZER_JOBS", "max"),
+        help="Cores for the optimizer on this PC: 'max' (all 16 logical cores on a Ryzen 9 8945HS), 'auto' (cpu_count-1), 'inherit', or an integer.",
+    )
     parser.add_argument("--log-file", default=str(PROJECT_ROOT / "strategy_agent.log"))
     parser.add_argument("--ssh-target", default="", help="Optional SSH target, e.g. pi5@salavat.home.ro")
     parser.add_argument("--ssh-key", default="", help="Optional SSH private key path")
@@ -109,7 +114,7 @@ def main() -> int:
         if ssh_proc:
             server = f"http://127.0.0.1:{args.local_port}"
         worker_count = max(1, int(args.workers))
-        log(f"Agent started. Server={server} Worker={args.worker} Workers={worker_count} Accelerator={args.accelerator}", log_file)
+        log(f"Agent started. Server={server} Worker={args.worker} Workers={worker_count} Accelerator={args.accelerator} OptimizerJobs={args.optimizer_jobs} (cpu_count={os.cpu_count()})", log_file)
         stop_event = threading.Event()
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = [
