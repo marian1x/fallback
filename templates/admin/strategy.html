@@ -692,7 +692,7 @@
                                                     <td><input type="checkbox" class="form-check-input job-select" name="selected_job_ids" value="{{ job.id }}"></td>
                                                     <td>
                                                         <div class="d-flex align-items-center gap-1 flex-wrap">
-                                                            <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none load-job-config" data-config='{{ (job.config if job.config is defined and job.config else {})|tojson|forceescape }}'>{{ job.symbol }}</button>
+                                                            <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none load-job-config" data-job-id="{{ job.id }}">{{ job.symbol }}</button>
                                                             {% if job.signal_exact_match %}
                                                             <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle" data-strategy-tip title="Aceasta configuratie exacta a fost adaugata in Signal Universe.">In Signals</span>
                                                             {% elif job.signal_symbol_match %}
@@ -724,7 +724,7 @@
                                                     </td>
                                                     <td class="strategy-run-actions">
                                                         <button class="btn btn-sm btn-link px-1" type="button" data-bs-toggle="collapse" data-bs-target="#runDetails{{ loop.index }}">Details</button>
-                                                        <button class="btn btn-sm btn-outline-secondary px-2 load-job-config" type="button" data-config='{{ (job.config if job.config is defined and job.config else {})|tojson|forceescape }}'>Load</button>
+                                                        <button class="btn btn-sm btn-outline-secondary px-2 load-job-config" type="button" data-job-id="{{ job.id }}">Load</button>
                                                         {% if job.status == 'completed' and job.summary %}
                                                             {% if job.signal_exact_match %}
                                                             <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">Already added</span>
@@ -762,24 +762,15 @@
                                                                         <pre class="strategy-json mb-0">{{ job.summary|tojson(indent=2) }}</pre>
                                                                     </div>
                                                                     <div class="col-12 col-xl-6">
-                                                                        <div class="small fw-semibold mb-1">Best Trades</div>
-                                                                        {% if job.best_trades %}
-                                                                        <div class="table-responsive strategy-trades-scroll">
-                                                                            <table class="table table-sm table-striped mb-0">
-                                                                                <thead><tr><th>Entry</th><th>Exit</th><th>Side</th><th>Qty</th><th>PNL</th><th>Reason</th></tr></thead>
-                                                                                <tbody>
-                                                                                    {% for trade in job.best_trades %}
-                                                                                    <tr>
-                                                                                        <td class="small">{{ trade.entry_time }}</td>
-                                                                                        <td class="small">{{ trade.exit_time }}</td>
-                                                                                        <td>{{ trade.side }}</td>
-                                                                                        <td>{{ trade.qty }}</td>
-                                                                                        <td>{{ trade.pnl }}</td>
-                                                                                        <td class="small">{{ trade.reason }}</td>
-                                                                                    </tr>
-                                                                                    {% endfor %}
-                                                                                </tbody>
-                                                                            </table>
+                                                                        <div class="d-flex justify-content-between align-items-center mb-1">
+                                                                            <div class="small fw-semibold">Trade List</div>
+                                                                            {% if job.has_best_trades %}
+                                                                            <button type="button" class="btn btn-sm btn-outline-secondary py-0 load-trades-btn" data-job-id="{{ job.id }}" data-total="{{ job.best_trades_total }}">Show {{ job.best_trades_total }} trades</button>
+                                                                            {% endif %}
+                                                                        </div>
+                                                                        {% if job.has_best_trades %}
+                                                                        <div class="job-trades-container" data-job-id="{{ job.id }}">
+                                                                            <div class="text-muted small">Click "Show trades" to load.</div>
                                                                         </div>
                                                                         {% else %}
                                                                         <div class="text-muted small">No trade list stored for this run.</div>
@@ -1355,14 +1346,62 @@ $(document).ready(function() {
     $('#testerStrategySelect').on('change', applyStrategyVisibility);
     applyStrategyVisibility();
 
+    const jobDetailUrlBase = "{{ url_for('api_admin_strategy_job_detail', job_id='__ID__') }}";
+    const jobDetailUrl = (jobId) => jobDetailUrlBase.replace('__ID__', encodeURIComponent(jobId));
+
     $('.load-job-config').on('click', function() {
-        const rawConfig = $(this).attr('data-config');
-        if (!rawConfig) return;
-        try {
-            loadTesterConfig(JSON.parse(rawConfig));
-        } catch (error) {
-            console.error('Failed to load job config', error);
+        const jobId = $(this).attr('data-job-id');
+        if (!jobId) return;
+        const btn = $(this);
+        btn.prop('disabled', true);
+        fetch(jobDetailUrl(jobId))
+            .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+            .then((data) => {
+                if (data && data.config) {
+                    loadTesterConfig(data.config);
+                    setTimeout(() => { document.getElementById('tester-tab')?.click(); }, 50);
+                }
+            })
+            .catch((error) => console.error('Failed to load job config', error))
+            .finally(() => btn.prop('disabled', false));
+    });
+
+    function renderTradesTable(trades, total, truncated) {
+        let html = '<div class="table-responsive strategy-trades-scroll"><table class="table table-sm table-striped mb-0">'
+            + '<thead><tr><th>Entry</th><th>Exit</th><th>Side</th><th>Qty</th><th>PNL</th><th>Reason</th></tr></thead><tbody>';
+        trades.forEach((t) => {
+            html += `<tr><td class="small">${escapeHtml(t.entry_time)}</td><td class="small">${escapeHtml(t.exit_time)}</td>`
+                + `<td>${escapeHtml(t.side)}</td><td>${escapeHtml(String(t.qty))}</td><td>${escapeHtml(String(t.pnl))}</td>`
+                + `<td class="small">${escapeHtml(t.reason)}</td></tr>`;
+        });
+        html += '</tbody></table></div>';
+        if (truncated) {
+            html += `<div class="text-muted small mt-1">Showing first ${trades.length} of ${total} trades.</div>`;
         }
+        return html;
+    }
+
+    $('.load-trades-btn').on('click', function() {
+        const jobId = $(this).attr('data-job-id');
+        const btn = $(this);
+        const container = $(`.job-trades-container[data-job-id="${jobId}"]`);
+        if (!jobId || !container.length) return;
+        btn.prop('disabled', true).text('Loading…');
+        fetch(jobDetailUrl(jobId))
+            .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+            .then((data) => {
+                const trades = data.best_trades || [];
+                container.html(trades.length
+                    ? renderTradesTable(trades, data.best_trades_total, data.best_trades_truncated)
+                    : '<div class="text-muted small">No trades.</div>');
+                btn.text('Reload trades');
+            })
+            .catch((error) => {
+                console.error('Failed to load trades', error);
+                container.html('<div class="text-danger small">Failed to load trades.</div>');
+                btn.text('Retry');
+            })
+            .finally(() => btn.prop('disabled', false));
     });
 
     $('.delete-job-btn').on('click', function() {

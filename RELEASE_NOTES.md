@@ -1,5 +1,32 @@
 # Release Notes
 
+## Version 2.8.0 - 2026-06-13
+
+### Win-rate / returns
+- **Market-regime filter for shorts.** Short entries only fire when the broad market (SPY daily,
+  50/200 SMA) is neutral or falling, and are blocked on an uptrend (cached ~30 min). Live data showed
+  shorts were the losing side while longs were net positive.
+- **Rolling per-symbol kill switch.** A symbol whose recent closed trades in a rolling window are
+  deeply net-negative or low win-rate is disabled, then auto-recovers once the streak ages out.
+- **Percentage-based trailing stop.** New `trailing_offset_pct` threaded through the backtest engine,
+  live engine, and optimizer (`--trail-pct-range`). Defaults to 0 (legacy fixed-tick trail).
+- **Stricter quality gates.** Live backtest profit-factor 1.05 -> 1.3; out-of-sample 1.05 -> 1.15.
+
+### Performance
+- **Strategy Lab page.** Per-job config and trade lists are now lazy-loaded via
+  `/api/admin/strategy/job/<id>`; the listing no longer embeds full reports/trades. The page dropped
+  from ~72 MB / 1.6 s to ~1.1 MB / ~0.12 s.
+- **Dashboard responsiveness.** Alpaca clients are cached per user (connection reuse), positions /
+  account get a short TTL cache, and the all-users loops fan out across a thread pool. Gunicorn
+  dashboard threads raised 4 -> 12.
+- **Optimizer speed.** Optional Numba JIT fast path for the Keltner backtest (~5-7x, parity-tested);
+  remote/Windows runner `--optimizer-jobs max` uses all local cores (16 on a Ryzen 9 8945HS).
+- Self-hosted all front-end vendor assets (no remote CDN fetch); dropped animate.css / Google Fonts.
+
+### Fixes
+- **Sub-path login redirect.** Logging in at `/trading/` no longer bounces to the site root; the
+  post-login `next` target now includes the `X-Forwarded-Prefix` set by the reverse proxy.
+
 ## Version 2.7.1 - 2026-06-09
 
 ### Strategy Lab

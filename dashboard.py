@@ -248,9 +248,13 @@ def login_required(f):
     def decorated_function(*args, **kwargs):
         if g.user is None:
             flash(gettext("Please log in first."), "warning")
-            next_path = request.full_path if request.query_string else request.path
-            if next_path.endswith('?'):
-                next_path = next_path[:-1]
+            # Include the proxy prefix (e.g. /trading, set by ProxyFix from
+            # X-Forwarded-Prefix) so the post-login redirect stays inside the
+            # app instead of resolving to the site root.
+            raw_path = request.full_path if request.query_string else request.path
+            if raw_path.endswith('?'):
+                raw_path = raw_path[:-1]
+            next_path = (request.script_root or '') + raw_path
             return redirect(url_for('login', next=next_path))
         return f(*args, **kwargs)
     return decorated_function
@@ -815,13 +819,18 @@ def enrich_strategy_jobs(jobs, config=None):
         item['signal_symbol_match'] = symbol in signal_symbols
         item['signal_strategy_match'] = (symbol, strategy) in signal_strategies
         item['signal_universe_entry'] = signal_strategies.get((symbol, strategy)) or (signal_symbols.get(symbol) or [None])[0]
-        report = load_strategy_job_report(item.get('id'))
-        if isinstance(report, dict):
-            item['report'] = report
-            item['best_trades'] = report.get('best_trades') or []
-            item['top_results'] = report.get('top_results') or []
+        # Avoid reading the (multi-MB) report file per job: the saved summary
+        # already carries the trade count, and the full trade list is fetched
+        # lazily via /api/admin/strategy/job/<id>.
         if not isinstance(item.get('summary'), dict):
-            item['summary'] = strategy_summary_from_job(item, report)
+            item['summary'] = strategy_summary_from_job(item, load_strategy_job_report(item.get('id')))
+        summary_metrics = item['summary'].get('metrics') if isinstance(item.get('summary'), dict) else None
+        total_trades = summary_metrics.get('total_trades') if isinstance(summary_metrics, dict) else None
+        try:
+            item['best_trades_total'] = int(total_trades) if total_trades else 0
+        except (TypeError, ValueError):
+            item['best_trades_total'] = 0
+        item['has_best_trades'] = item['best_trades_total'] > 0
         run_dt = parse_strategy_job_timestamp(item.get('created_at_utc') or item.get('updated_at_utc'))
         updated_dt = parse_strategy_job_timestamp(item.get('updated_at_utc'))
         completed_dt = parse_strategy_job_timestamp(item.get('completed_at_utc'))
@@ -852,6 +861,11 @@ def enrich_strategy_jobs(jobs, config=None):
                 except Exception:
                     continue
             item['comparison'] = comparison
+        # Keep the listing light: config and trade/report blobs are fetched on
+        # demand via /api/admin/strategy/job/<id>. Embedding them per job here is
+        # what bloated the page to tens of MB.
+        for heavy_key in ('config', 'report', 'best_trades', 'top_results', 'stdout', 'stderr', 'optimizer_args', 'bars_csv'):
+            item.pop(heavy_key, None)
         enriched.append(item)
     return enriched
 
@@ -1872,6 +1886,28 @@ def api_admin_strategy_live_snapshot():
         'feed': config.get('feed', 'sip'),
         'data_source': 'Alpaca',
         'rows': rows,
+    })
+
+@app.route('/api/admin/strategy/job/<job_id>')
+@superuser_required
+def api_admin_strategy_job_detail(job_id):
+    """Lazy-loaded per-job detail (config to re-load into the tester + a capped
+    trade list). Keeps the Strategy Lab page tiny; the heavy report/best_trades
+    are fetched only when the admin opens a run or clicks Load."""
+    job = load_strategy_job(job_id)
+    if not job:
+        return jsonify({'error': 'job_not_found'}), 404
+    report = load_strategy_job_report(job_id)
+    best_trades = report.get('best_trades') if isinstance(report, dict) else None
+    best_trades = best_trades or []
+    trade_cap = int(request.args.get('trade_limit', 300))
+    return jsonify({
+        'id': job_id,
+        'config': job.get('config') if isinstance(job.get('config'), dict) else {},
+        'summary': job.get('summary'),
+        'best_trades': best_trades[:trade_cap],
+        'best_trades_total': len(best_trades),
+        'best_trades_truncated': len(best_trades) > trade_cap,
     })
 
 def is_strategy_worker_authorized():

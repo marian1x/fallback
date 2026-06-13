@@ -154,6 +154,23 @@ Useful flags:
 - `--timeframes 5Min,10Min,15Min,30Min,1Hour,2Hour,1Day`: sweep chart intervals and rank the best global result.
 - `--jobs 0`: run optimizer trials in parallel (`0` means auto `cpu_count - 1`; use `1` for single-process).
 - `--top-k 20`: number of best configurations saved.
+- `--trail-pct-range 0.4:1.2:0.1`: optimize a percentage-based trailing stop instead of fixed ticks
+  (`trailing_offset_pct`). `0` keeps the legacy fixed-tick trail. A percentage trail keeps the
+  give-back proportional to price so winners on higher-priced names are not cut after a few cents.
+
+### Performance notes
+
+- **Numba JIT (optional).** If `numba` is installed, the Keltner backtest loop is JIT-compiled for a
+  ~5-7x speedup; the optimizer falls back to pure Python otherwise. The JIT path is parity-tested
+  against the reference implementation (`tests/test_pine_optimizer_numba.py`). Set
+  `STRATEGY_DISABLE_NUMBA=1` to force the reference path.
+- **Use all cores on the runner.** `pine_optimizer.py --jobs 0` already auto-parallelizes across
+  `cpu_count - 1`. The remote/Windows runner additionally accepts `--optimizer-jobs` (default `max`,
+  i.e. all logical cores on that machine, e.g. 16 on a Ryzen 9 8945HS) so it uses its own cores
+  regardless of the value the PI5 sent. Accepts `max`, `auto`, `inherit`, or an integer.
+- **GPU.** The backtest is a sequential, path-dependent state machine and is not GPU-accelerable
+  without a full vectorized rewrite; `--accelerator gpu` only reports the detected device and still
+  runs the (CPU-parallel, JIT) simulation. Maximizing CPU cores + Numba is the supported fast path.
 
 Admins can also use the web UI at `Admin Tools -> Admin Strategy Lab` (`/admin/strategy`) to configure strategy runs, run a batch of symbols, inspect completed run configuration/trades, add a selected run to Signal Universe, and compare local vs TradingView signal routing per symbol.
 
@@ -292,8 +309,14 @@ For Windows 11, use the standalone agent:
 cd C:\path\to\fallback
 .\venv\Scripts\Activate.ps1
 $env:STRATEGY_WORKER_TOKEN="same_value_as_PI5_STRATEGY_WORKER_TOKEN"
-python misc\windows_strategy_agent.py --server https://salavat.home.ro/trading --token $env:STRATEGY_WORKER_TOKEN --workers 1
+python misc\windows_strategy_agent.py --server https://salavat.home.ro/trading --token $env:STRATEGY_WORKER_TOKEN --workers 1 --optimizer-jobs max
 ```
+
+`--optimizer-jobs max` (the default) makes the agent run each optimizer job across all logical CPU
+cores on the Windows machine (e.g. 16 on a Ryzen 9 8945HS), regardless of the `CPU Jobs` value the
+PI5 sent. Use `auto` for `cpu_count - 1`, `inherit` to honor the PI5 value, or an explicit integer.
+For the best throughput on the 8945HS install `numba` in the agent's venv (`pip install numba`) to
+enable the JIT fast path. Keep `--workers 1` so one job uses all cores rather than oversubscribing.
 
 If you want the agent to work through SSH instead of the public HTTPS URL, enable OpenSSH client on Windows and run:
 
