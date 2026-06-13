@@ -238,7 +238,7 @@ body.dark-mode .navbar-toggler-icon {
 
 /* --- Strategy Lab --- */
 .strategy-lab {
-    max-width: 1480px;
+    max-width: 100%;
 }
 .strategy-status-strip {
     display: flex;

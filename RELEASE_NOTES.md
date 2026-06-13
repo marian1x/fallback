@@ -1,5 +1,10 @@
 # Release Notes
 
+## Version 2.8.1 - 2026-06-13
+
+### UI
+- **Strategy Lab full-width layout.** Removed the `max-width: 1480px` cap on the Strategy Lab page so it stretches edge-to-edge, consistent with all other dashboard pages.
+
 ## Version 2.8.0 - 2026-06-13
 
 ### Win-rate / returns
