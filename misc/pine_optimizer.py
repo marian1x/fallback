@@ -61,6 +61,10 @@ class StrategyParams:
     forced_take_profit_pct: float
     trailing_offset_ticks: int
     tick_size: float
+    # When > 0 the trailing stop trails by this percent of price instead of a
+    # fixed number of ticks. Keeps the trail proportional to the instrument so
+    # winners on $100+ names are not cut at a few cents of give-back.
+    trailing_offset_pct: float = 0.0
     macd_fast_length: int = 12
     macd_slow_length: int = 26
     macd_signal_length: int = 9
@@ -139,6 +143,7 @@ def parse_pine_defaults(pine_path: Path) -> Dict[str, object]:
         "forced_stop_loss_pct": 6.0,
         "forced_take_profit_pct": 6.0,
         "trailing_offset_ticks": 4,
+        "trailing_offset_pct": 0.0,
         "initial_capital": 1000.0,
         "commission_pct": 0.04,
         "order_size_usd": 2000.0,
@@ -307,6 +312,7 @@ def derive_reference_settings(
         forced_take_profit_pct=_safe_float(prop.get("Forced Take Profit (%)"), float(pine_defaults["forced_take_profit_pct"])),
         trailing_offset_ticks=int(pine_defaults["trailing_offset_ticks"]),
         tick_size=_safe_float(prop.get("Tick size"), float(pine_defaults["tick_size"])),
+        trailing_offset_pct=float(pine_defaults.get("trailing_offset_pct", 0.0)),
     )
 
     cfg = BacktestConfig(
@@ -735,7 +741,10 @@ def backtest(df: pd.DataFrame, params: StrategyParams, cfg: BacktestConfig, star
 
             fixed_reason: Optional[str] = None
             path = infer_path(o[i], h[i], l[i], c[i])
-            trail_offset = params.trailing_offset_ticks * params.tick_size
+            if params.trailing_offset_pct > 0:
+                trail_offset = c[i] * params.trailing_offset_pct / 100.0
+            else:
+                trail_offset = params.trailing_offset_ticks * params.tick_size
 
             if position > 0:
                 fixed_stop = entry_price * (1 - params.fixed_stop_loss_pct / 100.0)
@@ -1187,6 +1196,7 @@ def sample_params(
         forced_take_profit_pct=float(rng.choice(ranges["forced_take_profit_pct"])),
         trailing_offset_ticks=int(rng.choice(ranges["trailing_offset_ticks"])),
         tick_size=base.tick_size,
+        trailing_offset_pct=float(rng.choice(ranges.get("trailing_offset_pct", [base.trailing_offset_pct]))),
         macd_fast_length=int(rng.choice(ranges.get("macd_fast_length", [base.macd_fast_length]))),
         macd_slow_length=int(rng.choice(ranges.get("macd_slow_length", [base.macd_slow_length]))),
         macd_signal_length=int(rng.choice(ranges.get("macd_signal_length", [base.macd_signal_length]))),
@@ -1369,6 +1379,7 @@ def suggest_params_tpe(
         forced_take_profit_pct=float(trial.suggest_categorical("forced_take_profit_pct", ranges["forced_take_profit_pct"])),
         trailing_offset_ticks=int(trial.suggest_categorical("trailing_offset_ticks", ranges["trailing_offset_ticks"])),
         tick_size=base.tick_size,
+        trailing_offset_pct=float(trial.suggest_categorical("trailing_offset_pct", ranges.get("trailing_offset_pct", [base.trailing_offset_pct]))),
         macd_fast_length=int(trial.suggest_categorical("macd_fast_length", ranges.get("macd_fast_length", [base.macd_fast_length]))),
         macd_slow_length=int(trial.suggest_categorical("macd_slow_length", ranges.get("macd_slow_length", [base.macd_slow_length]))),
         macd_signal_length=int(trial.suggest_categorical("macd_signal_length", ranges.get("macd_signal_length", [base.macd_signal_length]))),
@@ -1474,6 +1485,7 @@ def main() -> None:
     parser.add_argument("--forced-tp-range", type=str, default="3.0:10.0:0.2")
     # Trailing offset is currently hardcoded in Pine (`trail_offset = 4`), so keep fixed by default.
     parser.add_argument("--trail-offset-range", type=str, default="4:4:1")
+    parser.add_argument("--trail-pct-range", type=str, default="0:0:1")
     parser.add_argument("--macd-fast-range", type=str, default="8:20:1")
     parser.add_argument("--macd-slow-range", type=str, default="20:40:1")
     parser.add_argument("--macd-signal-range", type=str, default="5:15:1")
@@ -1557,6 +1569,7 @@ def main() -> None:
         "forced_stop_loss_pct": parse_range(args.forced_sl_range, is_int=False),
         "forced_take_profit_pct": parse_range(args.forced_tp_range, is_int=False),
         "trailing_offset_ticks": parse_range(args.trail_offset_range, is_int=True),
+        "trailing_offset_pct": parse_range(args.trail_pct_range, is_int=False),
         "macd_fast_length": parse_range(args.macd_fast_range, is_int=True),
         "macd_slow_length": parse_range(args.macd_slow_range, is_int=True),
         "macd_signal_length": parse_range(args.macd_signal_range, is_int=True),
@@ -1575,6 +1588,7 @@ def main() -> None:
         ranges["outer_kc_length"] = [base_params.outer_kc_length]
         ranges["outer_kc_mult"] = [base_params.outer_kc_mult]
         ranges["trailing_offset_ticks"] = [base_params.trailing_offset_ticks]
+        ranges["trailing_offset_pct"] = [base_params.trailing_offset_pct]
 
     all_results: List[Tuple[str, BacktestResult]] = []
     reference_timeframe = None

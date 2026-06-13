@@ -924,8 +924,8 @@ def summarize_strategy_report(report, source='local', job_id=None):
         'trade_direction', 'inner_kc_length', 'inner_kc_mult', 'outer_kc_length',
         'outer_kc_mult', 'fixed_stop_loss_pct', 'fixed_take_profit_pct',
         'forced_stop_loss_pct', 'forced_take_profit_pct', 'trailing_offset_ticks',
-        'tick_size', 'macd_fast_length', 'macd_slow_length', 'macd_signal_length',
-        'macd_sma_length', 'max_intraday_loss_pct',
+        'trailing_offset_pct', 'tick_size', 'macd_fast_length', 'macd_slow_length',
+        'macd_signal_length', 'macd_sma_length', 'max_intraday_loss_pct',
     ]
     return {
         'symbol': strategy_store.normalize_symbol(report.get('symbol_used') or report.get('symbol_input') or ''),
@@ -1191,7 +1191,7 @@ def build_strategy_optimizer_args(config, report_path, top_path, bars_csv_path=N
         "--validation-train-ratio", str(config.get("validation_train_ratio", 0.70)),
         "--validation-min-trades", str(int(config.get("validation_min_trades", 5))),
         "--validation-min-win-rate", str(config.get("validation_min_win_rate_pct", 45)),
-        "--validation-min-profit-factor", str(config.get("validation_min_profit_factor", 1.05)),
+        "--validation-min-profit-factor", str(config.get("validation_min_profit_factor", 1.15)),
         "--validation-max-drawdown-pct", str(config.get("validation_max_drawdown_pct", 15)),
         "--validation-min-net-profit", str(config.get("validation_min_net_profit", 0)),
         "--inner-len-range", inner_len_range,
@@ -1203,6 +1203,10 @@ def build_strategy_optimizer_args(config, report_path, top_path, bars_csv_path=N
         "--forced-sl-range", forced_sl_range,
         "--forced-tp-range", forced_tp_range,
         "--trail-offset-range", str(config.get("trail_offset_range", "4:4:1")),
+        "--trail-pct-range", (
+            str(config.get("trail_pct_range", "0.0:0.0:0.1")) if optimize_enabled
+            else exact_range(config.get("trailing_offset_pct", 0.0))
+        ),
         "--macd-fast-range", macd_fast_range,
         "--macd-slow-range", macd_slow_range,
         "--macd-signal-range", macd_signal_range,
@@ -1594,7 +1598,7 @@ def admin_strategy():
         config['validation_train_ratio'] = min(0.95, max(0.2, as_float(request.form.get('validation_train_ratio', config.get('validation_train_ratio', 0.70)), 0.70)))
         config['validation_min_trades'] = max(1, as_int(request.form.get('validation_min_trades', config.get('validation_min_trades', 5)), 5))
         config['validation_min_win_rate_pct'] = as_float(request.form.get('validation_min_win_rate_pct', config.get('validation_min_win_rate_pct', 45)), 45)
-        config['validation_min_profit_factor'] = as_float(request.form.get('validation_min_profit_factor', config.get('validation_min_profit_factor', 1.05)), 1.05)
+        config['validation_min_profit_factor'] = as_float(request.form.get('validation_min_profit_factor', config.get('validation_min_profit_factor', 1.15)), 1.15)
         config['validation_max_drawdown_pct'] = as_float(request.form.get('validation_max_drawdown_pct', config.get('validation_max_drawdown_pct', 15)), 15)
         config['validation_min_net_profit'] = as_float(request.form.get('validation_min_net_profit', config.get('validation_min_net_profit', 0)), 0)
         config['daily_max_trades_per_symbol'] = max(1, as_int(request.form.get('daily_max_trades_per_symbol', config.get('daily_max_trades_per_symbol', 3)), 3))
@@ -1616,6 +1620,8 @@ def admin_strategy():
         config['forced_sl_range'] = request.form.get('forced_sl_range', config.get('forced_sl_range', '3.0:10.0:0.2')).strip()
         config['forced_tp_range'] = request.form.get('forced_tp_range', config.get('forced_tp_range', '3.0:10.0:0.2')).strip()
         config['trail_offset_range'] = request.form.get('trail_offset_range', config.get('trail_offset_range', '4:4:1')).strip()
+        config['trailing_offset_pct'] = as_float(request.form.get('trailing_offset_pct', config.get('trailing_offset_pct', 0.0)), 0.0)
+        config['trail_pct_range'] = request.form.get('trail_pct_range', config.get('trail_pct_range', '0.0:0.0:0.1')).strip()
         config['macd_fast_range'] = request.form.get('macd_fast_range', config.get('macd_fast_range', '8:20:1')).strip()
         config['macd_slow_range'] = request.form.get('macd_slow_range', config.get('macd_slow_range', '20:40:1')).strip()
         config['macd_signal_range'] = request.form.get('macd_signal_range', config.get('macd_signal_range', '5:15:1')).strip()

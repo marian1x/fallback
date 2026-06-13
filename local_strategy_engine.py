@@ -68,7 +68,7 @@ class LocalStrategyEngine:
         self.log_throttle_seconds = int(os.getenv("LOCAL_STRATEGY_LOG_THROTTLE_SECONDS", "900"))
         self.min_backtest_trades = int(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_TRADES", "5"))
         self.min_backtest_win_rate_pct = float(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_WIN_RATE_PCT", "45"))
-        self.min_backtest_profit_factor = float(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_PROFIT_FACTOR", "1.05"))
+        self.min_backtest_profit_factor = float(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_PROFIT_FACTOR", "1.3"))
         self.max_backtest_drawdown_pct = float(os.getenv("LOCAL_STRATEGY_MAX_BACKTEST_DRAWDOWN_PCT", "15"))
         self.min_backtest_net_profit = float(os.getenv("LOCAL_STRATEGY_MIN_BACKTEST_NET_PROFIT", "0"))
         self.daily_max_trades_per_symbol = int(os.getenv("LOCAL_STRATEGY_DAILY_MAX_TRADES_PER_SYMBOL", "3"))
@@ -82,6 +82,15 @@ class LocalStrategyEngine:
         self.state_lock = threading.Lock()
         self.state = {"symbols": {}, "recoveries": []}
         self.llm_validator = create_llm_trade_validator(self.app.instance_path, self.logger)
+        # Market-regime filter: shorts are only allowed when the broad market is
+        # neutral or falling, and blocked while it trends up. The regime barely
+        # moves intraday, so it is computed from daily index bars and cached.
+        self.market_regime_symbol = strategy_store.normalize_symbol(os.getenv("LOCAL_STRATEGY_REGIME_SYMBOL", "SPY")) or "SPY"
+        self.market_regime_sma_fast = int(os.getenv("LOCAL_STRATEGY_REGIME_SMA_FAST", "50"))
+        self.market_regime_sma_slow = int(os.getenv("LOCAL_STRATEGY_REGIME_SMA_SLOW", "200"))
+        self.market_regime_strong_pct = float(os.getenv("LOCAL_STRATEGY_REGIME_STRONG_PCT", "3.0"))
+        self.market_regime_ttl_seconds = int(os.getenv("LOCAL_STRATEGY_REGIME_TTL_SECONDS", "1800"))
+        self.market_regime_cache: Dict[str, Dict] = {}
 
     def start(self) -> None:
         if self.thread and self.thread.is_alive():
@@ -314,6 +323,7 @@ class LocalStrategyEngine:
             "forced_stop_loss_pct": float(params.get("forced_stop_loss_pct", cfg.get("forced_stop_loss_pct", 9.0))),
             "forced_take_profit_pct": float(params.get("forced_take_profit_pct", cfg.get("forced_take_profit_pct", 10.0))),
             "trailing_offset_ticks": int(params.get("trailing_offset_ticks", 4)),
+            "trailing_offset_pct": float(params.get("trailing_offset_pct", 0.0)),
             "tick_size": float(params.get("tick_size", 0.01)),
             "macd_fast_length": int(params.get("macd_fast_length", cfg.get("macd_fast_length", 12))),
             "macd_slow_length": int(params.get("macd_slow_length", cfg.get("macd_slow_length", 26))),
@@ -392,7 +402,7 @@ class LocalStrategyEngine:
             "min_net_profit": float(cfg.get("validation_min_net_profit", 0)),
             "min_trades": float(cfg.get("validation_min_trades", 5)),
             "min_win_rate_pct": float(cfg.get("validation_min_win_rate_pct", 45)),
-            "min_profit_factor": float(cfg.get("validation_min_profit_factor", 1.05)),
+            "min_profit_factor": float(cfg.get("validation_min_profit_factor", 1.15)),
             "max_drawdown_pct": float(cfg.get("validation_max_drawdown_pct", 15)),
         }
 
@@ -495,6 +505,46 @@ class LocalStrategyEngine:
             return f"daily loss limit {loss_usd:.2f}/{max_loss_usd:.2f} USD"
         return None
 
+    def symbol_killswitch_reason(self, user: User, symbol: str, cfg: Dict) -> Optional[str]:
+        """Disable a chronically losing symbol.
+
+        Looks at the symbol's recent closed trades inside a rolling window. If
+        there are enough of them and they are either deeply net-negative or have
+        a poor win rate, new entries are blocked. The window is time-bounded by
+        the cooldown, so once the bad streak ages out the symbol re-enables on
+        its own with no manual reset.
+        """
+        if not bool(cfg.get("symbol_killswitch_enabled", True)):
+            return None
+        lookback_trades = max(1, int(cfg.get("symbol_killswitch_lookback_trades", 15)))
+        min_trades = max(1, int(cfg.get("symbol_killswitch_min_trades", 6)))
+        max_net_loss = float(cfg.get("symbol_killswitch_max_net_loss_usd", 300))
+        min_win_rate = float(cfg.get("symbol_killswitch_min_win_rate_pct", 35))
+        cooldown_days = max(1, int(cfg.get("symbol_killswitch_cooldown_days", 14)))
+        window_start = datetime.now(timezone.utc) - timedelta(days=cooldown_days)
+        trades = (
+            Trade.query
+            .filter(
+                Trade.user_id == user.id,
+                Trade.symbol == symbol,
+                Trade.status == "closed",
+                Trade.close_time >= window_start,
+            )
+            .order_by(Trade.close_time.desc())
+            .limit(lookback_trades)
+            .all()
+        )
+        if len(trades) < min_trades:
+            return None
+        pls = [float(t.profit_loss or 0.0) for t in trades]
+        net = sum(pls)
+        win_rate = (sum(1 for p in pls if p > 0) / len(pls)) * 100.0
+        if max_net_loss > 0 and net <= -max_net_loss:
+            return f"killswitch net {net:.2f} over last {len(pls)} trades (<= -{max_net_loss:.0f}, {cooldown_days}d cooldown)"
+        if win_rate < min_win_rate:
+            return f"killswitch win rate {win_rate:.0f}% over last {len(pls)} trades (< {min_win_rate:.0f}%, {cooldown_days}d cooldown)"
+        return None
+
     def _metric_float(self, metrics: Dict, key: str) -> Optional[float]:
         value = metrics.get(key)
         try:
@@ -503,6 +553,72 @@ class LocalStrategyEngine:
             return float(value)
         except (TypeError, ValueError):
             return None
+
+    def compute_market_regime(self, api: LegacyCompatibleAlpacaClient, symbol: str, feed: str) -> Optional[str]:
+        """Classify the broad market from daily index bars.
+
+        Returns one of: 'strong_bullish', 'bullish', 'neutral', 'bearish', or
+        None when data is unavailable. A regime is bullish when price is above
+        the slow SMA and the fast SMA is above the slow SMA; 'strong_bullish'
+        adds a momentum cushion above the slow SMA.
+        """
+        fast_len = max(2, self.market_regime_sma_fast)
+        slow_len = max(fast_len + 1, self.market_regime_sma_slow)
+        try:
+            now = datetime.now(timezone.utc)
+            start = now - timedelta(days=max(slow_len * 2, 300))
+            bars = api.get_bars(
+                symbol,
+                "1Day",
+                start=start.isoformat().replace("+00:00", "Z"),
+                end=now.isoformat().replace("+00:00", "Z"),
+                adjustment="raw",
+                feed=feed,
+            ).df
+            if bars is None or bars.empty or len(bars) < slow_len + 5:
+                return None
+            close = bars["close"].astype(float)
+            fast_v = float(sma(close, fast_len).iloc[-1])
+            slow_v = float(sma(close, slow_len).iloc[-1])
+            price = float(close.iloc[-1])
+            if any(math.isnan(value) for value in (fast_v, slow_v, price)) or slow_v <= 0:
+                return None
+            pct_above_slow = (price - slow_v) / slow_v * 100.0
+            if price > slow_v and fast_v > slow_v:
+                return "strong_bullish" if pct_above_slow >= self.market_regime_strong_pct else "bullish"
+            if price < slow_v and fast_v < slow_v:
+                return "bearish"
+            return "neutral"
+        except Exception as exc:
+            self.logger.warning("[LOCAL_STRATEGY] Market regime fetch failed for %s: %s", symbol, exc)
+            return None
+
+    def market_allows_short(self, api: LegacyCompatibleAlpacaClient, cfg: Dict) -> tuple[bool, str]:
+        """Shorts allowed only when the market is neutral or falling.
+
+        On an uptrend (bullish/strong_bullish) shorts are blocked. When the
+        regime cannot be determined we block too, because shorts have been the
+        losing side and skipping a short on uncertainty is the safe bias.
+        """
+        if not bool(cfg.get("market_regime_filter_enabled", True)):
+            return True, "regime_filter_disabled"
+        symbol = strategy_store.normalize_symbol(cfg.get("market_regime_symbol", self.market_regime_symbol)) or self.market_regime_symbol
+        feed = str(cfg.get("feed", "iex"))
+        ttl = int(cfg.get("market_regime_ttl_seconds", self.market_regime_ttl_seconds))
+        now = datetime.now(timezone.utc)
+        with self.state_lock:
+            cached = self.market_regime_cache.get(symbol)
+        if cached and (now - cached["computed_at"]).total_seconds() < ttl:
+            regime = cached["regime"]
+        else:
+            regime = self.compute_market_regime(api, symbol, feed)
+            if regime is None:
+                return False, "regime_unknown_blocking_short"
+            with self.state_lock:
+                self.market_regime_cache[symbol] = {"regime": regime, "computed_at": now}
+        if regime in ("bullish", "strong_bullish"):
+            return False, f"market_uptrend:{regime}"
+        return True, f"market_{regime}"
 
     def fetch_closed_bars(self, api: LegacyCompatibleAlpacaClient, symbol: str, timeframe: str, feed: str, session: str) -> pd.DataFrame:
         normalized_tf = normalize_timeframe_token(timeframe)
@@ -619,6 +735,21 @@ class LocalStrategyEngine:
                 self.defer_next_entry_check(symbol, timeframe, strategy_name)
                 self.save_state()
                 self.emit_event("entry_rejected", symbol, reason="daily_guard", detail=daily_rejection)
+                return
+            killswitch_rejection = self.symbol_killswitch_reason(user, symbol, cfg)
+            if killswitch_rejection:
+                self.log_symbol_throttled(
+                    symbol,
+                    "killswitch_reject",
+                    logging.WARNING,
+                    "[LOCAL_STRATEGY] %s entry disabled: %s",
+                    symbol,
+                    killswitch_rejection,
+                    strategy=strategy_name,
+                )
+                self.defer_next_entry_check(symbol, timeframe, strategy_name)
+                self.save_state()
+                self.emit_event("entry_rejected", symbol, reason="symbol_killswitch", detail=killswitch_rejection)
                 return
             oos_rejection = self.oos_entry_rejection_reason(backtest, cfg)
             if oos_rejection:
@@ -800,6 +931,24 @@ class LocalStrategyEngine:
             self.save_state()
             return
 
+        if action == "sell":
+            allowed, regime_reason = self.market_allows_short(api, cfg)
+            if not allowed:
+                self.log_symbol_throttled(
+                    symbol,
+                    "short_blocked_regime",
+                    logging.INFO,
+                    "[LOCAL_STRATEGY] %s short entry blocked by market regime: %s",
+                    symbol,
+                    regime_reason,
+                    strategy=strategy_name,
+                )
+                st["last_checked_bar"] = last_bar_ts
+                st["last_decision"] = f"short_blocked_{regime_reason}"
+                self.save_state()
+                self.emit_event("entry_rejected", symbol, strategy=strategy_name, reason="market_regime", detail=regime_reason)
+                return
+
         payload = self.build_payload(
             symbol=symbol,
             action=action,
@@ -837,6 +986,24 @@ class LocalStrategyEngine:
             st["last_decision"] = "no_entry"
             self.save_state()
             return
+
+        if action == "sell":
+            allowed, regime_reason = self.market_allows_short(api, cfg)
+            if not allowed:
+                self.log_symbol_throttled(
+                    symbol,
+                    "short_blocked_regime",
+                    logging.INFO,
+                    "[LOCAL_STRATEGY] %s MACD/SMA short entry blocked by market regime: %s",
+                    symbol,
+                    regime_reason,
+                    strategy=strategy_name,
+                )
+                st["last_checked_bar"] = last_bar_ts
+                st["last_decision"] = f"short_blocked_{regime_reason}"
+                self.save_state()
+                self.emit_event("entry_rejected", symbol, strategy=strategy_name, reason="market_regime", detail=regime_reason)
+                return
 
         order_backtest = dict(backtest or {})
         order_backtest["strategy"] = "macd_sma"
@@ -1061,7 +1228,10 @@ class LocalStrategyEngine:
                 return "fixed take profit (short)"
 
         activation = float(frame.iloc[-1]["mid_inner"])
-        offset = params["trailing_offset_ticks"] * params["tick_size"]
+        if params.get("trailing_offset_pct", 0.0) > 0:
+            offset = latest_price * params["trailing_offset_pct"] / 100.0
+        else:
+            offset = params["trailing_offset_ticks"] * params["tick_size"]
         trail_active = bool(st.get("trail_active", False))
         trail_stop = st.get("trail_stop")
         if not is_short:
