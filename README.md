@@ -201,18 +201,48 @@ Useful env vars:
 - `TRADE_UPDATES_EVENT_TTL_SEC=3600`: keep Alpaca trade-update events in memory for this many seconds.
 - `TRADE_UPDATES_MAX_EVENTS=500`: cap in-memory Alpaca trade-update events per account stream.
 
-### LLM Shadow Validation
+### LLM News Gatekeeper (shadow + gate modes)
 
-The local strategy can optionally ask a remote/local LLM what it would do with a Keltner entry signal while leaving live/paper execution unchanged. This is a shadow-only audit layer: Keltner orders continue through the normal risk-gated path, and LLM decisions are appended to `instance/llm_trade_shadow.jsonl`.
+The local strategy can ask a local LLM (e.g. Gemma on LM Studio) to validate each entry
+signal against aggregated news before it executes. Two modes:
+
+- **`shadow`** (default): audit-only. Orders execute normally; the LLM's decision is appended to
+  `instance/llm_trade_shadow.jsonl`. Use this to watch behavior with zero risk.
+- **`gate`**: the LLM becomes a real gatekeeper. It reads fresh news **plus** the per-symbol memory
+  (see below) and can `veto` / `reduce_size` an entry — e.g. invalidate a short on a name the whole
+  market is dragging down but whose own news/analysts are clearly bullish (and vice-versa).
+  - **Shadow-first**: even in `gate` mode nothing is blocked until `LLM_GATE_ENFORCE=true`. Until then
+    it logs `WOULD veto …` so you can build trust first.
+  - **Fail-open + alert**: if the LLM is unreachable/slow/garbled, the trade executes as normal and an
+    `entry_llm_failopen` event is emitted. An LLM outage never halts trading.
+
+Per-symbol **memory** lives under `instance/symbol_memory/` (inspectable JSON): a timestamped,
+deduplicated news archive (`<SYMBOL>.news.jsonl`) plus an LLM-maintained dossier (`<SYMBOL>.json`).
+News is ingested continuously in the poll loop, so the model corroborates a new headline against
+months of prior context and against the signal's timestamp.
+
+**Background analyst (no waiting on the slow model).** The LLM runs in the background and keeps a
+**standing per-symbol verdict** in the dossier `analysis` block (`long_ok`/`short_ok` flags, bias,
+confidence, reason, decided-at, based-on news). In `gate` mode the trading path reads that flag for
+the signal's direction — no per-signal LLM call, zero latency. Cold start (no verdict yet) fails open
+and triggers a background analysis. Set `LLM_GATE_SYNC=true` to instead make a blocking per-signal LLM
+call (legacy). Strategy Lab → Bot Routing shows the verdict per symbol as a **Buy / Sell / Both /
+Blocked / Pending** badge. In Stock Intelligence, **Show analysis (instant)** displays the prepared
+verdict with no LLM call; **Ask (live answer)** is for custom one-off questions.
 
 Recommended first-phase `.env` settings for LM Studio on the MiniPC:
 
 ```bash
 LLM_TRADE_VALIDATION_ENABLED=true
-LLM_TRADE_VALIDATION_MODE=shadow
+LLM_TRADE_VALIDATION_MODE=gate          # shadow | gate
+LLM_GATE_ENFORCE=false                  # false = log "WOULD veto"; true = actually block
+LLM_GATE_SYNC=false                     # false = read precomputed flag (fast); true = blocking per-signal call
+LLM_GATE_MIN_CONFIDENCE=0.6
+LLM_GATE_REDUCE_SIZE_FACTOR=0.5
+LLM_GATE_BLOCK_ON_MANUAL_REVIEW=false
 LLM_TRADE_VALIDATION_API_STYLE=lmstudio_native
 LLM_TRADE_VALIDATION_BASE_URL=http://192.168.50.110:1234
-LLM_TRADE_VALIDATION_MODEL=google/gemma-4-e4b
+LLM_TRADE_VALIDATION_MODEL=google/gemma-3n-e4b
 LLM_TRADE_VALIDATION_API_TOKEN=
 LLM_TRADE_VALIDATION_TIMEOUT_SEC=25
 LLM_TRADE_VALIDATION_MAX_ATTEMPTS=2
@@ -220,7 +250,10 @@ LLM_TRADE_VALIDATION_MAX_WORKERS=1
 LLM_TRADE_VALIDATION_NEWS_ENABLED=true
 LLM_TRADE_VALIDATION_NEWS_LIMIT=3
 LLM_TRADE_VALIDATION_NEWS_TIMEOUT_SEC=5
-NEWS_CONTEXT_SOURCES=alpaca,google
+# Per-symbol memory / continuous ingestion
+SYMBOL_MEMORY_INGEST_ENABLED=true
+SYMBOL_MEMORY_REFRESH_SECONDS=1800      # per-symbol news ingest throttle
+SYMBOL_MEMORY_ARCHIVE_CAP=4000
 NEWS_CONTEXT_LIMIT=3
 NEWS_CONTEXT_TIMEOUT_SEC=5
 NEWS_CONTEXT_GOOGLE_DAYS=7
@@ -237,12 +270,31 @@ curl http://192.168.50.110:1234/api/v1/chat \
   -d '{"model":"google/gemma-4-e4b","system_prompt":"Return only valid JSON.","input":"Return {\"decision\":\"approve\",\"confidence\":0.5,\"reason\":\"test\",\"risk_flags\":[]}.","temperature":0.1,"max_output_tokens":120,"store":false}'
 ```
 
-News context sources:
+News sources are now an **editable aggregator**. On first run the engine materializes
+`instance/news_sources.json`; add, remove or toggle sources there without touching code. Each entry is
+`{"name": ..., "type": ..., "url": ..., "enabled": true}`. Supported `type`s:
 
-- `alpaca`: authenticated Alpaca News API; uses the same Alpaca credentials already available to the local strategy request.
-- `yahoo`: optional Yahoo Finance search/news endpoint. Keep it disabled by default because the public endpoint can return HTTP 429 rate limits from the PI5 network.
+- `alpaca`: authenticated Alpaca News API; uses the same Alpaca credentials as the local strategy.
 - `google`: Google News RSS query for recent symbol news.
-- `stocktwits`: optional investor-message sentiment source. It can be blocked by Cloudflare from some networks; keep it out of `NEWS_CONTEXT_SOURCES` unless it works reliably from the PI5 or you add a paid/authorized sentiment provider.
+- `yahoo`: Yahoo Finance search/news JSON (can return HTTP 429 from some networks).
+- `stocktwits`: investor-message sentiment (can be Cloudflare-blocked from some networks).
+- `rss`: **any** RSS/Atom feed — put `{symbol}` in the `url` and it is substituted at fetch time.
+  This is the easy extension point: paste a feed URL to add a new source. Defaults ship with Yahoo
+  Finance RSS, Nasdaq and Seeking Alpha enabled, plus Bing News and an Investing.com proxy disabled.
+
+(The legacy `NEWS_CONTEXT_SOURCES` env list is still honored as a fallback when the JSON file is absent.)
+
+Manage and monitor feeds from **Admin → News Feeds**: view all configured sources, **Check health**
+against a test symbol (online / down + error + item count, so a dead or moved feed is obvious),
+enable/disable, add/remove `rss` feeds, and save. The collector **interleaves across providers** so no
+single source (e.g. Alpaca, which is Benzinga-backed) fills every slot. Per-source fetch count is
+`NEWS_CONTEXT_LIMIT` (default 8) and the total returned across all sources is `NEWS_CONTEXT_MAX_ITEMS`
+(default 60) — so every reachable source contributes rather than truncating to one source's worth.
+Defaults include Alpaca, Google News, Yahoo, StockTwits, Yahoo Finance RSS, Nasdaq, Seeking Alpha,
+Economic Times India, TipRanks, The Motley Fool, GuruFocus and Livemint (publisher feeds are
+`{symbol}`-templated Google News site-scoped queries). The engine ingests news for the whole enabled Bot Routing universe on a `SYMBOL_MEMORY_REFRESH_SECONDS`
+throttle (30 min); the **Refresh news + analysis** button in Bot Routing forces an immediate pass.
+Each fetch records per-symbol source reachability, shown in Stock Intelligence → Show analysis.
 
 Test news context from the PI5:
 

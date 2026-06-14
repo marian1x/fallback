@@ -99,3 +99,56 @@ def test_collector_records_provider_error_without_failing(monkeypatch):
     assert context["items"] == []
     assert context["investor_messages"] == []
     assert "stocktwits" in context["provider_errors"]
+
+
+def test_collector_parses_generic_rss_source(monkeypatch):
+    rss = """<?xml version="1.0"?><rss><channel>
+      <item>
+        <title>TSLA stock jumps on record deliveries</title>
+        <link>https://feeds.example.com/tsla/1</link>
+        <guid>t1</guid>
+        <pubDate>Tue, 02 Jun 2026 12:00:00 GMT</pubDate>
+        <description>Tesla beats delivery estimates</description>
+      </item></channel></rss>"""
+
+    captured = {}
+
+    def mock_get(url, headers=None, params=None, timeout=None):
+        captured["url"] = url
+        return MockResponse(text=rss)
+
+    monkeypatch.setattr(market_news.requests, "get", mock_get)
+    collector = MarketNewsCollector(
+        sources=[{"name": "Yahoo Finance RSS", "type": "rss",
+                  "url": "https://feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}", "enabled": True}],
+        limit=5, timeout_sec=1, alpaca_news_url="x", google_days=7,
+    )
+    context = collector.collect("TSLA")
+    assert context["provider_errors"] == {}
+    assert len(context["items"]) == 1
+    assert context["items"][0]["provider"] == "rss_yahoo_finance_rss"
+    assert "TSLA" in captured["url"] and "{symbol}" not in captured["url"]
+
+
+def test_collector_skips_disabled_sources(monkeypatch):
+    def mock_get(url, headers=None, params=None, timeout=None):
+        raise AssertionError("disabled source must not be fetched")
+
+    monkeypatch.setattr(market_news.requests, "get", mock_get)
+    collector = MarketNewsCollector(
+        sources=[{"name": "Off", "type": "rss", "url": "https://x/{symbol}", "enabled": False}],
+        limit=5, timeout_sec=1, alpaca_news_url="x", google_days=7,
+    )
+    context = collector.collect("AAPL")
+    assert context["items"] == [] and context["provider_errors"] == {}
+
+
+def test_interleave_by_provider_spreads_sources():
+    items = [
+        {"provider": "alpaca", "url": "a1"}, {"provider": "alpaca", "url": "a2"},
+        {"provider": "alpaca", "url": "a3"}, {"provider": "google_news", "url": "g1"},
+        {"provider": "rss_nasdaq", "url": "n1"},
+    ]
+    out = MarketNewsCollector._interleave_by_provider(items)
+    # first three span three providers instead of three alpaca/benzinga items
+    assert [i["provider"] for i in out[:3]] == ["alpaca", "google_news", "rss_nasdaq"]

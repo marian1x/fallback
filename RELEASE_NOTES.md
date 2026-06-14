@@ -1,5 +1,126 @@
 # Release Notes
 
+## Version 2.9.4 - 2026-06-14
+
+### Fix: background analysis overwhelmed the local LLM (no verdicts produced)
+- A manual "refresh all" spawned **one LLM request per symbol concurrently**, which overwhelmed LM
+  Studio — it evicted in-flight requests (LRU slot reuse), so every call was cancelled and returned
+  empty (`"output": []`, `Client disconnected`). No analysis completed.
+- Fix: background re-analysis now runs through a **single serialized worker** (one LLM call at a time,
+  with de-duplication), uses a **long read timeout** (`LLM_ANALYSIS_TIMEOUT_SEC`, default 180s) instead
+  of the 25s gate timeout, and feeds the analyst a **smaller prompt** (18 recent items, trimmed
+  summaries). The full news history is still archived; the dossier stays cumulative.
+
+## Version 2.9.3 - 2026-06-14
+
+### More news sources + include all of them
+- Added five publisher feeds (verified to return per-symbol results), as `{symbol}`-templated Google
+  News site-scoped queries: **Economic Times India, TipRanks, The Motley Fool, GuruFocus, Livemint**.
+  Added to the defaults and merged into the live `instance/news_sources.json`.
+- **Include all fetched news, not just a few.** The collector now separates per-source fetch count
+  (`NEWS_CONTEXT_LIMIT`, default 8) from the total returned (`NEWS_CONTEXT_MAX_ITEMS`, default 60), so
+  every reachable source contributes instead of one filling the cap. A real MSFT pass now returns ~60
+  items across 9 providers (was 3). The analyst reads up to 50 recent items per re-analysis, and the
+  full history is archived regardless. Yahoo (HTTP 429) and credential-less Alpaca surface as errors on
+  the News Feeds health page.
+
+## Version 2.9.2 - 2026-06-14
+
+### News sources: fix single-source domination + make them manageable
+- **"Only Benzinga" fix.** Three causes: Alpaca's news is Benzinga-backed; Stock Intelligence was
+  using the env source list, not the editable `news_sources.json`; and items were truncated to the
+  limit after Alpaca had already filled every slot. Now the collector **interleaves across providers**
+  before truncating (so the first N span multiple sources), Stock Intelligence uses the editable
+  registry, and the default news count was raised 3 → 6.
+- **Admin → News Feeds page.** New page to view every configured source, **check health** against a
+  test symbol (shows online / down + the error and item count, so you can spot a dead feed or a
+  changed URL), enable/disable, add/remove `rss` feeds (`{symbol}` templated), and save back to
+  `instance/news_sources.json`.
+- **Per-symbol source reachability.** Every news fetch records which sources were reachable vs
+  unreachable for that symbol; shown in Stock Intelligence → Show analysis ("Sources reached: N ok ·
+  X unreachable").
+
+### Manual "refresh now"
+- **Refresh news + analysis button** in Strategy Lab → Bot Routing queues an immediate fetch + LLM
+  re-analysis for the whole routing list. The engine picks it up on its next tick (~15s) and runs it
+  in the background, bypassing the per-symbol throttle.
+
+### How the analyst is triggered (clarification)
+- The LLM is **poll-driven, not push**: the engine fetches the feeds for each routing symbol on a
+  throttle (`SYMBOL_MEMORY_REFRESH_SECONDS`, default 30 min); when new deduplicated items appear it
+  triggers the background re-analysis. The new button is the manual override of that schedule. News
+  ingestion now covers the **whole enabled routing universe**, not just locally-executed symbols.
+
+## Version 2.9.1 - 2026-06-14
+
+### LLM becomes a background analyst (no more waiting on the slow model)
+- The local model was too slow to call inline (Stock Intelligence timed out; live signals would have
+  had to wait). The LLM now runs **in the background** and keeps a **standing per-symbol verdict** that
+  everything else reads instantly.
+- **Standing verdict / flags**: the per-symbol dossier now carries an `analysis` block with
+  `long_ok` / `short_ok` flags, `bias`, `confidence`, `reason`, `risk_flags`, the time it was decided,
+  and how many news items it was based on. The background analyst refreshes it whenever new news is
+  ingested for the symbol (it already polls the whole Bot Routing universe).
+- **Gate reads the flag, never blocks**: in gate mode the trading path now consults the precomputed
+  `long_ok`/`short_ok` flag for the signal's direction — **zero LLM latency on the signal path**. Cold
+  start (no verdict yet) fails open and kicks off a background analysis. The old blocking per-signal
+  call is still available behind `LLM_GATE_SYNC=true`.
+- **Stock Intelligence**:
+  - New **"Show analysis (instant)"** button → returns the prepared standing analysis with no LLM call
+    (flags, bias/confidence, the time it was produced, the news it was based on, recurring themes and
+    notable events, recent archived news). New endpoint `/api/stock_intelligence/analysis`.
+  - **"Ask (live answer)"** remains for custom one-off questions (e.g. "why did this fall intraday?");
+    its timeout default was raised 45s → 90s (under the 120s gunicorn timeout).
+- **Bot Routing news flag**: each symbol row in Strategy Lab → Bot Routing now shows a standing
+  verdict badge — **Both** (neutral / no contradiction), **Buy** (shorts blocked by bullish news),
+  **Sell** (longs blocked by bearish news), **Blocked**, or **Pending** (not analyzed yet). Hover for
+  bias, confidence and the decision time.
+
+### Notes
+- Default remains shadow-first (`LLM_GATE_ENFORCE=false`): the flag is computed and logged, but blocks
+  nothing until you flip enforce. Fail-open is preserved end-to-end.
+
+## Version 2.9.0 - 2026-06-14
+
+### RSI(2) goes live
+- The RSI(2) mean-reversion strategy now runs in the live local execution engine, mirroring the
+  MACD+SMA path (`build_rsi_frame`, `evaluate_entry_rsi`, `evaluate_exit_rsi`, plus whitelist,
+  min-bars, order-size `order_size_rsi_reversion`). Live signals match the backtest exactly.
+
+### LLM news gatekeeper (promoted from shadow to real gate)
+- The local LLM validator gains a **`gate`** mode beside the existing `shadow` mode. In gate mode it
+  validates each entry synchronously against aggregated news + per-symbol memory and can
+  `veto`/`reduce_size` the trade — e.g. invalidate a short on a name whose own news and analysts are
+  bullish even while the broad market falls (and vice-versa for longs).
+- **Shadow-first**: gate logs `WOULD veto …` and changes nothing until `LLM_GATE_ENFORCE=true`.
+- **Fail-open + alert**: any LLM error/timeout/garbled output executes the trade as normal and emits
+  an `entry_llm_failopen` event — an unstable model never halts trading.
+- New gate events: `entry_llm_veto`, `entry_llm_would_veto`, `entry_llm_resize`,
+  `entry_llm_manual_review`, `entry_llm_approved`, `entry_llm_failopen`.
+
+### Per-symbol memory (knowledge base)
+- New `symbol_memory.py`: each symbol gets an inspectable, timestamped, deduplicated news archive
+  (`instance/symbol_memory/<SYMBOL>.news.jsonl`) and an LLM-maintained dossier
+  (`<SYMBOL>.json`: narrative, key facts, analyst stance, recurring themes, notable events).
+- News is **ingested continuously** in the poll loop (throttled per symbol), independent of signals,
+  so the model corroborates each new headline against months of prior context **and** against the
+  signal's timestamp (every item keeps both `published_at` and `ingested_at`). The dossier roll-up
+  runs in the background and is fail-soft.
+
+### Editable multi-source news aggregator
+- News sources are now a **user-editable registry** (`instance/news_sources.json`, auto-materialized):
+  add/remove/toggle sources without code. New generic **`rss`** source type fetches any RSS/Atom feed
+  via a `{symbol}` URL template. Defaults add Yahoo Finance RSS, Nasdaq and Seeking Alpha (plus Bing
+  News / Investing.com proxy available, disabled).
+
+### Tests
+- Added `tests/test_symbol_memory.py`, `tests/test_news_sources.py`; extended market-news, validator
+  and live-engine suites (RSS parsing, gate veto/resize/fail-open mapping, RSI live entry/exit).
+
+### Notes / safety
+- Default `.env` keeps `LLM_GATE_ENFORCE=false` (shadow-first) so nothing blocks live trades until you
+  flip it after watching the logs. The LLM is never required for a trade to proceed.
+
 ## Version 2.8.4 - 2026-06-13
 
 ### New strategy: RSI(2) Mean Reversion

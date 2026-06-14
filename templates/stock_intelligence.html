@@ -34,8 +34,12 @@
                         <textarea class="form-control stock-intelligence-question" id="questionInput" name="question" rows="8" maxlength="3000">Ce se intampla cu acest simbol si care sunt riscurile principale pentru urmatoarele zile?</textarea>
                     </div>
                     <button class="btn btn-primary w-100" type="submit" {% if not stock_intelligence_enabled %}disabled{% endif %}>
-                        <i class="fa-solid fa-paper-plane me-2"></i>Ask
+                        <i class="fa-solid fa-paper-plane me-2"></i>Ask (live answer)
                     </button>
+                    <button class="btn btn-outline-secondary w-100 mt-2" type="button" id="showAnalysisBtn" {% if not stock_intelligence_enabled %}disabled{% endif %}>
+                        <i class="fa-solid fa-clipboard-list me-2"></i>Show analysis (instant)
+                    </button>
+                    <div class="form-text mt-1">Ask = live custom answer (slower). Show analysis = the standing per-symbol analysis the bot already prepared (no waiting).</div>
                 </form>
             </div>
         </div>
@@ -137,6 +141,92 @@
         context.classList.toggle('text-muted', chunks.length === 0);
         context.innerHTML = chunks.length ? chunks.join('') : 'No context returned.';
     }
+
+    function renderAnalysis(data) {
+        const results = data.results || {};
+        const symbols = data.symbols || Object.keys(results);
+        const blocks = [];
+        const answerBlocks = [];
+        symbols.forEach((symbol) => {
+            const r = results[symbol] || {};
+            const a = r.analysis || {};
+            if (!r.has_analysis) {
+                answerBlocks.push(`<div class="mb-3"><strong>${escapeHtml(symbol)}</strong>: <span class="text-muted">No analysis prepared yet. The bot builds it in the background as news arrives.</span></div>`);
+            } else {
+                const longBadge = a.long_ok ? '<span class="badge text-bg-success">long OK</span>' : '<span class="badge text-bg-danger">long blocked</span>';
+                const shortBadge = a.short_ok ? '<span class="badge text-bg-success">short OK</span>' : '<span class="badge text-bg-danger">short blocked</span>';
+                answerBlocks.push(`
+                    <div class="mb-3">
+                        <div class="d-flex flex-wrap justify-content-between gap-2 align-items-center">
+                            <strong>${escapeHtml(symbol)}</strong>
+                            <span>${longBadge} ${shortBadge}
+                                <span class="badge text-bg-secondary">bias: ${escapeHtml(a.bias || 'neutral')}</span>
+                                <span class="badge text-bg-secondary">conf: ${escapeHtml(a.confidence ?? 0)}</span>
+                            </span>
+                        </div>
+                        <div class="small text-muted mt-1">Decided: ${escapeHtml(a.updated_at || 'n/a')} · based on ${escapeHtml(a.based_on_news_count ?? 0)} news (latest ${escapeHtml(a.based_on_latest_published_at || 'n/a')})</div>
+                        <div class="mt-2">${escapeHtml(a.summary || r.narrative_summary || '')}</div>
+                        ${a.reason ? `<div class="small mt-1"><em>Reason:</em> ${escapeHtml(a.reason)}</div>` : ''}
+                        ${(a.risk_flags && a.risk_flags.length) ? `<div class="small text-warning mt-1">Risk: ${escapeHtml(a.risk_flags.join(', '))}</div>` : ''}
+                    </div>`);
+            }
+            const themes = (r.recurring_themes || []).map((t) => `<span class="badge text-bg-light border me-1">${escapeHtml(t)}</span>`).join('');
+            const events = (r.notable_events || []).map((e) => `<li class="small">${escapeHtml(e.date || '')} — ${escapeHtml(e.event || '')}</li>`).join('');
+            const news = (r.recent_news || []).map((n) => {
+                const url = safeExternalUrl(n.url);
+                const headline = escapeHtml(n.headline || '(untitled)');
+                return `<div class="stock-intelligence-news-item">
+                    <div class="fw-semibold">${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${headline}</a>` : headline}</div>
+                    <div class="small text-muted">${escapeHtml(n.source || n.provider || '')} · pub ${escapeHtml(n.published_at || '')} · seen ${escapeHtml(n.ingested_at || '')}</div>
+                </div>`;
+            }).join('');
+            const ls = r.last_sources || {};
+            const failedNames = Object.keys(ls.failed || {});
+            const sourcesLine = ls.checked_at
+                ? `<div class="small mb-1"><em>Sources reached:</em> <span class="text-success">${(ls.ok || []).length} ok</span>${failedNames.length ? ` · <span class="text-danger" title="${escapeHtml(JSON.stringify(ls.failed))}">${escapeHtml(failedNames.join(', '))} unreachable</span>` : ''} <span class="text-muted">(checked ${escapeHtml(ls.checked_at)})</span></div>`
+                : '';
+            blocks.push(`
+                <div class="stock-intelligence-symbol">
+                    <strong>${escapeHtml(symbol)}</strong>
+                    <div class="small text-muted mb-1">archive: ${escapeHtml(r.archive_count ?? 0)} items · trend ${escapeHtml(r.rolling_sentiment_trend || 'unknown')}</div>
+                    ${sourcesLine}
+                    ${themes ? `<div class="mb-2">${themes}</div>` : ''}
+                    ${events ? `<div class="small mb-1"><em>Notable events:</em><ul class="mb-1">${events}</ul></div>` : ''}
+                    ${news || '<div class="small text-muted">No archived news yet.</div>'}
+                </div>`);
+        });
+        answer.classList.remove('text-muted');
+        answer.innerHTML = answerBlocks.join('') || '(no analysis)';
+        status.textContent = 'standing analysis';
+        context.classList.toggle('text-muted', blocks.length === 0);
+        context.innerHTML = blocks.length ? blocks.join('') : 'No memory yet.';
+    }
+
+    document.getElementById('showAnalysisBtn').addEventListener('click', async function() {
+        const btn = this;
+        btn.disabled = true;
+        status.textContent = 'Loading analysis...';
+        answer.classList.add('text-muted');
+        answer.textContent = 'Reading the prepared analysis...';
+        try {
+            const response = await fetch('{{ url_for("api_stock_intelligence_analysis") }}', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ symbols: document.getElementById('symbolsInput').value }),
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+            }
+            renderAnalysis(data);
+        } catch (error) {
+            status.textContent = 'Error';
+            answer.classList.remove('text-muted');
+            answer.innerHTML = `<span class="text-danger">${escapeHtml(error.message)}</span>`;
+        } finally {
+            btn.disabled = false;
+        }
+    });
 
     form.addEventListener('submit', async function(event) {
         event.preventDefault();

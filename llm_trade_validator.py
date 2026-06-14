@@ -173,10 +173,20 @@ class LLMTradeValidator:
         news_timeout_sec: float,
         news_url: str,
         max_attempts: int = 2,
-        news_sources: Optional[Iterable[str]] = None,
+        news_sources: Optional[Iterable] = None,
+        mode: str = "shadow",
+        enforce: bool = False,
+        min_confidence: float = 0.6,
+        reduce_size_factor: float = 0.5,
+        block_on_manual_review: bool = False,
     ):
         self.instance_path = instance_path
         self.logger = logger
+        self.mode = str(mode or "shadow").strip().lower()
+        self.enforce = bool(enforce)
+        self.min_confidence = min(1.0, max(0.0, float(min_confidence)))
+        self.reduce_size_factor = min(1.0, max(0.05, float(reduce_size_factor)))
+        self.block_on_manual_review = bool(block_on_manual_review)
         self.api_style = _normalize_api_style(api_style, base_url)
         self.chat_url = (
             _lmstudio_native_chat_url(base_url)
@@ -302,6 +312,82 @@ class LLMTradeValidator:
             event.get("llm_would_execute"),
         )
 
+    def validate_entry_blocking(
+        self,
+        *,
+        user_snapshot: Dict,
+        payload: Dict,
+        technical_context: Dict,
+        memory_context: Optional[Dict] = None,
+        alpaca_api_key: Optional[str] = None,
+        alpaca_api_secret: Optional[str] = None,
+    ) -> Dict:
+        """Synchronous gate validation. Always returns a decision dict; never raises.
+
+        On any LLM error/timeout/unparseable output it returns a fail-open result
+        (``decision='approve'``-equivalent with ``failed=True``) so the caller can
+        proceed but raise an alert. The returned ``news`` lets the caller persist
+        what the model saw into the symbol's memory.
+        """
+        event = self._base_event(
+            user_snapshot=user_snapshot,
+            payload=payload,
+            technical_context=technical_context,
+        )
+        event["mode"] = "gate"
+        started = time.time()
+        news = self._fetch_news(event.get("symbol"), alpaca_api_key, alpaca_api_secret)
+        event["news"] = news
+        request_payload = self._build_lmstudio_payload(event, news, memory_context=memory_context)
+        headers = {"Content-Type": "application/json"}
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+        failed = False
+        try:
+            event["llm"] = self._call_llm_with_retries(request_payload, headers)
+            decision = event["llm"].get("decision", "unknown")
+            event["status"] = "ok" if decision != "unknown" else "parse_error"
+            failed = decision == "unknown"
+        except Exception as exc:
+            failed = True
+            event["status"] = "error"
+            event["error"] = _compact_text(str(exc), 1000)
+            event["llm"] = {
+                "model": self.model,
+                "endpoint": self.chat_url,
+                "api_style": self.api_style,
+                "decision": "unknown",
+                "confidence": 0.0,
+                "would_execute": True,
+                "reason": "",
+                "risk_flags": ["llm_error"],
+            }
+            self.logger.warning(
+                "[LLM_GATE] validation_error symbol=%s action=%s error=%s",
+                event.get("symbol"),
+                event.get("action"),
+                exc,
+            )
+        event["latency_sec"] = round(time.time() - started, 3)
+        event["completed_at_utc"] = _utc_now_iso()
+        event["failed"] = failed
+        self._write_event(event)
+        result = dict(event.get("llm") or {})
+        result["failed"] = failed
+        result["status"] = event["status"]
+        result["news"] = news
+        result["latency_sec"] = event["latency_sec"]
+        self.logger.info(
+            "[LLM_GATE] symbol=%s action=%s status=%s decision=%s confidence=%s failed=%s",
+            event.get("symbol"),
+            event.get("action"),
+            event.get("status"),
+            result.get("decision"),
+            result.get("confidence"),
+            failed,
+        )
+        return result
+
     def _call_llm_with_retries(self, request_payload: Dict, headers: Dict) -> Dict:
         last_decision = None
         for attempt in range(1, self.max_attempts + 1):
@@ -374,41 +460,8 @@ class LLMTradeValidator:
             )
         return items
 
-    def _build_lmstudio_payload(self, event: Dict, news_context) -> Dict:
-        if isinstance(news_context, list):
-            news_context = {"enabled": True, "items": news_context, "aggregate": {}, "provider_errors": {}}
-        input_payload = {
-            "signal": {
-                "symbol": event.get("symbol"),
-                "action": event.get("action"),
-                "amount": event.get("amount"),
-                "timeframe": event.get("timeframe"),
-                "bar_time": event.get("bar_time"),
-                "reason": event.get("local_reason"),
-                "client_order_id": event.get("client_order_id"),
-            },
-            "technical_context": event.get("technical_context", {}),
-            "news_context": self._compact_news_context_for_prompt(news_context),
-            "shadow_mode": True,
-        }
-        system_prompt = (
-            "Esti un validator shadow pentru semnale de trading Keltner. "
-            "Nu executi ordine si nu oferi recomandari generale; evaluezi doar daca "
-            "semnalul dat este contrazis de stiri recente sau de riscuri evidente. "
-            "Returneaza strict un singur obiect JSON valid, fara markdown, cu cheile: "
-            "decision, confidence, reason, risk_flags. "
-            "decision trebuie sa fie una dintre: approve, veto, reduce_size, manual_review. "
-            "Foloseste veto doar pentru risc clar si material; foloseste manual_review cand "
-            "stirile sunt ambigue sau lipsesc date importante."
-        )
-        user_prompt = (
-            "Analizeaza semnalul urmator. Pentru long/buy, stirile negative sau evenimentele "
-            "de risc pot justifica veto/manual_review. Pentru short/sell, stirile pozitive "
-            "materiale pot justifica veto/manual_review. Daca nu exista stiri relevante, "
-            "spune asta in reason. Tine cont de news_context.aggregate, de provider_errors "
-            "si de investor_messages doar ca semnale auxiliare, nu ca adevar absolut.\n\n"
-            f"{json.dumps(input_payload, ensure_ascii=True, separators=(',', ':'))}"
-        )
+    def _wrap_prompt(self, system_prompt: str, user_prompt: str) -> Dict:
+        """Build the request body for the configured API style."""
         if self.api_style == "lmstudio_native":
             return {
                 "model": self.model,
@@ -429,6 +482,67 @@ class LLMTradeValidator:
             "max_tokens": self.max_tokens,
             "stream": False,
         }
+
+    def _build_lmstudio_payload(self, event: Dict, news_context, memory_context: Optional[Dict] = None) -> Dict:
+        if isinstance(news_context, list):
+            news_context = {"enabled": True, "items": news_context, "aggregate": {}, "provider_errors": {}}
+        input_payload = {
+            "signal": {
+                "symbol": event.get("symbol"),
+                "action": event.get("action"),
+                "amount": event.get("amount"),
+                "timeframe": event.get("timeframe"),
+                "bar_time": event.get("bar_time"),
+                "reason": event.get("local_reason"),
+                "client_order_id": event.get("client_order_id"),
+            },
+            "technical_context": event.get("technical_context", {}),
+            "news_context": self._compact_news_context_for_prompt(news_context),
+            "symbol_memory": memory_context or {},
+            "mode": event.get("mode", "shadow"),
+        }
+        system_prompt = (
+            "You are a news-aware gatekeeper for an automated trading strategy. You do not invent "
+            "trades; you only judge whether an ALREADY-GENERATED entry signal is contradicted by the "
+            "news. Use both the fresh news_context and the long-running symbol_memory (dossier + prior "
+            "news with timestamps). Weigh how recent each item is RELATIVE TO signal.bar_time: news "
+            "published well before the signal is mostly already priced in; very recent material news "
+            "matters most. "
+            "Rules: for a long/buy, materially negative recent news or risk events justify veto or "
+            "reduce_size; for a short/sell, materially positive recent news or strong bullish analyst "
+            "stance justify veto or reduce_size (e.g. a stock the whole market is dragging down but "
+            "whose own news and analysts are clearly bullish). If there is no relevant/material news, "
+            "approve and say so. "
+            "Return STRICTLY one valid JSON object, no markdown, with keys: decision, confidence "
+            "(0..1), reason, risk_flags (string array). decision must be one of: approve, veto, "
+            "reduce_size, manual_review. Use veto only for clear, material contradiction; use "
+            "manual_review when the news is ambiguous or key data is missing."
+        )
+        user_prompt = (
+            "Evaluate the following entry signal against the news and the symbol's memory. Treat "
+            "investor_messages and the cheap sentiment scores as auxiliary hints, not ground truth. "
+            "Corroborate news dates against signal.bar_time.\n\n"
+            f"{json.dumps(input_payload, ensure_ascii=True, separators=(',', ':'))}"
+        )
+        return self._wrap_prompt(system_prompt, user_prompt)
+
+    def simple_chat(self, system_prompt: str, user_prompt: str, timeout: Optional[float] = None) -> str:
+        """One-shot completion helper (used for the per-symbol dossier roll-up).
+
+        ``timeout`` overrides the default per-call read timeout; the background
+        analyst passes a long value because a slow local model needs time to
+        process a multi-thousand-token prompt and generate the response."""
+        headers = {"Content-Type": "application/json"}
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+        response = requests.post(
+            self.chat_url,
+            json=self._wrap_prompt(system_prompt, user_prompt),
+            headers=headers,
+            timeout=float(timeout) if timeout else self.timeout_sec,
+        )
+        response.raise_for_status()
+        return self._extract_message_content(response.json())
 
     def _compact_news_context_for_prompt(self, news_context: Dict) -> Dict:
         if not isinstance(news_context, dict):
@@ -511,9 +625,18 @@ def create_llm_trade_validator(instance_path: str, logger) -> Optional[LLMTradeV
         return None
 
     mode = os.getenv("LLM_TRADE_VALIDATION_MODE", "shadow").strip().lower()
-    if mode != "shadow":
-        logger.warning("[LLM_SHADOW] unsupported mode '%s'; only shadow mode is active.", mode)
-        return None
+    if mode not in ("shadow", "gate"):
+        logger.warning("[LLM] unsupported mode '%s'; falling back to shadow.", mode)
+        mode = "shadow"
+
+    # Prefer the user-editable source registry (instance/news_sources.json);
+    # fall back to the NEWS_CONTEXT_SOURCES env list.
+    try:
+        from news_sources import load_news_sources
+
+        news_src = load_news_sources(instance_path, enabled_only=True)
+    except Exception:
+        news_src = sources_from_env()
 
     default_log_path = os.path.join(instance_path, "llm_trade_shadow.jsonl")
     validator = LLMTradeValidator(
@@ -533,14 +656,22 @@ def create_llm_trade_validator(instance_path: str, logger) -> Optional[LLMTradeV
         news_limit=_env_int("LLM_TRADE_VALIDATION_NEWS_LIMIT", 3, minimum=0),
         news_timeout_sec=_env_float("LLM_TRADE_VALIDATION_NEWS_TIMEOUT_SEC", 5.0, minimum=0.5),
         news_url=os.getenv("LLM_TRADE_VALIDATION_NEWS_URL", "https://data.alpaca.markets/v1beta1/news"),
-        news_sources=sources_from_env(),
+        news_sources=news_src,
+        mode=mode,
+        enforce=_env_bool("LLM_GATE_ENFORCE", False),
+        min_confidence=_env_float("LLM_GATE_MIN_CONFIDENCE", 0.6),
+        reduce_size_factor=_env_float("LLM_GATE_REDUCE_SIZE_FACTOR", 0.5, minimum=0.05),
+        block_on_manual_review=_env_bool("LLM_GATE_BLOCK_ON_MANUAL_REVIEW", False),
     )
     logger.info(
-        "[LLM_SHADOW] enabled endpoint=%s api_style=%s model=%s log=%s news_enabled=%s",
+        "[LLM] enabled mode=%s enforce=%s endpoint=%s api_style=%s model=%s log=%s news_enabled=%s sources=%s",
+        validator.mode,
+        validator.enforce,
         validator.chat_url,
         validator.api_style,
         validator.model,
         validator.log_path,
         validator.news_enabled,
+        len(news_src) if hasattr(news_src, "__len__") else "?",
     )
     return validator

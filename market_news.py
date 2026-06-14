@@ -8,6 +8,7 @@ import os
 import re
 import time
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
@@ -133,21 +134,48 @@ class MarketNewsCollector:
         alpaca_news_url: str,
         google_days: int,
         user_agent: str = DEFAULT_USER_AGENT,
+        max_items: int = 0,
     ):
-        self.sources = [str(source).strip().lower() for source in sources if str(source).strip()]
-        self.limit = max(0, int(limit))
+        self.sources = self._normalize_source_defs(sources)
+        self.limit = max(0, int(limit))  # items fetched per source
+        # Total items returned across all sources. Defaults to ``limit`` for
+        # backward compatibility; set higher to include news from every source
+        # rather than truncating to one source's worth.
+        self.max_items = max(self.limit, int(max_items)) if max_items else self.limit
         self.timeout_sec = max(0.5, float(timeout_sec))
         self.alpaca_news_url = alpaca_news_url
         self.google_days = max(1, int(google_days))
         self.user_agent = user_agent or DEFAULT_USER_AGENT
 
+    @staticmethod
+    def _normalize_source_defs(sources: Iterable) -> List[Dict]:
+        """Accept legacy strings or structured dicts; emit canonical source dicts."""
+        out: List[Dict] = []
+        for source in sources or []:
+            if isinstance(source, str):
+                stype = source.strip().lower()
+                if stype:
+                    out.append({"name": stype, "type": stype, "url": "", "enabled": True})
+            elif isinstance(source, dict):
+                stype = str(source.get("type") or "").strip().lower()
+                if not stype:
+                    continue
+                out.append({
+                    "name": str(source.get("name") or stype).strip() or stype,
+                    "type": stype,
+                    "url": str(source.get("url") or "").strip(),
+                    "enabled": bool(source.get("enabled", True)),
+                })
+        return out
+
     def collect(self, symbol: Optional[str], api_key: Optional[str] = None, api_secret: Optional[str] = None) -> Dict:
         symbol = str(symbol or "").upper().replace("/", "").strip()
+        active = [s for s in self.sources if s.get("enabled", True)]
         context = {
             "enabled": True,
             "symbol": symbol,
             "generated_at_utc": utc_now_iso(),
-            "requested_sources": list(self.sources),
+            "requested_sources": [s.get("name") or s.get("type") for s in active],
             "items": [],
             "investor_messages": [],
             "provider_errors": {},
@@ -157,27 +185,30 @@ class MarketNewsCollector:
             context["aggregate"] = self._aggregate_context(context["items"], context["investor_messages"])
             return context
 
-        for source in self.sources:
+        for src in active:
+            stype = src.get("type")
+            label = src.get("name") or stype
             try:
-                if source == "alpaca":
-                    items = self._fetch_alpaca(symbol, api_key, api_secret)
-                    context["items"].extend(items)
-                elif source == "yahoo":
-                    items = self._fetch_yahoo_query(symbol)
-                    context["items"].extend(items)
-                elif source in ("google", "google_news"):
-                    items = self._fetch_google_news(symbol)
-                    context["items"].extend(items)
-                elif source in ("stocktwits", "stocktwits_public"):
-                    messages = self._fetch_stocktwits(symbol)
-                    context["investor_messages"].extend(messages)
+                if stype == "alpaca":
+                    context["items"].extend(self._fetch_alpaca(symbol, api_key, api_secret))
+                elif stype == "yahoo":
+                    context["items"].extend(self._fetch_yahoo_query(symbol))
+                elif stype in ("google", "google_news"):
+                    context["items"].extend(self._fetch_google_news(symbol))
+                elif stype in ("stocktwits", "stocktwits_public"):
+                    context["investor_messages"].extend(self._fetch_stocktwits(symbol))
+                elif stype == "rss":
+                    provider = "rss_" + re.sub(r"[^a-z0-9]+", "_", str(label).lower()).strip("_")
+                    context["items"].extend(self._fetch_rss(src.get("url", ""), symbol, provider))
                 else:
-                    context["provider_errors"][source] = "unknown_source"
+                    context["provider_errors"][label] = "unknown_source"
             except Exception as exc:
-                context["provider_errors"][source] = compact_error_text(str(exc), 500)
+                context["provider_errors"][label] = compact_error_text(str(exc), 500)
 
-        context["items"] = self._dedupe_items(context["items"])[: self.limit]
-        context["investor_messages"] = context["investor_messages"][: self.limit]
+        # Interleave across providers BEFORE truncating so one source (e.g. Alpaca,
+        # which is Benzinga-backed) cannot fill every slot and hide the others.
+        context["items"] = self._dedupe_items(self._interleave_by_provider(context["items"]))[: self.max_items]
+        context["investor_messages"] = context["investor_messages"][: self.max_items]
         context["aggregate"] = self._aggregate_context(context["items"], context["investor_messages"])
         return context
 
@@ -242,6 +273,59 @@ class MarketNewsCollector:
             )
         return items
 
+    def _fetch_rss(self, url_template: str, symbol: str, provider: str) -> List[Dict]:
+        """Fetch and parse any RSS or Atom feed. ``{symbol}`` is substituted."""
+        if not url_template or "{symbol}" not in url_template:
+            raise RuntimeError("invalid_rss_url")
+        url = url_template.replace("{symbol}", quote_plus(symbol))
+        response = requests.get(url, headers=self._headers(), timeout=self.timeout_sec)
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
+        items: List[Dict] = []
+        rss_nodes = root.findall(".//item")
+        if rss_nodes:
+            for item in rss_nodes[: self.limit]:
+                source = item.find("source")
+                items.append(
+                    self._normalize_news_item(
+                        {
+                            "id": self._xml_text(item, "guid") or self._xml_text(item, "link"),
+                            "headline": self._xml_text(item, "title"),
+                            "summary": self._xml_text(item, "description"),
+                            "url": self._xml_text(item, "link"),
+                            "created_at": parse_timestamp(self._xml_text(item, "pubDate")),
+                            "source": (source.text if source is not None and source.text else provider),
+                            "symbols": [symbol],
+                        },
+                        provider,
+                    )
+                )
+            return items
+        # Atom fallback
+        ns = {"a": "http://www.w3.org/2005/Atom"}
+        for entry in root.findall(".//a:entry", ns)[: self.limit]:
+            link_el = entry.find("a:link", ns)
+            link = link_el.get("href") if link_el is not None else ""
+            items.append(
+                self._normalize_news_item(
+                    {
+                        "id": self._atom_text(entry, "a:id", ns) or link,
+                        "headline": self._atom_text(entry, "a:title", ns),
+                        "summary": self._atom_text(entry, "a:summary", ns) or self._atom_text(entry, "a:content", ns),
+                        "url": link,
+                        "created_at": parse_timestamp(self._atom_text(entry, "a:updated", ns) or self._atom_text(entry, "a:published", ns)),
+                        "source": provider,
+                        "symbols": [symbol],
+                    },
+                    provider,
+                )
+            )
+        return items
+
+    def _atom_text(self, node, path: str, ns: Dict) -> str:
+        child = node.find(path, ns)
+        return child.text if child is not None and child.text else ""
+
     def _fetch_stocktwits(self, symbol: str) -> List[Dict]:
         response = requests.get(
             f"https://api.stocktwits.com/api/2/streams/symbol/{quote_plus(symbol)}.json",
@@ -299,6 +383,26 @@ class MarketNewsCollector:
             normalized["relevance_note"] = "symbol_not_in_related_tickers"
         return normalized
 
+    @staticmethod
+    def _interleave_by_provider(items: List[Dict]) -> List[Dict]:
+        """Round-robin items across their providers so the first N after truncation
+        are spread across sources instead of dominated by whichever ran first."""
+        buckets: "OrderedDict[str, List[Dict]]" = OrderedDict()
+        for item in items:
+            buckets.setdefault(str(item.get("provider") or "?"), []).append(item)
+        out: List[Dict] = []
+        depth = 0
+        while True:
+            added = False
+            for lst in buckets.values():
+                if depth < len(lst):
+                    out.append(lst[depth])
+                    added = True
+            if not added:
+                break
+            depth += 1
+        return out
+
     def _dedupe_items(self, items: List[Dict]) -> List[Dict]:
         seen = set()
         result = []
@@ -341,10 +445,26 @@ def sources_from_env() -> List[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def create_market_news_collector() -> MarketNewsCollector:
+def resolve_news_sources(instance_path: Optional[str] = None):
+    """Editable source registry (instance/news_sources.json) when available,
+    else the NEWS_CONTEXT_SOURCES env fallback."""
+    if instance_path:
+        try:
+            from news_sources import load_news_sources
+
+            sources = load_news_sources(instance_path, enabled_only=True)
+            if sources:
+                return sources
+        except Exception:
+            pass
+    return sources_from_env()
+
+
+def create_market_news_collector(instance_path: Optional[str] = None) -> MarketNewsCollector:
     return MarketNewsCollector(
-        sources=sources_from_env(),
-        limit=env_int("NEWS_CONTEXT_LIMIT", env_int("LLM_TRADE_VALIDATION_NEWS_LIMIT", 3, minimum=0), minimum=0),
+        sources=resolve_news_sources(instance_path),
+        limit=env_int("NEWS_CONTEXT_LIMIT", 8, minimum=0),
+        max_items=env_int("NEWS_CONTEXT_MAX_ITEMS", 60, minimum=0),
         timeout_sec=env_float("NEWS_CONTEXT_TIMEOUT_SEC", env_float("LLM_TRADE_VALIDATION_NEWS_TIMEOUT_SEC", 5.0, minimum=0.5), minimum=0.5),
         alpaca_news_url=os.getenv("NEWS_CONTEXT_ALPACA_URL", os.getenv("LLM_TRADE_VALIDATION_NEWS_URL", "https://data.alpaca.markets/v1beta1/news")),
         google_days=env_int("NEWS_CONTEXT_GOOGLE_DAYS", 7, minimum=1),

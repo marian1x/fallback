@@ -505,9 +505,14 @@
 
                             <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-2 mb-2">
                                 <h6 class="mb-0"><i class="fa-solid fa-list-check me-2"></i>Signal Universe</h6>
-                                <button type="button" id="addUniverseRow" class="btn btn-sm btn-outline-primary" data-strategy-tip title="Adauga un simbol in lista de semnale. Simbolul este validat cu lista Alpaca tradable.">
-                                    <i class="fa-solid fa-plus me-1"></i>Add Stock
-                                </button>
+                                <div class="d-flex gap-2">
+                                    <button type="button" id="refreshNewsBtn" class="btn btn-sm btn-outline-info" data-strategy-tip title="Ask the local AI to fetch fresh news and re-run the analysis for every symbol now (the engine picks it up within ~15s and runs it in the background).">
+                                        <i class="fa-solid fa-rotate me-1"></i>Refresh news + analysis
+                                    </button>
+                                    <button type="button" id="addUniverseRow" class="btn btn-sm btn-outline-primary" data-strategy-tip title="Adauga un simbol in lista de semnale. Simbolul este validat cu lista Alpaca tradable.">
+                                        <i class="fa-solid fa-plus me-1"></i>Add Stock
+                                    </button>
+                                </div>
                             </div>
                             <div class="table-responsive">
                                 <table class="table table-sm align-middle" id="universeTable">
@@ -517,6 +522,7 @@
                                             <th>Strategy {{ tip('Strategia locala folosita pentru acest simbol. You can keep the same symbol on multiple rows if each row uses a different strategy/backtest.') }}</th>
                                             <th>Mode {{ tip('Local: ignore TW and use local strategy later. TradingView: TW only. Both: compare both. Disabled: block symbol.') }}</th>
                                             <th>Active {{ tip('Fast on/off switch for this row.') }}</th>
+                                            <th>News flag {{ tip('Standing buy/sell verdict from the local AI news analysis. Both = neutral / no contradiction; Buy = shorts blocked by bullish news; Sell = longs blocked by bearish news; Blocked = both blocked; Pending = not analyzed yet.') }}</th>
                                             <th>Backtest Result {{ tip('Rezultatul salvat pentru acest stock. Parametrii castigatori sunt ascunsi in Details.') }}</th>
                                             <th>Notes</th>
                                             <th class="text-end">Action</th>
@@ -550,6 +556,14 @@
                                                 <div class="form-check form-switch"><input class="form-check-input universe-enabled-toggle" type="checkbox" {% if item.enabled %}checked{% endif %}></div>
                                             </td>
                                             <td>
+                                                {% set nf = symbol_news_flags.get(item.symbol) if symbol_news_flags else None %}
+                                                {% if nf %}
+                                                <span class="badge text-bg-{{ nf.css }}" title="{{ nf.title }}">{{ nf.label }}</span>
+                                                {% else %}
+                                                <span class="text-muted small">&mdash;</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
                                                 {% if item.backtest %}
                                                 <div class="small">
                                                     <span class="badge bg-secondary-subtle text-secondary-emphasis border">{{ item.backtest.strategy|default(item.strategy|default('keltner')) }}</span>
@@ -576,7 +590,7 @@
                                             </td>
                                         </tr>
                                         <tr class="universe-detail-row">
-                                            <td colspan="7" class="p-0 border-0">
+                                            <td colspan="8" class="p-0 border-0">
                                                 <div class="collapse strategy-detail-collapse" id="btDetails{{ loop.index }}">
                                                     {% if item.backtest %}
                                                     <pre class="strategy-json mb-0">{{ item.backtest|tojson(indent=2) }}</pre>
@@ -1429,6 +1443,22 @@ $(document).ready(function() {
         renderBacktestSymbolResults();
     });
 
+    $('#refreshNewsBtn').on('click', function() {
+        const btn = $(this);
+        const original = btn.html();
+        btn.prop('disabled', true).html('<i class="fa-solid fa-spinner fa-spin me-1"></i>Queued...');
+        fetch("{{ url_for('api_admin_strategy_refresh_news') }}", { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+            .then((r) => r.ok ? r.json() : Promise.reject(r.status))
+            .then((data) => {
+                btn.html('<i class="fa-solid fa-check me-1"></i>Queued for ' + (data.universe_count ?? 'all') + ' symbols');
+                setTimeout(() => { btn.prop('disabled', false).html(original); }, 4000);
+            })
+            .catch((err) => {
+                btn.html('<i class="fa-solid fa-triangle-exclamation me-1"></i>Failed');
+                setTimeout(() => { btn.prop('disabled', false).html(original); }, 4000);
+            });
+    });
+
     $('#addUniverseRow').on('click', function() {
         const row = $(`
             <tr class="universe-main-row">
@@ -1452,12 +1482,13 @@ $(document).ready(function() {
                     </select>
                 </td>
                 <td><input type="hidden" name="universe_enabled[]" value="1"><div class="form-check form-switch"><input class="form-check-input universe-enabled-toggle" type="checkbox" checked></div></td>
+                <td><span class="text-muted small" title="Saved this symbol and the AI will analyze it on the next news refresh">Pending</span></td>
                 <td><span class="text-muted small">No saved backtest</span></td>
                 <td><input type="text" name="universe_notes[]" class="form-control form-control-sm"></td>
                 <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger remove-universe-row" title="Remove symbol"><i class="fa-solid fa-trash"></i></button></td>
             </tr>
         `);
-        const detailRow = $('<tr class="universe-detail-row"><td colspan="7" class="p-0 border-0"></td></tr>');
+        const detailRow = $('<tr class="universe-detail-row"><td colspan="8" class="p-0 border-0"></td></tr>');
         $('#universeTable tbody').append(row).append(detailRow);
         bindUniverseRow(row);
         row.find('.universe-symbol').trigger('focus');

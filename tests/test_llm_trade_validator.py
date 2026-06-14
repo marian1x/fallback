@@ -191,3 +191,54 @@ def test_shadow_event_supports_lmstudio_native_chat_api(tmp_path, monkeypatch):
     assert recorded["llm"]["api_style"] == "lmstudio_native"
     assert recorded["llm"]["decision"] == "approve"
     assert recorded["llm_would_execute"] is True
+
+
+def test_validate_entry_blocking_returns_decision(tmp_path, monkeypatch):
+    v = build_validator(tmp_path)
+    v.news_enabled = False
+    v.news_collector = None
+
+    def mock_post(url, json=None, headers=None, timeout=None):
+        return MockResponse({
+            "choices": [{"message": {"content": '{"decision":"veto","confidence":0.8,"reason":"bullish news contradicts short","risk_flags":["news_conflict"]}'}}]
+        })
+
+    monkeypatch.setattr(validator_mod.requests, "post", mock_post)
+    result = v.validate_entry_blocking(
+        user_snapshot={"id": 1, "username": "p"},
+        payload={"symbol": "AAPL", "action": "sell", "amount": 1000},
+        technical_context={"x": 1},
+        memory_context={"dossier": {"analyst_stance": "bullish"}},
+    )
+    assert result["decision"] == "veto"
+    assert result["failed"] is False
+    assert "news" in result
+
+
+def test_validate_entry_blocking_fail_open_on_error(tmp_path, monkeypatch):
+    v = build_validator(tmp_path)
+    v.news_enabled = False
+    v.news_collector = None
+
+    def mock_post(url, json=None, headers=None, timeout=None):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(validator_mod.requests, "post", mock_post)
+    result = v.validate_entry_blocking(
+        user_snapshot={"id": 1, "username": "p"},
+        payload={"symbol": "AAPL", "action": "buy", "amount": 1000},
+        technical_context={},
+    )
+    assert result["failed"] is True
+    assert result["decision"] == "unknown"
+
+
+def test_simple_chat_returns_content(tmp_path, monkeypatch):
+    v = build_validator(tmp_path)
+
+    def mock_post(url, json=None, headers=None, timeout=None):
+        return MockResponse({"choices": [{"message": {"content": '{"narrative_summary":"ok"}'}}]})
+
+    monkeypatch.setattr(validator_mod.requests, "post", mock_post)
+    out = v.simple_chat("system", "user")
+    assert "narrative_summary" in out

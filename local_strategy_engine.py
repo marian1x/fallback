@@ -15,6 +15,7 @@ import logging
 import hashlib
 import math
 import os
+import queue
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,8 @@ import pandas as pd
 
 from alpaca_api import AlpacaAPIError, LegacyCompatibleAlpacaClient
 from llm_trade_validator import create_llm_trade_validator
+from market_news import create_market_news_collector
+from symbol_memory import create_symbol_memory
 from misc.pine_optimizer import (
     choose_fetch_timeframe,
     crossed_above,
@@ -33,6 +36,7 @@ from misc.pine_optimizer import (
     keltner_channel,
     normalize_timeframe_token,
     resample_bars,
+    rsi,
     sma,
     timeframe_seconds,
 )
@@ -82,6 +86,30 @@ class LocalStrategyEngine:
         self.state_lock = threading.Lock()
         self.state = {"symbols": {}, "recoveries": []}
         self.llm_validator = create_llm_trade_validator(self.app.instance_path, self.logger)
+        self.symbol_memory = create_symbol_memory(self.app.instance_path, self.logger)
+        # Continuously ingest news into per-symbol memory (independent of the LLM
+        # gate) so the knowledge base keeps growing with timestamped items.
+        self.memory_ingest_enabled = os.getenv("SYMBOL_MEMORY_INGEST_ENABLED", "true").strip().lower() in ("1", "true", "yes", "y", "on")
+        self.memory_refresh_seconds = int(os.getenv("SYMBOL_MEMORY_REFRESH_SECONDS", "1800"))
+        # Gate via a precomputed standing verdict (flag) by default so the trading
+        # path never waits on the slow LLM. Set LLM_GATE_SYNC=true to instead make a
+        # blocking per-signal LLM call (legacy behavior).
+        self.gate_sync = os.getenv("LLM_GATE_SYNC", "false").strip().lower() in ("1", "true", "yes", "y", "on")
+        # The local model is slow and can only handle a couple of requests at once,
+        # so background analysis runs through a single serialized worker (one LLM
+        # call at a time) with a generous read timeout. Firing one request per
+        # symbol concurrently overwhelms LM Studio (LRU slot eviction -> every call
+        # is cancelled and returns nothing).
+        self.analysis_timeout = float(os.getenv("LLM_ANALYSIS_TIMEOUT_SEC", "180"))
+        self._analysis_queue: "queue.Queue" = queue.Queue()
+        self._analysis_pending: set = set()
+        self._analysis_lock = threading.Lock()
+        self._analysis_worker: Optional[threading.Thread] = None
+        try:
+            self.news_collector = create_market_news_collector(self.app.instance_path) if self.memory_ingest_enabled else None
+        except Exception as exc:
+            self.logger.warning("[SYMBOL_MEMORY] news collector init failed: %s", exc)
+            self.news_collector = None
         # Market-regime filter: shorts are only allowed when the broad market is
         # neutral or falling, and blocked while it trends up. The regime barely
         # moves intraday, so it is computed from daily index bars and cached.
@@ -253,6 +281,69 @@ class LocalStrategyEngine:
             except Exception as exc:
                 self.logger.exception("[LOCAL_STRATEGY] %s evaluation failed: %s", symbol, exc)
 
+        try:
+            self.refresh_symbol_memory(user, api, cfg)
+        except Exception as exc:
+            self.logger.warning("[SYMBOL_MEMORY] poll refresh error: %s", exc)
+
+    def refresh_symbol_memory(self, user: User, api: LegacyCompatibleAlpacaClient, cfg: Dict) -> None:
+        """Constantly ingest fresh news for the routing symbols into the knowledge base.
+
+        Runs every tick but is throttled per symbol (SYMBOL_MEMORY_REFRESH_SECONDS),
+        UNLESS a manual refresh was requested (the 'refresh news' button), which
+        forces an immediate fetch + re-analysis for the named symbols (or all).
+        Each new item is archived with publish/ingest timestamps; source
+        reachability is recorded per symbol; new material triggers a background
+        LLM re-analysis. Independent of the LLM gate."""
+        if not self.symbol_memory or not self.news_collector:
+            return
+        now = datetime.now(timezone.utc)
+        api_key = getattr(api, "api_key", None)
+        api_secret = getattr(api, "api_secret", None)
+
+        # Manual 'refresh now' request written by the dashboard process.
+        forced = None
+        req = self.symbol_memory.pop_refresh_request()
+        if req:
+            forced = "all" if req.get("symbols") == "all" else set(req.get("symbols") or [])
+            self.logger.info("[SYMBOL_MEMORY] manual refresh request: %s", req.get("symbols"))
+
+        # Ingest for every enabled symbol in the routing universe (not just the
+        # locally-executed ones), so the whole list builds a knowledge base.
+        seen = set()
+        changed = False
+        for entry in strategy_store.normalize_universe(cfg.get("universe")):
+            if not entry.get("enabled", True):
+                continue
+            symbol = strategy_store.normalize_symbol(entry.get("symbol", ""))
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            is_forced = forced is not None and (forced == "all" or symbol in forced)
+            if not is_forced:
+                st = self.symbol_state(symbol)
+                due = st.get("next_memory_refresh_utc")
+                if due:
+                    try:
+                        if now < datetime.fromisoformat(due):
+                            continue
+                    except Exception:
+                        pass
+            try:
+                ctx = self.news_collector.collect(symbol, api_key=api_key, api_secret=api_secret)
+                self.symbol_memory.record_sources(symbol, ctx)
+                added = self.symbol_memory.append_news(symbol, ctx.get("items") or [])
+                if added:
+                    self.logger.info("[SYMBOL_MEMORY] %s ingested %s new item(s)%s", symbol, added, " (forced)" if is_forced else "")
+                if self.llm_validator and (is_forced or self.symbol_memory.should_update_dossier(symbol)):
+                    self._refresh_dossier_async(symbol, force=is_forced)
+            except Exception as exc:
+                self.logger.warning("[SYMBOL_MEMORY] refresh failed for %s: %s", symbol, exc)
+            self.symbol_state(symbol)["next_memory_refresh_utc"] = (now + timedelta(seconds=self.memory_refresh_seconds)).isoformat()
+            changed = True
+        if changed:
+            self.save_state()
+
     def resolve_user(self, cfg: Dict) -> Optional[User]:
         username = str(cfg.get("alpaca_user", "") or "").strip()
         user = User.query.filter_by(username=username, is_superuser=False).first() if username else None
@@ -330,6 +421,11 @@ class LocalStrategyEngine:
             "macd_signal_length": int(params.get("macd_signal_length", cfg.get("macd_signal_length", 9))),
             "macd_sma_length": int(params.get("macd_sma_length", cfg.get("macd_sma_length", 200))),
             "max_intraday_loss_pct": float(params.get("max_intraday_loss_pct", cfg.get("max_intraday_loss_pct", 50))),
+            "rsi_length": int(params.get("rsi_length", cfg.get("rsi_length", 2))),
+            "rsi_oversold": float(params.get("rsi_oversold", cfg.get("rsi_oversold", 10.0))),
+            "rsi_overbought": float(params.get("rsi_overbought", cfg.get("rsi_overbought", 90.0))),
+            "rsi_exit_level": float(params.get("rsi_exit_level", cfg.get("rsi_exit_level", 55.0))),
+            "rsi_trend_length": int(params.get("rsi_trend_length", cfg.get("rsi_trend_length", 200))),
         }
 
     def strategy_priority(self, strategy: str, cfg: Optional[Dict] = None) -> int:
@@ -360,6 +456,8 @@ class LocalStrategyEngine:
             return float(cfg.get("order_size_macd_sma", fallback))
         if normalized == "keltner":
             return float(cfg.get("order_size_keltner", fallback))
+        if normalized == "rsi_reversion":
+            return float(cfg.get("order_size_rsi_reversion", fallback))
         return fallback
 
     def active_open_trade(self, user: User, symbol: str) -> Optional[Trade]:
@@ -655,7 +753,7 @@ class LocalStrategyEngine:
         if row_strategy:
             params["strategy"] = row_strategy
         strategy_name = params.get("strategy")
-        if params.get("strategy") not in {"keltner", "macd_sma"}:
+        if params.get("strategy") not in {"keltner", "macd_sma", "rsi_reversion"}:
             self.log_symbol_throttled(
                 symbol,
                 "unsupported_strategy",
@@ -788,6 +886,8 @@ class LocalStrategyEngine:
                 params["macd_sma_length"] + params["macd_slow_length"] + params["macd_signal_length"] + 5,
                 100,
             )
+        elif params.get("strategy") == "rsi_reversion":
+            min_bars = max(params["rsi_trend_length"] + params["rsi_length"] + 5, 100)
         else:
             min_bars = max(params["inner_kc_length"], params["outer_kc_length"]) + 3
         if len(bars) < min_bars:
@@ -809,6 +909,8 @@ class LocalStrategyEngine:
 
         if params.get("strategy") == "macd_sma":
             frame = self.build_macd_sma_frame(bars, params)
+        elif params.get("strategy") == "rsi_reversion":
+            frame = self.build_rsi_frame(bars, params)
         else:
             mid, upper, lower = keltner_channel(bars, params["inner_kc_length"], params["inner_kc_mult"])
             frame = bars.assign(mid_inner=mid, up_inner=upper, low_inner=lower).dropna()
@@ -829,6 +931,8 @@ class LocalStrategyEngine:
         if position is not None:
             if params.get("strategy") == "macd_sma":
                 self.evaluate_exit_macd_sma(user, symbol, position, latest_price, params, frame, last_bar_ts, timeframe)
+            elif params.get("strategy") == "rsi_reversion":
+                self.evaluate_exit_rsi(user, symbol, position, latest_price, params, frame, last_bar_ts, timeframe)
             else:
                 self.evaluate_exit(user, symbol, position, latest_price, params, frame, last_bar_ts, timeframe)
             return
@@ -837,6 +941,8 @@ class LocalStrategyEngine:
         self.reset_position_state(symbol, strategy_name)
         if params.get("strategy") == "macd_sma":
             self.evaluate_entry_macd_sma(user, api, cfg, symbol, latest_price, params, frame, last_bar_ts, timeframe, backtest)
+        elif params.get("strategy") == "rsi_reversion":
+            self.evaluate_entry_rsi(user, api, cfg, symbol, latest_price, params, frame, last_bar_ts, timeframe, backtest)
         else:
             self.evaluate_entry(user, api, cfg, symbol, latest_price, params, frame, last_bar_ts, timeframe, backtest)
 
@@ -858,6 +964,20 @@ class LocalStrategyEngine:
             & (frame["macd_line"] < 0)
             & (frame["close"] < frame["veryslow_ma"])
         )
+        return frame.dropna()
+
+    def build_rsi_frame(self, bars: pd.DataFrame, params: Dict) -> pd.DataFrame:
+        # Mirrors backtest_rsi in misc/pine_optimizer.py so live signals match the backtest.
+        frame = bars.copy()
+        frame["rsi"] = rsi(frame["close"], params["rsi_length"])
+        frame["trend_ma"] = sma(frame["close"], params["rsi_trend_length"])
+        oversold = params["rsi_oversold"]
+        overbought = params["rsi_overbought"]
+        exit_level = params["rsi_exit_level"]
+        frame["long_signal"] = (frame["close"] > frame["trend_ma"]) & (frame["rsi"] < oversold)
+        frame["short_signal"] = (frame["close"] < frame["trend_ma"]) & (frame["rsi"] > overbought)
+        frame["long_exit"] = frame["rsi"] > exit_level
+        frame["short_exit"] = frame["rsi"] < (100.0 - exit_level)
         return frame.dropna()
 
     def get_latest_price(self, api: LegacyCompatibleAlpacaClient, symbol: str) -> float:
@@ -957,9 +1077,15 @@ class LocalStrategyEngine:
             backtest=backtest,
         )
         self.logger.info("[LOCAL_STRATEGY] %s entry signal action=%s bar=%s price=%s", symbol, action, last_bar_ts, latest_price)
-        self.submit_llm_shadow_validation(user, api, payload, latest_price, params, frame, backtest)
+        proceed, payload, gate_note = self.apply_llm_gate(user, api, payload, latest_price, params, frame, backtest)
+        if not proceed:
+            st["last_entry_bar"] = last_bar_ts
+            st["last_decision"] = f"entry_blocked_llm_{gate_note}"
+            self.save_state()
+            self.emit_event("entry_blocked", symbol, strategy=payload.get("strategy"), action=action, reason=gate_note, bar_time=last_bar_ts)
+            return
         ok = self.execute_or_recover(user, payload, kind="open")
-        self.emit_event("entry_submitted", symbol, strategy=payload.get("strategy"), action=action, ok=ok, bar_time=last_bar_ts, reason=reason)
+        self.emit_event("entry_submitted", symbol, strategy=payload.get("strategy"), action=action, ok=ok, bar_time=last_bar_ts, reason=reason, gate=gate_note)
         st["last_entry_bar"] = last_bar_ts
         st["last_decision"] = f"entry_{action}_{'ok' if ok else 'recovery'}"
         self.save_state()
@@ -1015,9 +1141,79 @@ class LocalStrategyEngine:
             backtest=order_backtest,
         )
         self.logger.info("[LOCAL_STRATEGY] %s MACD/SMA entry signal action=%s bar=%s price=%s", symbol, action, last_bar_ts, latest_price)
-        self.submit_llm_shadow_validation(user, api, payload, latest_price, params, frame, order_backtest)
+        proceed, payload, gate_note = self.apply_llm_gate(user, api, payload, latest_price, params, frame, order_backtest)
+        if not proceed:
+            st["last_entry_bar"] = last_bar_ts
+            st["last_decision"] = f"entry_blocked_llm_{gate_note}"
+            self.save_state()
+            self.emit_event("entry_blocked", symbol, strategy=payload.get("strategy"), action=action, reason=gate_note, bar_time=last_bar_ts)
+            return
         ok = self.execute_or_recover(user, payload, kind="open")
-        self.emit_event("entry_submitted", symbol, strategy=payload.get("strategy"), action=action, ok=ok, bar_time=last_bar_ts, reason=reason)
+        self.emit_event("entry_submitted", symbol, strategy=payload.get("strategy"), action=action, ok=ok, bar_time=last_bar_ts, reason=reason, gate=gate_note)
+        st["last_entry_bar"] = last_bar_ts
+        st["last_decision"] = f"entry_{action}_{'ok' if ok else 'recovery'}"
+        self.save_state()
+
+    def evaluate_entry_rsi(self, user: User, api: LegacyCompatibleAlpacaClient, cfg: Dict, symbol: str, latest_price: float, params: Dict, frame: pd.DataFrame, last_bar_ts: str, timeframe: str, backtest: Dict) -> None:
+        strategy_name = "rsi_reversion"
+        st = self.symbol_state(symbol, strategy_name)
+        if st.get("last_entry_bar") == last_bar_ts:
+            return
+        cur = frame.iloc[-1]
+        trade_direction = params["trade_direction"]
+        action = None
+        reason = None
+        if trade_direction in ("Both", "Long Only") and bool(cur.get("long_signal")):
+            action = "buy"
+            reason = "Local RSI Long Entry"
+        elif trade_direction in ("Both", "Short Only") and bool(cur.get("short_signal")):
+            action = "sell"
+            reason = "Local RSI Short Entry"
+        if not action:
+            st["last_checked_bar"] = last_bar_ts
+            st["last_decision"] = "no_entry"
+            self.save_state()
+            return
+
+        if action == "sell":
+            allowed, regime_reason = self.market_allows_short(api, cfg)
+            if not allowed:
+                self.log_symbol_throttled(
+                    symbol,
+                    "short_blocked_regime",
+                    logging.INFO,
+                    "[LOCAL_STRATEGY] %s RSI short entry blocked by market regime: %s",
+                    symbol,
+                    regime_reason,
+                    strategy=strategy_name,
+                )
+                st["last_checked_bar"] = last_bar_ts
+                st["last_decision"] = f"short_blocked_{regime_reason}"
+                self.save_state()
+                self.emit_event("entry_rejected", symbol, strategy=strategy_name, reason="market_regime", detail=regime_reason)
+                return
+
+        order_backtest = dict(backtest or {})
+        order_backtest["strategy"] = "rsi_reversion"
+        payload = self.build_payload(
+            symbol=symbol,
+            action=action,
+            amount=self.order_amount_for_strategy(cfg, strategy_name, user),
+            reason=reason,
+            timeframe=timeframe,
+            bar_ts=last_bar_ts,
+            backtest=order_backtest,
+        )
+        self.logger.info("[LOCAL_STRATEGY] %s RSI entry signal action=%s bar=%s price=%s", symbol, action, last_bar_ts, latest_price)
+        proceed, payload, gate_note = self.apply_llm_gate(user, api, payload, latest_price, params, frame, order_backtest)
+        if not proceed:
+            st["last_entry_bar"] = last_bar_ts
+            st["last_decision"] = f"entry_blocked_llm_{gate_note}"
+            self.save_state()
+            self.emit_event("entry_blocked", symbol, strategy=payload.get("strategy"), action=action, reason=gate_note, bar_time=last_bar_ts)
+            return
+        ok = self.execute_or_recover(user, payload, kind="open")
+        self.emit_event("entry_submitted", symbol, strategy=payload.get("strategy"), action=action, ok=ok, bar_time=last_bar_ts, reason=reason, gate=gate_note)
         st["last_entry_bar"] = last_bar_ts
         st["last_decision"] = f"entry_{action}_{'ok' if ok else 'recovery'}"
         self.save_state()
@@ -1046,6 +1242,160 @@ class LocalStrategyEngine:
         except Exception as exc:
             self.logger.warning("[LLM_SHADOW] submit failed for %s: %s", payload.get("symbol"), exc)
 
+    def apply_llm_gate(self, user: User, api: LegacyCompatibleAlpacaClient, payload: Dict, latest_price: float, params: Dict, frame: pd.DataFrame, backtest: Dict):
+        """News-aware LLM gate for an entry. Returns (proceed, payload, note).
+
+        Shadow mode keeps the old fire-and-forget logging and never blocks. Gate
+        mode validates synchronously against fresh news + the per-symbol memory and
+        may veto/resize the entry, but only *enforces* that when LLM_GATE_ENFORCE
+        is set. Fail-open + alert: any LLM problem executes the trade and emits an
+        alert event so an unstable model never halts trading.
+        """
+        validator = self.llm_validator
+        if not validator:
+            return True, payload, "no_validator"
+        symbol = payload.get("symbol")
+        if getattr(validator, "mode", "shadow") != "gate":
+            self.submit_llm_shadow_validation(user, api, payload, latest_price, params, frame, backtest)
+            return True, payload, "shadow"
+        if not self.gate_sync:
+            # Default: read the precomputed standing verdict; never blocks on the LLM.
+            return self._gate_via_flag(payload)
+        try:
+            technical_context = self.build_llm_shadow_context(payload, latest_price, params, frame, backtest)
+            memory_context = self.symbol_memory.build_memory_context(symbol) if self.symbol_memory else {}
+            result = validator.validate_entry_blocking(
+                user_snapshot={"id": user.id, "username": user.username},
+                payload=payload,
+                technical_context=technical_context,
+                memory_context=memory_context,
+                alpaca_api_key=getattr(api, "api_key", None),
+                alpaca_api_secret=getattr(api, "api_secret", None),
+            )
+        except Exception as exc:
+            self.logger.warning("[LLM_GATE] gate fail-open for %s: %s", symbol, exc)
+            self.emit_event("entry_llm_failopen", symbol, strategy=payload.get("strategy"), error=str(exc)[:300])
+            return True, payload, "failopen_error"
+
+        try:
+            self._persist_news_to_memory(symbol, result.get("news") or {})
+        except Exception as exc:
+            self.logger.warning("[SYMBOL_MEMORY] persist failed for %s: %s", symbol, exc)
+
+        decision = str(result.get("decision") or "unknown").lower()
+        confidence = float(result.get("confidence") or 0.0)
+        reason = str(result.get("reason") or "")[:300]
+        enforce = bool(getattr(validator, "enforce", False))
+        strat = payload.get("strategy")
+        action = payload.get("action")
+
+        if bool(result.get("failed")):
+            self.logger.warning("[LLM_GATE] %s fail-open (status=%s) -> executing as normal", symbol, result.get("status"))
+            self.emit_event("entry_llm_failopen", symbol, strategy=strat, action=action, status=result.get("status"))
+            return True, payload, "failopen"
+
+        if decision == "veto" and confidence >= float(getattr(validator, "min_confidence", 0.6)):
+            if enforce:
+                self.logger.warning("[LLM_GATE] %s VETO conf=%.2f blocking entry: %s", symbol, confidence, reason)
+                self.emit_event("entry_llm_veto", symbol, strategy=strat, action=action, confidence=confidence, reason=reason)
+                return False, payload, "veto"
+            self.logger.warning("[LLM_GATE] %s WOULD veto conf=%.2f (shadow-first): %s", symbol, confidence, reason)
+            self.emit_event("entry_llm_would_veto", symbol, strategy=strat, action=action, confidence=confidence, reason=reason)
+            return True, payload, "would_veto"
+
+        if decision == "reduce_size":
+            if enforce:
+                factor = float(getattr(validator, "reduce_size_factor", 0.5))
+                new_amount = round(float(payload.get("amount", 0.0)) * factor, 2)
+                payload["amount"] = new_amount
+                self.logger.warning("[LLM_GATE] %s reduce_size x%.2f -> amount=%s: %s", symbol, factor, new_amount, reason)
+                self.emit_event("entry_llm_resize", symbol, strategy=strat, factor=factor, amount=new_amount, reason=reason)
+                return True, payload, "reduced"
+            self.emit_event("entry_llm_would_resize", symbol, strategy=strat, reason=reason)
+            return True, payload, "would_reduce"
+
+        if decision == "manual_review":
+            if enforce and bool(getattr(validator, "block_on_manual_review", False)):
+                self.logger.warning("[LLM_GATE] %s manual_review blocking (configured): %s", symbol, reason)
+                self.emit_event("entry_llm_manual_block", symbol, strategy=strat, action=action, reason=reason)
+                return False, payload, "manual_block"
+            self.emit_event("entry_llm_manual_review", symbol, strategy=strat, action=action, reason=reason)
+            return True, payload, "manual_review"
+
+        self.emit_event("entry_llm_approved", symbol, strategy=strat, action=action, confidence=confidence)
+        return True, payload, "approved"
+
+    def _gate_via_flag(self, payload: Dict):
+        """Decide using the background analyst's standing verdict (no live LLM call)."""
+        validator = self.llm_validator
+        symbol = payload.get("symbol")
+        action = payload.get("action")
+        strat = payload.get("strategy")
+        enforce = bool(getattr(validator, "enforce", False))
+        if not self.symbol_memory:
+            return True, payload, "no_memory"
+        allowed, analysis = self.symbol_memory.flag_for(symbol, action)
+        if allowed is None:
+            # No standing verdict yet -> fail-open and kick off a background analysis.
+            self.logger.info("[LLM_GATE] %s no standing verdict yet -> fail-open; triggering analysis", symbol)
+            self.emit_event("entry_llm_cold", symbol, strategy=strat, action=action)
+            self._refresh_dossier_async(symbol)
+            return True, payload, "cold"
+        confidence = float(analysis.get("confidence") or 0.0)
+        reason = str(analysis.get("reason") or "")[:300]
+        decided_at = analysis.get("updated_at")
+        if allowed:
+            self.emit_event("entry_llm_approved", symbol, strategy=strat, action=action, confidence=confidence, decided_at=decided_at)
+            return True, payload, "approved"
+        if confidence >= float(getattr(validator, "min_confidence", 0.6)):
+            if enforce:
+                self.logger.warning("[LLM_GATE] %s VETO via standing verdict (conf=%.2f @ %s): %s", symbol, confidence, decided_at, reason)
+                self.emit_event("entry_llm_veto", symbol, strategy=strat, action=action, confidence=confidence, reason=reason, decided_at=decided_at)
+                return False, payload, "veto"
+            self.logger.warning("[LLM_GATE] %s WOULD veto via standing verdict (conf=%.2f, shadow-first): %s", symbol, confidence, reason)
+            self.emit_event("entry_llm_would_veto", symbol, strategy=strat, action=action, confidence=confidence, reason=reason, decided_at=decided_at)
+            return True, payload, "would_veto"
+        self.emit_event("entry_llm_lowconf", symbol, strategy=strat, action=action, confidence=confidence)
+        return True, payload, "lowconf_proceed"
+
+    def _persist_news_to_memory(self, symbol: str, news_context: Dict) -> None:
+        if not self.symbol_memory or not isinstance(news_context, dict):
+            return
+        added = self.symbol_memory.append_news(symbol, news_context.get("items") or [])
+        if added:
+            self.logger.info("[SYMBOL_MEMORY] %s archived %s new item(s)", symbol, added)
+        if self.llm_validator and self.symbol_memory.should_update_dossier(symbol):
+            self._refresh_dossier_async(symbol)
+
+    def _refresh_dossier_async(self, symbol: str, force: bool = False) -> None:
+        """Queue a background re-analysis. A single worker processes the queue one
+        symbol at a time so the slow local model is never hit concurrently."""
+        if not (self.llm_validator and self.symbol_memory):
+            return
+        with self._analysis_lock:
+            if symbol in self._analysis_pending:
+                return  # already queued / in flight
+            self._analysis_pending.add(symbol)
+            if self._analysis_worker is None or not self._analysis_worker.is_alive():
+                self._analysis_worker = threading.Thread(target=self._analysis_worker_loop, name="symbol-analyst", daemon=True)
+                self._analysis_worker.start()
+        self._analysis_queue.put((symbol, force))
+
+    def _analysis_worker_loop(self) -> None:
+        while True:
+            symbol, force = self._analysis_queue.get()
+            try:
+                caller = lambda s, u: self.llm_validator.simple_chat(s, u, timeout=self.analysis_timeout)
+                updated = self.symbol_memory.update_dossier(symbol, caller, force=force)
+                if updated:
+                    self.logger.info("[SYMBOL_MEMORY] %s analysis refreshed%s", symbol, " (forced)" if force else "")
+            except Exception as exc:
+                self.logger.warning("[SYMBOL_MEMORY] analysis refresh failed for %s: %s", symbol, exc)
+            finally:
+                with self._analysis_lock:
+                    self._analysis_pending.discard(symbol)
+                self._analysis_queue.task_done()
+
     def build_llm_shadow_context(self, payload: Dict, latest_price: float, params: Dict, frame: pd.DataFrame, backtest: Dict) -> Dict:
         tail_rows = []
         for ts, row in frame.tail(5).iterrows():
@@ -1064,6 +1414,8 @@ class LocalStrategyEngine:
                 "macd_line": self._round_for_context(row.get("macd_line")),
                 "signal_line": self._round_for_context(row.get("signal_line")),
                 "hist": self._round_for_context(row.get("hist")),
+                "rsi": self._round_for_context(row.get("rsi")),
+                "trend_ma": self._round_for_context(row.get("trend_ma")),
             })
         backtest_summary = {
             "job_id": backtest.get("job_id"),
@@ -1199,6 +1551,68 @@ class LocalStrategyEngine:
                 return "macd fixed take profit short"
             if bool(cur.get("long_signal")):
                 return "macd opposite long signal"
+        return None
+
+    def evaluate_exit_rsi(self, user: User, symbol: str, position, latest_price: float, params: Dict, frame: pd.DataFrame, last_bar_ts: str, timeframe: str) -> None:
+        st = self.symbol_state(symbol, "rsi_reversion")
+        if st.get("last_exit_bar") == last_bar_ts and st.get("last_exit_price") == latest_price:
+            return
+        try:
+            entry_price = float(position.avg_entry_price)
+        except Exception:
+            self.logger.warning("[LOCAL_STRATEGY] %s cannot read avg_entry_price; skip RSI exit.", symbol)
+            return
+        side = str(getattr(position, "side", "") or "").lower()
+        is_short = side == "short"
+        reason = self.exit_reason_rsi(is_short, entry_price, latest_price, params, frame)
+        if not reason:
+            return
+        payload = self.build_payload(
+            symbol=symbol,
+            action="close",
+            amount=user.per_trade_amount,
+            reason=reason,
+            timeframe=timeframe,
+            bar_ts=last_bar_ts,
+            backtest={"strategy": "rsi_reversion"},
+        )
+        payload["position_side"] = "short" if is_short else "long"
+        self.logger.warning("[LOCAL_STRATEGY] %s RSI exit signal reason='%s' bar=%s price=%s", symbol, reason, last_bar_ts, latest_price)
+        ok = self.execute_or_recover(user, payload, kind="close")
+        self.emit_event("exit_submitted", symbol, strategy=payload.get("strategy"), ok=ok, bar_time=last_bar_ts, reason=reason)
+        st["last_exit_bar"] = last_bar_ts
+        st["last_exit_price"] = latest_price
+        st["last_decision"] = f"exit_{'ok' if ok else 'recovery'}"
+        self.save_state()
+
+    def exit_reason_rsi(self, is_short: bool, entry_price: float, latest_price: float, params: Dict, frame: pd.DataFrame) -> Optional[str]:
+        fixed_sl = params["fixed_stop_loss_pct"] / 100.0
+        fixed_tp = params["fixed_take_profit_pct"] / 100.0
+        forced_sl = params["forced_stop_loss_pct"] / 100.0
+        forced_tp = params["forced_take_profit_pct"] / 100.0
+        cur = frame.iloc[-1]
+        if not is_short:
+            if latest_price <= entry_price * (1 - forced_sl):
+                return "rsi forced sl long"
+            if latest_price >= entry_price * (1 + forced_tp):
+                return "rsi forced tp long"
+            if latest_price <= entry_price * (1 - fixed_sl):
+                return "rsi fixed stop loss long"
+            if latest_price >= entry_price * (1 + fixed_tp):
+                return "rsi fixed take profit long"
+            if bool(cur.get("long_exit")):
+                return "rsi mean reversion exit long"
+        else:
+            if latest_price >= entry_price * (1 + forced_sl):
+                return "rsi forced sl short"
+            if latest_price <= entry_price * (1 - forced_tp):
+                return "rsi forced tp short"
+            if latest_price >= entry_price * (1 + fixed_sl):
+                return "rsi fixed stop loss short"
+            if latest_price <= entry_price * (1 - fixed_tp):
+                return "rsi fixed take profit short"
+            if bool(cur.get("short_exit")):
+                return "rsi mean reversion exit short"
         return None
 
     def exit_reason(self, symbol: str, is_short: bool, entry_price: float, latest_price: float, params: Dict, frame: pd.DataFrame, st: Dict) -> Optional[str]:

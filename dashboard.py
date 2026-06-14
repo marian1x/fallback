@@ -32,6 +32,9 @@ from alpaca_api import LegacyCompatibleAlpacaClient
 from models import db, Trade, User
 import strategy_config as strategy_store
 from stock_intelligence import StockIntelligenceService, parse_symbols
+from symbol_memory import create_symbol_memory
+from market_news import MarketNewsCollector
+import news_sources as news_sources_store
 from trade_db import record_open_trade, record_closed_trade
 from utils import encrypt_data, decrypt_data
 
@@ -96,6 +99,9 @@ LOGIN_RATE_LIMIT_WINDOW_SEC = int(os.getenv('LOGIN_RATE_LIMIT_WINDOW_SEC', '600'
 LOGIN_RATE_LIMIT_MAX_ATTEMPTS = int(os.getenv('LOGIN_RATE_LIMIT_MAX_ATTEMPTS', '8'))
 PASSWORD_MIN_LENGTH = int(os.getenv('PASSWORD_MIN_LENGTH', '10'))
 STOCK_INTELLIGENCE_ENABLED = os.getenv('STOCK_INTELLIGENCE_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'y')
+# Read-only view of the per-symbol memory the trading engine maintains in the same
+# instance dir, so the dashboard can show precomputed analysis without an LLM call.
+STOCK_SYMBOL_MEMORY = create_symbol_memory(app.instance_path, app.logger)
 os.makedirs(STRATEGY_JOBS_DIR, exist_ok=True)
 os.makedirs(STRATEGY_CONFIG_VERSIONS_DIR, exist_ok=True)
 
@@ -620,6 +626,34 @@ def strategy_label(value):
     if normalized == 'rsi_reversion':
         return 'RSI(2) Mean Reversion'
     return 'Unknown'
+
+
+def symbol_news_flag(symbol):
+    """Standing buy/sell verdict for a symbol from the per-symbol news memory.
+
+    Returns a small dict {label, css, title} for the Bot Routing table. When the
+    AI's analysis is neutral (no contradiction either way) the label is "Both";
+    "Buy" means shorts are blocked by bullish news, "Sell" means longs are blocked
+    by bearish news, "Blocked" means both, "Pending" means not analyzed yet."""
+    try:
+        analysis = STOCK_SYMBOL_MEMORY.get_analysis(symbol)
+    except Exception:
+        analysis = {}
+    if not analysis or not analysis.get('updated_at'):
+        return {'label': 'Pending', 'css': 'secondary', 'title': 'No AI news analysis prepared yet'}
+    long_ok = bool(analysis.get('long_ok', True))
+    short_ok = bool(analysis.get('short_ok', True))
+    bias = str(analysis.get('bias') or 'neutral')
+    conf = analysis.get('confidence')
+    reason = str(analysis.get('reason') or '').strip()
+    title = f"bias {bias} · conf {conf} · {analysis.get('updated_at')}" + (f" — {reason}" if reason else "")
+    if long_ok and short_ok:
+        return {'label': 'Both', 'css': 'info', 'title': title}
+    if long_ok and not short_ok:
+        return {'label': 'Buy', 'css': 'success', 'title': title}
+    if short_ok and not long_ok:
+        return {'label': 'Sell', 'css': 'danger', 'title': title}
+    return {'label': 'Blocked', 'css': 'dark', 'title': title}
 
 
 def strategy_run_fingerprint(config):
@@ -1867,6 +1901,10 @@ def admin_strategy():
         config_versions=load_strategy_config_versions(limit=8),
         strategy_events=load_strategy_events(limit=25),
         tradable_symbols=load_cached_tradable_assets(),
+        symbol_news_flags={
+            item['symbol']: symbol_news_flag(item['symbol'])
+            for item in strategy_store.normalize_universe(config.get('universe'))
+        },
     )
 
 @app.route('/api/admin/strategy/live_snapshot')
@@ -2921,7 +2959,7 @@ def api_stock_intelligence_ask():
     alpaca_key, alpaca_secret = keypair if keypair else (None, None)
 
     try:
-        service = StockIntelligenceService.from_env()
+        service = StockIntelligenceService.from_env(instance_path=app.instance_path)
         result = service.ask(
             question=question,
             symbols=symbols,
@@ -2946,6 +2984,118 @@ def api_stock_intelligence_ask():
     except Exception as e:
         app.logger.error("[STOCK_INTELLIGENCE] failed user=%s error=%s", g.user.username, e, exc_info=True)
         return jsonify({'error': 'stock_intelligence_failed', 'detail': str(e)}), 500
+
+
+@app.route('/api/stock_intelligence/analysis', methods=['POST'])
+@login_required
+def api_stock_intelligence_analysis():
+    """Return the precomputed standing analysis the engine keeps per symbol.
+
+    Instant: reads inspectable files under instance/symbol_memory/, no LLM call.
+    This is what the "Show analysis" button and general questions use."""
+    if not STOCK_INTELLIGENCE_ENABLED:
+        return jsonify({'error': 'stock_intelligence_disabled'}), 403
+    payload = request.get_json(silent=True) or {}
+    symbols = parse_symbols(str(payload.get('symbols', '') or ''), limit=6)
+    if not symbols:
+        return jsonify({'error': 'at_least_one_symbol_required'}), 400
+    out = {}
+    for symbol in symbols:
+        dossier = STOCK_SYMBOL_MEMORY.load_dossier(symbol)
+        analysis = dossier.get('analysis') if isinstance(dossier.get('analysis'), dict) else {}
+        out[symbol] = {
+            'analysis': analysis,
+            'has_analysis': bool(analysis and analysis.get('updated_at')),
+            'narrative_summary': dossier.get('narrative_summary'),
+            'analyst_stance': dossier.get('analyst_stance'),
+            'recurring_themes': dossier.get('recurring_themes', [])[:12],
+            'notable_events': dossier.get('notable_events', [])[:12],
+            'rolling_sentiment_trend': dossier.get('rolling_sentiment_trend'),
+            'dossier_updated_at': dossier.get('updated_at'),
+            'last_sources': dossier.get('last_sources', {}),
+            'archive_count': STOCK_SYMBOL_MEMORY.archive_count(symbol),
+            'recent_news': STOCK_SYMBOL_MEMORY.recent_archive(symbol, limit=15),
+        }
+    return jsonify({'symbols': symbols, 'results': out})
+
+
+@app.route('/api/admin/strategy/refresh_news', methods=['POST'])
+@superuser_required
+def api_admin_strategy_refresh_news():
+    """Queue a manual 'check news + re-analyze now' for the whole routing list.
+
+    The trading engine picks this up on its next tick (~15s) and forces an
+    immediate fetch + LLM re-analysis for every enabled symbol, bypassing the
+    per-symbol throttle. Returns immediately; analysis happens in the background."""
+    payload = request.get_json(silent=True) or {}
+    symbols = parse_symbols(str(payload.get('symbols', '') or ''), limit=50) or None
+    queued = STOCK_SYMBOL_MEMORY.request_refresh(symbols=symbols, force=True)
+    config = load_strategy_config()
+    universe_count = len({
+        strategy_store.normalize_symbol(i['symbol'])
+        for i in strategy_store.normalize_universe(config.get('universe'))
+        if i.get('enabled', True)
+    })
+    app.logger.info("[SYMBOL_MEMORY] manual refresh queued by %s symbols=%s", g.user.username, queued.get('symbols'))
+    return jsonify({'queued': True, 'symbols': queued.get('symbols'), 'universe_count': universe_count})
+
+
+def probe_news_source(source, symbol, api_key, api_secret, timeout=8.0):
+    """Reachability check for a single configured source using a test symbol."""
+    name = source.get('name') or source.get('type')
+    base = {'name': name, 'type': source.get('type'), 'url': source.get('url', ''), 'enabled': bool(source.get('enabled', True))}
+    if not source.get('enabled', True):
+        return {**base, 'status': 'disabled'}
+    try:
+        collector = MarketNewsCollector(
+            sources=[source], limit=3, timeout_sec=timeout,
+            alpaca_news_url=os.getenv('NEWS_CONTEXT_ALPACA_URL', os.getenv('LLM_TRADE_VALIDATION_NEWS_URL', 'https://data.alpaca.markets/v1beta1/news')),
+            google_days=7,
+        )
+        ctx = collector.collect(symbol, api_key=api_key, api_secret=api_secret)
+        errors = ctx.get('provider_errors') or {}
+        item_count = len(ctx.get('items') or []) + len(ctx.get('investor_messages') or [])
+        if errors:
+            return {**base, 'status': 'error', 'detail': list(errors.values())[0], 'item_count': item_count}
+        return {**base, 'status': 'ok', 'item_count': item_count}
+    except Exception as e:
+        return {**base, 'status': 'error', 'detail': str(e)[:300]}
+
+
+@app.route('/admin/news_feeds')
+@superuser_required
+def admin_news_feeds():
+    sources = news_sources_store.load_news_sources(app.instance_path)
+    return render_template('admin/news_feeds.html', sources=sources)
+
+
+@app.route('/api/admin/news_feeds/health', methods=['POST'])
+@superuser_required
+def api_admin_news_feeds_health():
+    payload = request.get_json(silent=True) or {}
+    test_symbol = (parse_symbols(str(payload.get('symbol', '') or ''), limit=1) or ['AAPL'])[0]
+    api_user = get_strategy_api_user(load_strategy_config())
+    keypair = get_user_keypair(api_user) if api_user else None
+    alpaca_key, alpaca_secret = keypair if keypair else (None, None)
+    sources = news_sources_store.load_news_sources(app.instance_path)
+    results = [probe_news_source(s, test_symbol, alpaca_key, alpaca_secret) for s in sources]
+    return jsonify({'symbol': test_symbol, 'has_alpaca_credentials': bool(keypair), 'results': results})
+
+
+@app.route('/api/admin/news_feeds/save', methods=['POST'])
+@superuser_required
+def api_admin_news_feeds_save():
+    payload = request.get_json(silent=True) or {}
+    raw = payload.get('sources')
+    if not isinstance(raw, list):
+        return jsonify({'error': 'sources_must_be_list'}), 400
+    normalized = news_sources_store.normalize_sources(raw)
+    if not normalized:
+        return jsonify({'error': 'no_valid_sources'}), 400
+    news_sources_store.save_news_sources(app.instance_path, normalized)
+    app.logger.info("[NEWS_FEEDS] %s saved %s source(s)", g.user.username, len(normalized))
+    return jsonify({'saved': True, 'sources': news_sources_store.load_news_sources(app.instance_path)})
+
 
 @app.route('/api/account')
 @login_required

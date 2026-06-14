@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}News Feeds{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-0">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <h4 class="mb-0"><i class="fa-solid fa-rss me-2"></i>News Feeds</h4>
+    <div class="d-flex flex-wrap gap-2">
+      <div class="input-group input-group-sm" style="width: auto;">
+        <span class="input-group-text">Test symbol</span>
+        <input type="text" id="healthSymbol" class="form-control" value="AAPL" style="max-width: 110px;">
+      </div>
+      <button class="btn btn-sm btn-primary" id="checkHealthBtn"><i class="fa-solid fa-heart-pulse me-1"></i>Check health</button>
+      <button class="btn btn-sm btn-outline-secondary" id="addSourceBtn"><i class="fa-solid fa-plus me-1"></i>Add RSS source</button>
+      <button class="btn btn-sm btn-success" id="saveSourcesBtn"><i class="fa-solid fa-floppy-disk me-1"></i>Save</button>
+    </div>
+  </div>
+
+  <div class="alert alert-info py-2 small">
+    These are the news sources the local AI aggregates per symbol. <code>rss</code> sources accept any feed URL with
+    <code>{symbol}</code> as a placeholder. Use <strong>Check health</strong> to see which feeds are reachable for a test
+    symbol (helpful when a feed goes down or its URL changes). Edits are saved to
+    <code>instance/news_sources.json</code>. Note: Alpaca news is powered by Benzinga.
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0" id="feedsTable">
+          <thead>
+            <tr>
+              <th>Enabled</th>
+              <th>Name</th>
+              <th>Type</th>
+              <th>URL (use {symbol})</th>
+              <th>Health</th>
+              <th class="text-end">Action</th>
+            </tr>
+          </thead>
+          <tbody id="feedsBody">
+            {% for s in sources %}
+            <tr data-type="{{ s.type }}">
+              <td><div class="form-check form-switch"><input class="form-check-input feed-enabled" type="checkbox" {% if s.enabled %}checked{% endif %}></div></td>
+              <td><input type="text" class="form-control form-control-sm feed-name" value="{{ s.name }}"></td>
+              <td>
+                <select class="form-select form-select-sm feed-type">
+                  {% for t in ['alpaca','google','yahoo','stocktwits','rss'] %}
+                  <option value="{{ t }}" {% if s.type == t %}selected{% endif %}>{{ t }}</option>
+                  {% endfor %}
+                </select>
+              </td>
+              <td><input type="text" class="form-control form-control-sm feed-url" value="{{ s.url }}" placeholder="https://.../{symbol}.xml"></td>
+              <td class="feed-health"><span class="text-muted small">—</span></td>
+              <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger feed-remove" title="Remove"><i class="fa-solid fa-trash"></i></button></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  const body = document.getElementById('feedsBody');
+
+  function rowTemplate(s) {
+    s = s || { enabled: true, name: 'New feed', type: 'rss', url: 'https://example.com/rss?s={symbol}' };
+    const tr = document.createElement('tr');
+    tr.dataset.type = s.type;
+    tr.innerHTML = `
+      <td><div class="form-check form-switch"><input class="form-check-input feed-enabled" type="checkbox" ${s.enabled ? 'checked' : ''}></div></td>
+      <td><input type="text" class="form-control form-control-sm feed-name" value="${s.name || ''}"></td>
+      <td><select class="form-select form-select-sm feed-type">
+        ${['alpaca','google','yahoo','stocktwits','rss'].map((t) => `<option value="${t}" ${s.type === t ? 'selected' : ''}>${t}</option>`).join('')}
+      </select></td>
+      <td><input type="text" class="form-control form-control-sm feed-url" value="${s.url || ''}" placeholder="https://.../{symbol}.xml"></td>
+      <td class="feed-health"><span class="text-muted small">—</span></td>
+      <td class="text-end"><button type="button" class="btn btn-sm btn-outline-danger feed-remove"><i class="fa-solid fa-trash"></i></button></td>`;
+    return tr;
+  }
+
+  body.addEventListener('click', function(e) {
+    const btn = e.target.closest('.feed-remove');
+    if (btn) btn.closest('tr').remove();
+  });
+
+  document.getElementById('addSourceBtn').addEventListener('click', function() {
+    body.appendChild(rowTemplate());
+  });
+
+  function collectSources() {
+    return Array.from(body.querySelectorAll('tr')).map((tr) => ({
+      enabled: tr.querySelector('.feed-enabled').checked,
+      name: tr.querySelector('.feed-name').value.trim(),
+      type: tr.querySelector('.feed-type').value,
+      url: tr.querySelector('.feed-url').value.trim(),
+    }));
+  }
+
+  const csrf = document.querySelector('meta[name="csrf-token"]');
+  function headers() {
+    const h = { 'Content-Type': 'application/json' };
+    if (csrf) h['X-CSRF-Token'] = csrf.getAttribute('content');
+    return h;
+  }
+
+  document.getElementById('saveSourcesBtn').addEventListener('click', async function() {
+    const btn = this; btn.disabled = true;
+    try {
+      const res = await fetch('{{ url_for("api_admin_news_feeds_save") }}', {
+        method: 'POST', headers: headers(), body: JSON.stringify({ sources: collectSources() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      window.location.reload();
+    } catch (err) {
+      alert('Save failed: ' + err.message);
+    } finally { btn.disabled = false; }
+  });
+
+  function badge(status, detail, count) {
+    if (status === 'ok') return `<span class="badge text-bg-success">online</span> <span class="small text-muted">${count ?? 0} items</span>`;
+    if (status === 'disabled') return `<span class="badge text-bg-secondary">disabled</span>`;
+    return `<span class="badge text-bg-danger">down</span> <span class="small text-danger" title="${(detail || '').replace(/"/g, '&quot;')}">${(detail || 'error').slice(0, 60)}</span>`;
+  }
+
+  document.getElementById('checkHealthBtn').addEventListener('click', async function() {
+    const btn = this; btn.disabled = true;
+    body.querySelectorAll('.feed-health').forEach((td) => { td.innerHTML = '<span class="small text-muted">checking…</span>'; });
+    try {
+      const symbol = document.getElementById('healthSymbol').value || 'AAPL';
+      const res = await fetch('{{ url_for("api_admin_news_feeds_health") }}', {
+        method: 'POST', headers: headers(), body: JSON.stringify({ symbol }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const rows = Array.from(body.querySelectorAll('tr'));
+      (data.results || []).forEach((r, i) => {
+        const td = rows[i] && rows[i].querySelector('.feed-health');
+        if (td) td.innerHTML = badge(r.status, r.detail, r.item_count);
+      });
+      if (!data.has_alpaca_credentials) {
+        const alpacaRow = rows.find((tr) => tr.querySelector('.feed-type').value === 'alpaca');
+        if (alpacaRow) alpacaRow.querySelector('.feed-health').innerHTML += ' <span class="small text-warning">(no Alpaca credentials configured)</span>';
+      }
+    } catch (err) {
+      alert('Health check failed: ' + err.message);
+    } finally { btn.disabled = false; }
+  });
+})();
+</script>
+{% endblock %}

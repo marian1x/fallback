@@ -71,6 +71,7 @@ class StockIntelligenceService:
         temperature: float,
         api_token: str = "",
         max_attempts: int = 2,
+        instance_path: Optional[str] = None,
     ):
         self.chat_url = lmstudio_chat_url(base_url)
         self.model = model or "local-model"
@@ -79,14 +80,17 @@ class StockIntelligenceService:
         self.temperature = temperature
         self.api_token = str(api_token or "").strip()
         self.max_attempts = max(1, int(max_attempts))
-        self.news_collector = create_market_news_collector()
+        # Use the user-editable source registry (instance/news_sources.json) when
+        # available so Stock Intelligence queries the same sources as the engine.
+        self.news_collector = create_market_news_collector(instance_path)
 
     @classmethod
-    def from_env(cls):
+    def from_env(cls, instance_path: Optional[str] = None):
         return cls(
+            instance_path=instance_path,
             base_url=os.getenv("STOCK_INTELLIGENCE_BASE_URL", os.getenv("LLM_TRADE_VALIDATION_BASE_URL", "http://127.0.0.1:1234")),
             model=os.getenv("STOCK_INTELLIGENCE_MODEL", os.getenv("LLM_TRADE_VALIDATION_MODEL", "local-model")),
-            timeout_sec=env_float("STOCK_INTELLIGENCE_TIMEOUT_SEC", 45.0, minimum=1.0),
+            timeout_sec=env_float("STOCK_INTELLIGENCE_TIMEOUT_SEC", 90.0, minimum=1.0),
             max_tokens=env_int("STOCK_INTELLIGENCE_MAX_TOKENS", 900, minimum=100),
             temperature=env_float("STOCK_INTELLIGENCE_TEMPERATURE", 0.2, minimum=0.0),
             api_token=os.getenv("STOCK_INTELLIGENCE_API_TOKEN", os.getenv("LLM_TRADE_VALIDATION_API_TOKEN", "")),
