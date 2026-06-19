@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Exclude the encrypted credential/session store from cloud backups so secrets
+  never leave the device.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="fallback_secure_prefs.xml" />
+    <exclude domain="file" path="datastore/" />
+</full-backup-content>

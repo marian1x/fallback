@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  HTTPS is enforced for all traffic by default (the Flask backend ships with
+  SESSION_COOKIE_SECURE=true, i.e. it expects to be served over TLS).
+
+  Cleartext HTTP is permitted ONLY for local development hosts:
+    - 10.0.2.2  : the host machine's loopback as seen from the Android emulator
+    - localhost / 127.0.0.1
+
+  If you test against a LAN server over plain HTTP, add its exact IP/hostname as
+  another <domain> below (Android matches by host, not by CIDR range), or — better —
+  serve the backend over HTTPS and set SESSION_COOKIE_SECURE=false only for testing.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The UI is fully Jetpack Compose / Material 3. This XML theme only styles the
+      splash window before Compose takes over, so it inherits a Material 3 base with
+      no action bar. Colors are driven by the Compose theme at runtime.
+    -->
+    <style name="Theme.FallbackTrading" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@color/ic_launcher_background</item>
+        <item name="android:windowBackground">@color/ic_launcher_background</item>
+    </style>
+</resources>
