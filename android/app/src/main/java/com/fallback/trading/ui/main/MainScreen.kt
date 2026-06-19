@@ -3,6 +3,7 @@ package com.fallback.trading.ui.main
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +19,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import com.fallback.trading.R
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ShowChart
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -132,7 +136,16 @@ fun MainScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(if (currentTab == MainTab.Portfolio) "Fallback" else currentTab.label, fontWeight = FontWeight.Bold)
+                    if (currentTab == MainTab.Portfolio) {
+                        Image(
+                            painter = painterResource(R.drawable.logo_sait),
+                            contentDescription = "SAIT Next Gen Trading",
+                            modifier = Modifier.height(36.dp),
+                            contentScale = ContentScale.FillHeight,
+                        )
+                    } else {
+                        Text(currentTab.label, fontWeight = FontWeight.Bold)
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,

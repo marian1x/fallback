@@ -1,11 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Cyberpunk candlestick logo — 5 bars in ascending neon pattern.
-    Bear candles: neon pink-red  #FF3D6A
-    Bull candles: neon teal-green #00C896
-    Breakout bar: bright neon mint #00FFAA
-    Glow layers use 40% alpha versions of the same hues.
-    All candle bodies sit inside the adaptive-icon safe zone (18–90 dp).
+    Cyberpunk candlestick icon matching the SAIT Next Gen brand palette.
+    Teal/cyan (#00E5FF) for bull candles, magenta/pink (#FF00CC) for bear candles.
+    Glow layers at ~35% alpha. All bodies inside the adaptive-icon safe zone (18–90dp).
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -20,47 +17,41 @@
         android:pathData="M14,86 L94,86"/>
 
     <!-- ── Candle 1  BEAR  cx=22 ───────────────────────── -->
-    <!-- outer glow -->
-    <path android:fillColor="#55FF3D6A" android:pathData="M16,52h12v22h-12z"/>
-    <!-- body -->
-    <path android:fillColor="#FF3D6A"   android:pathData="M18,54h8v18h-8z"/>
-    <!-- wick -->
-    <path android:strokeColor="#FF3D6A" android:strokeWidth="1.5"
+    <path android:fillColor="#55FF00CC" android:pathData="M16,52h12v22h-12z"/>
+    <path android:fillColor="#FF00CC"   android:pathData="M18,54h8v18h-8z"/>
+    <path android:strokeColor="#FF00CC" android:strokeWidth="1.5"
           android:pathData="M22,44 L22,78"/>
 
     <!-- ── Candle 2  BULL  cx=37 ───────────────────────── -->
-    <path android:fillColor="#5500C896" android:pathData="M31,38h12v24h-12z"/>
-    <path android:fillColor="#00C896"   android:pathData="M33,40h8v20h-8z"/>
-    <path android:strokeColor="#00C896" android:strokeWidth="1.5"
+    <path android:fillColor="#5500E5FF" android:pathData="M31,38h12v24h-12z"/>
+    <path android:fillColor="#00E5FF"   android:pathData="M33,40h8v20h-8z"/>
+    <path android:strokeColor="#00E5FF" android:strokeWidth="1.5"
           android:pathData="M37,31 L37,66"/>
 
     <!-- ── Candle 3  BEAR  cx=52 ───────────────────────── -->
-    <path android:fillColor="#55FF3D6A" android:pathData="M46,44h12v20h-12z"/>
-    <path android:fillColor="#FF3D6A"   android:pathData="M48,46h8v16h-8z"/>
-    <path android:strokeColor="#FF3D6A" android:strokeWidth="1.5"
+    <path android:fillColor="#55FF00CC" android:pathData="M46,44h12v20h-12z"/>
+    <path android:fillColor="#FF00CC"   android:pathData="M48,46h8v16h-8z"/>
+    <path android:strokeColor="#FF00CC" android:strokeWidth="1.5"
           android:pathData="M52,37 L52,70"/>
 
     <!-- ── Candle 4  BULL  cx=67 ───────────────────────── -->
-    <path android:fillColor="#5500C896" android:pathData="M61,26h12v26h-12z"/>
-    <path android:fillColor="#00C896"   android:pathData="M63,28h8v22h-8z"/>
-    <path android:strokeColor="#00C896" android:strokeWidth="1.5"
+    <path android:fillColor="#5500E5FF" android:pathData="M61,26h12v26h-12z"/>
+    <path android:fillColor="#00E5FF"   android:pathData="M63,28h8v22h-8z"/>
+    <path android:strokeColor="#00E5FF" android:strokeWidth="1.5"
           android:pathData="M67,18 L67,58"/>
 
-    <!-- ── Candle 5  BREAKOUT BULL  cx=84 (widest, brightest) ── -->
-    <!-- double-layer glow for extra neon punch -->
-    <path android:fillColor="#3300FFAA" android:pathData="M76,16h16h0v30h-16z"/>
-    <path android:fillColor="#6600FFAA" android:pathData="M78,18h12v26h-12z"/>
-    <!-- body (1 dp wider than others for dominance) -->
-    <path android:fillColor="#00FFAA"   android:pathData="M80,20h8v24h-8z"/>
-    <!-- wick -->
-    <path android:strokeColor="#00FFAA" android:strokeWidth="2"
+    <!-- ── Candle 5  BREAKOUT BULL  cx=84 (tallest, brightest) ── -->
+    <path android:fillColor="#3300FFEE" android:pathData="M76,16h16v30h-16z"/>
+    <path android:fillColor="#6600FFEE" android:pathData="M78,18h12v26h-12z"/>
+    <path android:fillColor="#00FFEE"   android:pathData="M80,20h8v24h-8z"/>
+    <path android:strokeColor="#00FFEE" android:strokeWidth="2"
           android:pathData="M84,12 L84,50"/>
 
-    <!-- Tiny dot accents at candle highs — adds chart detail -->
-    <path android:fillColor="#FF3D6A" android:pathData="M20,43 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
-    <path android:fillColor="#00C896" android:pathData="M35,30 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
-    <path android:fillColor="#FF3D6A" android:pathData="M50,36 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
-    <path android:fillColor="#00C896" android:pathData="M65,17 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
-    <path android:fillColor="#00FFAA" android:pathData="M82,11 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
+    <!-- Tiny high-point dots -->
+    <path android:fillColor="#FF00CC" android:pathData="M20,43 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
+    <path android:fillColor="#00E5FF" android:pathData="M35,30 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
+    <path android:fillColor="#FF00CC" android:pathData="M50,36 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
+    <path android:fillColor="#00E5FF" android:pathData="M65,17 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
+    <path android:fillColor="#00FFEE" android:pathData="M82,11 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
 
 </vector>
