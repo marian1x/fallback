@@ -1,30 +1,66 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- An upward trend line over candlesticks; content kept inside the adaptive-icon safe zone. -->
+<!--
+    Cyberpunk candlestick logo — 5 bars in ascending neon pattern.
+    Bear candles: neon pink-red  #FF3D6A
+    Bull candles: neon teal-green #00C896
+    Breakout bar: bright neon mint #00FFAA
+    Glow layers use 40% alpha versions of the same hues.
+    All candle bodies sit inside the adaptive-icon safe zone (18–90 dp).
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Candlesticks -->
-    <path android:fillColor="#16A34A" android:pathData="M40,58h6v18h-6z" />
-    <path android:strokeColor="#16A34A" android:strokeWidth="2" android:pathData="M43,52V80" />
-
-    <path android:fillColor="#16A34A" android:pathData="M54,48h6v20h-6z" />
-    <path android:strokeColor="#16A34A" android:strokeWidth="2" android:pathData="M57,42V72" />
-
-    <path android:fillColor="#22C55E" android:pathData="M68,40h6v16h-6z" />
-    <path android:strokeColor="#22C55E" android:strokeWidth="2" android:pathData="M71,34V60" />
-
-    <!-- Upward trend line with arrow -->
+    <!-- Price-axis baseline -->
     <path
-        android:strokeColor="#E2E8F0"
-        android:strokeWidth="4"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:fillColor="#00000000"
-        android:pathData="M36,66 L50,54 L60,60 L74,38" />
-    <path
-        android:fillColor="#E2E8F0"
-        android:pathData="M74,38 l-12,1 l8,8 z" />
+        android:strokeColor="#1A3050"
+        android:strokeWidth="1"
+        android:pathData="M14,86 L94,86"/>
+
+    <!-- ── Candle 1  BEAR  cx=22 ───────────────────────── -->
+    <!-- outer glow -->
+    <path android:fillColor="#55FF3D6A" android:pathData="M16,52h12v22h-12z"/>
+    <!-- body -->
+    <path android:fillColor="#FF3D6A"   android:pathData="M18,54h8v18h-8z"/>
+    <!-- wick -->
+    <path android:strokeColor="#FF3D6A" android:strokeWidth="1.5"
+          android:pathData="M22,44 L22,78"/>
+
+    <!-- ── Candle 2  BULL  cx=37 ───────────────────────── -->
+    <path android:fillColor="#5500C896" android:pathData="M31,38h12v24h-12z"/>
+    <path android:fillColor="#00C896"   android:pathData="M33,40h8v20h-8z"/>
+    <path android:strokeColor="#00C896" android:strokeWidth="1.5"
+          android:pathData="M37,31 L37,66"/>
+
+    <!-- ── Candle 3  BEAR  cx=52 ───────────────────────── -->
+    <path android:fillColor="#55FF3D6A" android:pathData="M46,44h12v20h-12z"/>
+    <path android:fillColor="#FF3D6A"   android:pathData="M48,46h8v16h-8z"/>
+    <path android:strokeColor="#FF3D6A" android:strokeWidth="1.5"
+          android:pathData="M52,37 L52,70"/>
+
+    <!-- ── Candle 4  BULL  cx=67 ───────────────────────── -->
+    <path android:fillColor="#5500C896" android:pathData="M61,26h12v26h-12z"/>
+    <path android:fillColor="#00C896"   android:pathData="M63,28h8v22h-8z"/>
+    <path android:strokeColor="#00C896" android:strokeWidth="1.5"
+          android:pathData="M67,18 L67,58"/>
+
+    <!-- ── Candle 5  BREAKOUT BULL  cx=84 (widest, brightest) ── -->
+    <!-- double-layer glow for extra neon punch -->
+    <path android:fillColor="#3300FFAA" android:pathData="M76,16h16h0v30h-16z"/>
+    <path android:fillColor="#6600FFAA" android:pathData="M78,18h12v26h-12z"/>
+    <!-- body (1 dp wider than others for dominance) -->
+    <path android:fillColor="#00FFAA"   android:pathData="M80,20h8v24h-8z"/>
+    <!-- wick -->
+    <path android:strokeColor="#00FFAA" android:strokeWidth="2"
+          android:pathData="M84,12 L84,50"/>
+
+    <!-- Tiny dot accents at candle highs — adds chart detail -->
+    <path android:fillColor="#FF3D6A" android:pathData="M20,43 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
+    <path android:fillColor="#00C896" android:pathData="M35,30 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
+    <path android:fillColor="#FF3D6A" android:pathData="M50,36 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
+    <path android:fillColor="#00C896" android:pathData="M65,17 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
+    <path android:fillColor="#00FFAA" android:pathData="M82,11 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0"/>
+
 </vector>
