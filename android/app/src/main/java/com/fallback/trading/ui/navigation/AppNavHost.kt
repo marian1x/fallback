@@ -1,18 +1,22 @@
 package com.fallback.trading.ui.navigation
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import com.fallback.trading.R
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -93,12 +97,13 @@ private fun SplashScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Text(
-                "Fallback Trading",
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onBackground,
+            Image(
+                painter = painterResource(R.drawable.logo_sait),
+                contentDescription = "SAIT Next Gen Trading",
+                modifier = Modifier.fillMaxWidth(0.78f).padding(bottom = 36.dp),
+                contentScale = ContentScale.Fit,
             )
-            CircularProgressIndicator(Modifier.padding(top = 16.dp))
+            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
         }
     }
 }

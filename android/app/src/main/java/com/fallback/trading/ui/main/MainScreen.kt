@@ -3,7 +3,6 @@ package com.fallback.trading.ui.main
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -19,9 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
-import com.fallback.trading.R
+import com.fallback.trading.ui.theme.BrandTeal
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ShowChart
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -43,7 +40,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -137,11 +133,11 @@ fun MainScreen(
             TopAppBar(
                 title = {
                     if (currentTab == MainTab.Portfolio) {
-                        Image(
-                            painter = painterResource(R.drawable.logo_sait),
-                            contentDescription = "SAIT Next Gen Trading",
-                            modifier = Modifier.height(36.dp),
-                            contentScale = ContentScale.FillHeight,
+                        Text(
+                            "SAIT",
+                            fontWeight = FontWeight.ExtraBold,
+                            color = BrandTeal,
+                            style = MaterialTheme.typography.headlineMedium,
                         )
                     } else {
                         Text(currentTab.label, fontWeight = FontWeight.Bold)
@@ -300,20 +296,34 @@ private fun AdminScopeSelector(
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        TextButton(onClick = { expanded = true }) {
-            Icon(
-                Icons.Outlined.Groups,
-                contentDescription = "Trading scope",
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(
-                scope.label,
-                style = MaterialTheme.typography.labelLarge,
-                maxLines = 1,
-                modifier = Modifier.widthIn(max = 120.dp),
-            )
-            Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+        // Filled chip so the admin scope control is unmissable
+        Surface(
+            onClick = { expanded = true },
+            shape = MaterialTheme.shapes.extraLarge,
+            color = BrandTeal.copy(alpha = 0.18f),
+            modifier = Modifier.padding(end = 4.dp),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.Groups,
+                    contentDescription = "Admin scope",
+                    tint = BrandTeal,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    "ADMIN · ${scope.label}",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = BrandTeal,
+                    maxLines = 1,
+                    modifier = Modifier.widthIn(max = 130.dp),
+                )
+                Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = BrandTeal, modifier = Modifier.size(16.dp))
+            }
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
