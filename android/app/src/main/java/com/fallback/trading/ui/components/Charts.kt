@@ -3,11 +3,24 @@ package com.fallback.trading.ui.components
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -17,8 +30,12 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.fallback.trading.ui.Format
+import kotlin.math.abs
 import kotlin.math.min
 
 /**
@@ -84,6 +101,61 @@ fun LineChart(
         val dot = Offset(idx * stepX, y(v))
         drawCircle(lineColor.copy(alpha = 0.20f), radius = 7.dp.toPx(), center = dot)
         drawCircle(lineColor, radius = 4.dp.toPx(), center = dot)
+    }
+}
+
+data class BarEntry(val label: String, val value: Float)
+
+/** Labeled horizontal bar chart. Supports positive (green) and negative (red) values. */
+@Composable
+fun HorizontalBarChart(
+    entries: List<BarEntry>,
+    modifier: Modifier = Modifier,
+    barColor: Color = MaterialTheme.colorScheme.primary,
+    positiveColor: Color = barColor,
+    negativeColor: Color = barColor,
+) {
+    if (entries.isEmpty()) return
+    val max = entries.maxOfOrNull { abs(it.value) }?.takeIf { it > 0f } ?: 1f
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        entries.forEach { entry ->
+            val fraction = (abs(entry.value) / max).coerceIn(0f, 1f)
+            val color = if (entry.value >= 0f) positiveColor else negativeColor
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    entry.label,
+                    modifier = Modifier.width(72.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(14.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(fraction)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(color.copy(alpha = 0.85f)),
+                    )
+                }
+                Text(
+                    Format.moneySigned(entry.value.toDouble()),
+                    modifier = Modifier.width(64.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                )
+            }
+        }
     }
 }
 

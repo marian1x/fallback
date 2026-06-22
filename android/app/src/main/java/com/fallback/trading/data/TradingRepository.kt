@@ -283,13 +283,44 @@ class TradingRepository(
     private fun Throwable.friendly(): String =
         message?.takeIf { it.isNotBlank() } ?: this::class.java.simpleName
 
+    suspend fun createUser(
+        username: String,
+        email: String,
+        tvUser: String,
+        password: String,
+    ): ApiResult<String> = withContext(Dispatchers.IO) {
+        try {
+            if (session.csrfToken == null) refreshCsrf()
+            val resp = network.requireApi().createUser(username, email, tvUser, password)
+            if (resp.code() in 300..399) {
+                val location = resp.raw().header("Location").orEmpty()
+                if (location.contains("login", ignoreCase = true)) {
+                    return@withContext ApiResult.Unauthorized
+                }
+                val page = network.requireApi().getAdminUsersPage()
+                val html = page.body()?.string() ?: ""
+                val success = FLASH_SUCCESS.find(html)?.groupValues?.getOrNull(1)?.trim()
+                val danger = FLASH_DANGER.find(html)?.groupValues?.getOrNull(1)?.trim()
+                return@withContext when {
+                    !success.isNullOrBlank() -> ApiResult.Success(success)
+                    !danger.isNullOrBlank() -> ApiResult.Error(danger)
+                    else -> ApiResult.Error("Unknown response from server.")
+                }
+            }
+            ApiResult.Error("Unexpected response (HTTP ${resp.code()}).")
+        } catch (e: Exception) {
+            ApiResult.Error(e.friendly())
+        }
+    }
+
     private companion object {
         val CSRF_META =
             Regex("""<meta\s+name=["']csrf-token["']\s+content=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
 
-        // Matches the admin "target user" <option> elements (only those carry
-        // data-per-trade-amount), capturing the user id and username.
         val ADMIN_USER_OPTION =
             Regex("""value="(\d+)"\s+data-per-trade-amount="[^"]*"[^>]*>\s*([^<]+?)\s*</option>""", RegexOption.IGNORE_CASE)
+
+        val FLASH_SUCCESS = Regex("""alert-success[^>]*>\s*([^<]+)""", RegexOption.IGNORE_CASE)
+        val FLASH_DANGER = Regex("""alert-danger[^>]*>\s*([^<]+)""", RegexOption.IGNORE_CASE)
     }
 }

@@ -94,6 +94,18 @@ interface TradingApi {
 
     @POST("api/stock_intelligence/analysis")
     suspend fun analysis(@Body body: Map<String, String>): retrofit2.Response<AnalysisResponseDto>
+
+    @FormUrlEncoded
+    @POST("admin/users/create")
+    suspend fun createUser(
+        @Field("username") username: String,
+        @Field("email") email: String,
+        @Field("tradingview_user") tvUser: String,
+        @Field("password") password: String,
+    ): retrofit2.Response<ResponseBody>
+
+    @GET("admin/users")
+    suspend fun getAdminUsersPage(): retrofit2.Response<ResponseBody>
 }
 
 /**

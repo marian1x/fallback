@@ -24,9 +24,11 @@ import androidx.compose.material.icons.automirrored.outlined.ShowChart
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -68,6 +70,8 @@ import androidx.navigation.compose.rememberNavController
 import com.fallback.trading.AppContainer
 import com.fallback.trading.data.AdminUser
 import com.fallback.trading.data.TradingScope
+import com.fallback.trading.ui.admin.CreateUserSheet
+import com.fallback.trading.ui.analytics.AnalyticsScreen
 import com.fallback.trading.ui.history.HistoryScreen
 import com.fallback.trading.ui.intelligence.IntelligenceScreen
 import com.fallback.trading.ui.portfolio.PortfolioScreen
@@ -83,7 +87,8 @@ private enum class MainTab(val route: String, val label: String, val icon: Image
     Portfolio("portfolio", "Portfolio", Icons.Outlined.AccountBalanceWallet),
     Positions("positions", "Positions", Icons.AutoMirrored.Outlined.ShowChart),
     History("history", "History", Icons.Outlined.History),
-    Insights("intel", "Insights", Icons.Outlined.AutoAwesome),
+    Analytics("analytics", "Analysis", Icons.Outlined.BarChart),
+    AI("intel", "AI", Icons.Outlined.AutoAwesome),
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -99,6 +104,8 @@ fun MainScreen(
     val tradeViewModel: TradeViewModel = viewModel(factory = TradeViewModel.factory(container))
     var sheetOpen by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var createUserSheetOpen by remember { mutableStateOf(false) }
+    val createUserSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val updateViewModel: UpdateViewModel = viewModel(factory = UpdateViewModel.factory(container))
     LaunchedEffect(Unit) { updateViewModel.checkOnLaunch() }
@@ -158,6 +165,17 @@ fun MainScreen(
                         Icon(Icons.Outlined.MoreVert, contentDescription = "More")
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        if (isAdmin) {
+                            DropdownMenuItem(
+                                text = { Text("Create user") },
+                                leadingIcon = { Icon(Icons.Outlined.PersonAdd, contentDescription = null) },
+                                onClick = {
+                                    menuOpen = false
+                                    createUserSheetOpen = true
+                                },
+                            )
+                            HorizontalDivider()
+                        }
                         DropdownMenuItem(
                             text = { Text("Check for updates") },
                             onClick = {
@@ -209,7 +227,10 @@ fun MainScreen(
             composable(MainTab.History.route) {
                 HistoryScreen(container, onSessionExpired = onSessionExpired)
             }
-            composable(MainTab.Insights.route) {
+            composable(MainTab.Analytics.route) {
+                AnalyticsScreen(container, onSessionExpired = onSessionExpired)
+            }
+            composable(MainTab.AI.route) {
                 IntelligenceScreen(container, onSessionExpired = onSessionExpired)
             }
         }
@@ -228,6 +249,22 @@ fun MainScreen(
                     onSessionExpired()
                 },
                 onClose = { dismissSheet() },
+            )
+        }
+    }
+
+    if (createUserSheetOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { createUserSheetOpen = false },
+            sheetState = createUserSheetState,
+            containerColor = MaterialTheme.colorScheme.surface,
+        ) {
+            CreateUserSheet(
+                repository = container.repository,
+                onSessionExpired = {
+                    createUserSheetOpen = false
+                    onSessionExpired()
+                },
             )
         }
     }
@@ -256,7 +293,8 @@ private fun AppBottomBar(
             BarItem(MainTab.Positions, current, onSelect)
             Spacer(Modifier.width(64.dp)) // gap for the center FAB
             BarItem(MainTab.History, current, onSelect)
-            BarItem(MainTab.Insights, current, onSelect)
+            BarItem(MainTab.Analytics, current, onSelect)
+            BarItem(MainTab.AI, current, onSelect)
         }
     }
 }
