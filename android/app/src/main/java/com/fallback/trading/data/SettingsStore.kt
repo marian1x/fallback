@@ -1,6 +1,7 @@
 package com.fallback.trading.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -19,10 +20,14 @@ class SettingsStore(private val context: Context) {
     private object Keys {
         val BASE_URL = stringPreferencesKey("base_url")
         val LAST_USERNAME = stringPreferencesKey("last_username")
+        val NOTIFY_TRADE_OPENED = booleanPreferencesKey("notify_trade_opened")
+        val NOTIFY_TRADE_CLOSED = booleanPreferencesKey("notify_trade_closed")
     }
 
     val baseUrl: Flow<String?> = context.dataStore.data.map { it[Keys.BASE_URL] }
     val lastUsername: Flow<String?> = context.dataStore.data.map { it[Keys.LAST_USERNAME] }
+    val notifyTradeOpened: Flow<Boolean> = context.dataStore.data.map { it[Keys.NOTIFY_TRADE_OPENED] ?: true }
+    val notifyTradeClosed: Flow<Boolean> = context.dataStore.data.map { it[Keys.NOTIFY_TRADE_CLOSED] ?: true }
 
     suspend fun baseUrlOnce(): String? = baseUrl.first()
 
@@ -32,6 +37,14 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setLastUsername(username: String) {
         context.dataStore.edit { it[Keys.LAST_USERNAME] = username }
+    }
+
+    suspend fun setNotifyTradeOpened(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.NOTIFY_TRADE_OPENED] = enabled }
+    }
+
+    suspend fun setNotifyTradeClosed(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.NOTIFY_TRADE_CLOSED] = enabled }
     }
 
     companion object {

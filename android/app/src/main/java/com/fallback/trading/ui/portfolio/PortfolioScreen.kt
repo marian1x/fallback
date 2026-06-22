@@ -60,6 +60,7 @@ import com.fallback.trading.ui.theme.BrandTeal
 import com.fallback.trading.ui.theme.plColor
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
@@ -92,9 +93,14 @@ class PortfolioViewModel(private val repo: TradingRepository) : ViewModel() {
 
     init {
         refresh()
-        // Reload when the admin switches trading scope.
         viewModelScope.launch {
             repo.adminState.scope.drop(1).collect { refresh() }
+        }
+        viewModelScope.launch {
+            while (true) {
+                delay(30_000)
+                if (_state.value.data != null) refresh()
+            }
         }
     }
 

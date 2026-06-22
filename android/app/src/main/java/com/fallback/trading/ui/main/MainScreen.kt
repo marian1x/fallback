@@ -1,5 +1,8 @@
 package com.fallback.trading.ui.main
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
@@ -28,6 +31,7 @@ import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material3.DropdownMenu
@@ -41,6 +45,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -118,6 +123,13 @@ fun MainScreen(
     val adminUsers by container.repository.adminState.users.collectAsStateWithLifecycle()
     val tradingScope by container.repository.adminState.scope.collectAsStateWithLifecycle()
 
+    val notifyOpened by container.settings.notifyTradeOpened.collectAsStateWithLifecycle(initialValue = true)
+    val notifyClosed by container.settings.notifyTradeClosed.collectAsStateWithLifecycle(initialValue = true)
+
+    // Request POST_NOTIFICATIONS permission on first MainScreen entry.
+    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    LaunchedEffect(Unit) { permLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
+
     val onSessionExpired: () -> Unit = {
         scope.launch {
             container.repository.logout()
@@ -177,6 +189,29 @@ fun MainScreen(
                             HorizontalDivider()
                         }
                         DropdownMenuItem(
+                            text = { Text("Notify: trade opened") },
+                            leadingIcon = { Icon(Icons.Outlined.NotificationsNone, contentDescription = null) },
+                            trailingIcon = {
+                                Switch(
+                                    checked = notifyOpened,
+                                    onCheckedChange = { scope.launch { container.settings.setNotifyTradeOpened(it) } },
+                                )
+                            },
+                            onClick = { scope.launch { container.settings.setNotifyTradeOpened(!notifyOpened) } },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Notify: trade closed") },
+                            leadingIcon = { Icon(Icons.Outlined.NotificationsNone, contentDescription = null) },
+                            trailingIcon = {
+                                Switch(
+                                    checked = notifyClosed,
+                                    onCheckedChange = { scope.launch { container.settings.setNotifyTradeClosed(it) } },
+                                )
+                            },
+                            onClick = { scope.launch { container.settings.setNotifyTradeClosed(!notifyClosed) } },
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
                             text = { Text("Check for updates") },
                             onClick = {
                                 menuOpen = false
@@ -208,7 +243,9 @@ fun MainScreen(
                 },
             )
         },
-        floatingActionButton = { TradeFab(onClick = { openTrade() }) },
+        floatingActionButton = {
+            if (currentTab != MainTab.Analytics) TradeFab(onClick = { openTrade() })
+        },
         floatingActionButtonPosition = FabPosition.Center,
     ) { innerPadding ->
         NavHost(

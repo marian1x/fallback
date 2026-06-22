@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import com.fallback.trading.data.AdminState
 import com.fallback.trading.data.NetworkClient
+import com.fallback.trading.data.NotificationHelper
 import com.fallback.trading.data.PersistentCookieJar
 import com.fallback.trading.data.SecureStore
 import com.fallback.trading.data.SessionState
@@ -34,5 +35,6 @@ class TradingApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        NotificationHelper.createChannel(this)
     }
 }

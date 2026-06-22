@@ -36,10 +36,14 @@ object Format {
             dateTime.format(Instant.parse(iso))
         } catch (e: Exception) {
             try {
-                // Some timestamps include an explicit offset rather than Z.
                 dateTime.format(java.time.OffsetDateTime.parse(iso).toInstant())
             } catch (e2: Exception) {
-                iso
+                try {
+                    // Server may return bare LocalDateTime without timezone (assume UTC).
+                    dateTime.format(java.time.LocalDateTime.parse(iso).toInstant(java.time.ZoneOffset.UTC))
+                } catch (e3: Exception) {
+                    iso
+                }
             }
         }
     }

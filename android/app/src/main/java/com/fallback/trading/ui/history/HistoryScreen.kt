@@ -123,7 +123,11 @@ class HistoryViewModel(private val repo: TradingRepository) : ViewModel() {
             try {
                 java.time.OffsetDateTime.parse(iso).toInstant()
             } catch (e2: Exception) {
-                null
+                try {
+                    java.time.LocalDateTime.parse(iso).toInstant(java.time.ZoneOffset.UTC)
+                } catch (e3: Exception) {
+                    null
+                }
             }
         }
     }

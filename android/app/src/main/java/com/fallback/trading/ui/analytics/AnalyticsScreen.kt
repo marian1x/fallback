@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -24,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -33,10 +36,10 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.fallback.trading.AppContainer
 import com.fallback.trading.data.ApiResult
+import com.fallback.trading.data.ClosedTradeDto
 import com.fallback.trading.data.PositionDto
 import com.fallback.trading.data.TradingRepository
 import com.fallback.trading.ui.Format
-import com.fallback.trading.ui.UiState
 import com.fallback.trading.ui.components.BarEntry
 import com.fallback.trading.ui.components.DonutChart
 import com.fallback.trading.ui.components.DonutSlice
@@ -46,86 +49,214 @@ import com.fallback.trading.ui.components.HorizontalBarChart
 import com.fallback.trading.ui.components.LoadingState
 import com.fallback.trading.ui.theme.LossRed
 import com.fallback.trading.ui.theme.ProfitGreen
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.temporal.ChronoUnit
 import kotlin.math.abs
 
+// ── Data model ────────────────────────────────────────────────────────────────
+
+enum class AnalyticsPeriod(val label: String) { ALL("All"), WEEK("Week"), MONTH("Month"), YEAR("Year") }
+
+data class SymbolStats(
+    val symbol: String,
+    val closedCount: Int,
+    val winRate: Double,
+    val closedPl: Double,
+    val openPl: Double,
+)
+
 data class AnalyticsData(
+    val period: AnalyticsPeriod,
+    // Open positions
     val positions: List<PositionDto>,
-    val totalPl: Double,
+    val totalOpenPl: Double,
     val grossExposure: Double,
     val netExposure: Double,
     val longExposure: Double,
     val shortExposure: Double,
-    val topPosition: PositionDto?,
     val plBySymbol: List<BarEntry>,
     val exposureBySymbol: List<BarEntry>,
+    // Closed trades (period-filtered)
+    val filteredClosed: List<ClosedTradeDto>,
+    val totalClosedPl: Double,
+    val winRate: Double,
+    val bestPerformers: List<ClosedTradeDto>,
+    val worstPerformers: List<ClosedTradeDto>,
+    val symbolStats: List<SymbolStats>,
 )
 
+data class AnalyticsUiState(
+    val loading: Boolean = true,
+    val error: String? = null,
+    val sessionExpired: Boolean = false,
+    val data: AnalyticsData? = null,
+    val period: AnalyticsPeriod = AnalyticsPeriod.ALL,
+)
+
+// ── ViewModel ─────────────────────────────────────────────────────────────────
+
 class AnalyticsViewModel(private val repo: TradingRepository) : ViewModel() {
-    private val _state = MutableStateFlow(UiState<AnalyticsData>(loading = true))
+    private val _state = MutableStateFlow(AnalyticsUiState())
     val state = _state.asStateFlow()
 
+    @Volatile private var rawPositions: List<PositionDto> = emptyList()
+    @Volatile private var rawClosed: List<ClosedTradeDto> = emptyList()
+    private var initialized = false
+
     init {
-        refresh()
+        loadData()
         viewModelScope.launch {
-            repo.adminState.scope.drop(1).collect { refresh() }
+            repo.adminState.scope.drop(1).collect {
+                initialized = false
+                loadData()
+            }
         }
         viewModelScope.launch {
             while (true) {
                 delay(15_000)
-                refresh()
+                if (initialized) silentRefresh()
             }
         }
     }
 
-    fun refresh() {
+    fun loadData() {
         viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null) }
-            when (val result = repo.getOpenPositions()) {
-                is ApiResult.Success -> {
-                    val positions = result.data
-                    val totalPl = positions.sumOf { it.unrealizedPl }
-                    val grossExposure = positions.sumOf { abs(it.marketValue) }
-                    val netExposure = positions.sumOf { it.marketValue }
-                    val longExposure = positions.sumOf { maxOf(it.marketValue, 0.0) }
-                    val shortExposure = positions.sumOf { -minOf(it.marketValue, 0.0) }
-                    val topPosition = positions.maxByOrNull { abs(it.unrealizedPl) }
+            val ok = fetch()
+            if (ok) {
+                initialized = true
+                recompute()
+            }
+        }
+    }
 
-                    val plBySymbol = positions
-                        .groupBy { it.symbol }
-                        .map { (sym, pos) -> BarEntry(sym, pos.sumOf { it.unrealizedPl }.toFloat()) }
-                        .sortedByDescending { abs(it.value) }
-                        .take(8)
+    private suspend fun silentRefresh() {
+        if (fetch()) recompute()
+    }
 
-                    val exposureBySymbol = positions
-                        .groupBy { it.symbol }
-                        .map { (sym, pos) -> BarEntry(sym, pos.sumOf { abs(it.marketValue) }.toFloat()) }
-                        .sortedByDescending { it.value }
-                        .take(8)
+    private suspend fun fetch(): Boolean = try {
+        coroutineScope {
+            val posDeferred = async { repo.getOpenPositions() }
+            val closedDeferred = async { repo.getClosedTrades() }
+            val posResult = posDeferred.await()
+            val closedResult = closedDeferred.await()
 
-                    _state.update {
-                        UiState(
-                            data = AnalyticsData(
-                                positions = positions,
-                                totalPl = totalPl,
-                                grossExposure = grossExposure,
-                                netExposure = netExposure,
-                                longExposure = longExposure,
-                                shortExposure = shortExposure,
-                                topPosition = topPosition,
-                                plBySymbol = plBySymbol,
-                                exposureBySymbol = exposureBySymbol,
-                            )
-                        )
-                    }
+            when (posResult) {
+                is ApiResult.Unauthorized -> {
+                    _state.update { it.copy(loading = false, sessionExpired = true) }
+                    return@coroutineScope false
                 }
-                is ApiResult.Unauthorized -> _state.update { it.copy(loading = false, sessionExpired = true) }
-                is ApiResult.Error -> _state.update { it.copy(loading = false, error = result.message) }
+                is ApiResult.Error -> {
+                    _state.update { it.copy(loading = false, error = posResult.message) }
+                    return@coroutineScope false
+                }
+                is ApiResult.Success -> rawPositions = posResult.data
+            }
+            if (closedResult is ApiResult.Success) rawClosed = closedResult.data
+            true
+        }
+    } catch (e: Exception) {
+        _state.update { it.copy(loading = false, error = e.message ?: "Load failed") }
+        false
+    }
+
+    fun setPeriod(period: AnalyticsPeriod) {
+        _state.update { it.copy(period = period) }
+        recompute()
+    }
+
+    private fun recompute() {
+        val period = _state.value.period
+        _state.update { it.copy(loading = false, data = compute(rawPositions, rawClosed, period)) }
+    }
+
+    private fun compute(
+        positions: List<PositionDto>,
+        closed: List<ClosedTradeDto>,
+        period: AnalyticsPeriod,
+    ): AnalyticsData {
+        val cutoff: Instant? = when (period) {
+            AnalyticsPeriod.ALL -> null
+            AnalyticsPeriod.WEEK -> Instant.now().minus(7, ChronoUnit.DAYS)
+            AnalyticsPeriod.MONTH -> Instant.now().minus(30, ChronoUnit.DAYS)
+            AnalyticsPeriod.YEAR -> Instant.now().minus(365, ChronoUnit.DAYS)
+        }
+        val filtered = if (cutoff == null) closed else closed.filter {
+            parseInstant(it.closeTime)?.isAfter(cutoff) == true
+        }
+
+        val totalOpenPl = positions.sumOf { it.unrealizedPl }
+        val grossExposure = positions.sumOf { abs(it.marketValue) }
+        val netExposure = positions.sumOf { it.marketValue }
+        val longExposure = positions.sumOf { maxOf(it.marketValue, 0.0) }
+        val shortExposure = positions.sumOf { -minOf(it.marketValue, 0.0) }
+
+        val plBySymbol = positions
+            .groupBy { it.symbol }
+            .map { (sym, pos) -> BarEntry(sym, pos.sumOf { it.unrealizedPl }.toFloat()) }
+            .sortedByDescending { abs(it.value) }.take(8)
+
+        val exposureBySymbol = positions
+            .groupBy { it.symbol }
+            .map { (sym, pos) -> BarEntry(sym, pos.sumOf { abs(it.marketValue) }.toFloat()) }
+            .sortedByDescending { it.value }.take(8)
+
+        val totalClosedPl = filtered.sumOf { it.profitLoss ?: 0.0 }
+        val wins = filtered.count { (it.profitLoss ?: 0.0) > 0 }
+        val winRate = if (filtered.isNotEmpty()) wins * 100.0 / filtered.size else 0.0
+
+        val best = filtered.filter { (it.profitLoss ?: 0.0) > 0 }
+            .sortedByDescending { it.profitLoss ?: 0.0 }.take(5)
+        val worst = filtered.filter { (it.profitLoss ?: 0.0) < 0 }
+            .sortedBy { it.profitLoss ?: 0.0 }.take(5)
+
+        val openPlMap = positions.groupBy { it.symbol }.mapValues { (_, v) -> v.sumOf { it.unrealizedPl } }
+        val allSymbols = (filtered.map { it.symbol } + positions.map { it.symbol }).toSet()
+        val symbolStats = allSymbols.map { sym ->
+            val trades = filtered.filter { it.symbol == sym }
+            val tradeWins = trades.count { (it.profitLoss ?: 0.0) > 0 }
+            SymbolStats(
+                symbol = sym,
+                closedCount = trades.size,
+                winRate = if (trades.isNotEmpty()) tradeWins * 100.0 / trades.size else 0.0,
+                closedPl = trades.sumOf { it.profitLoss ?: 0.0 },
+                openPl = openPlMap[sym] ?: 0.0,
+            )
+        }.sortedByDescending { abs(it.closedPl + it.openPl) }
+
+        return AnalyticsData(
+            period = period,
+            positions = positions,
+            totalOpenPl = totalOpenPl,
+            grossExposure = grossExposure,
+            netExposure = netExposure,
+            longExposure = longExposure,
+            shortExposure = shortExposure,
+            plBySymbol = plBySymbol,
+            exposureBySymbol = exposureBySymbol,
+            filteredClosed = filtered,
+            totalClosedPl = totalClosedPl,
+            winRate = winRate,
+            bestPerformers = best,
+            worstPerformers = worst,
+            symbolStats = symbolStats,
+        )
+    }
+
+    private fun parseInstant(iso: String?): Instant? {
+        if (iso.isNullOrBlank()) return null
+        return try { Instant.parse(iso) } catch (e: Exception) {
+            try { java.time.OffsetDateTime.parse(iso).toInstant() } catch (e2: Exception) {
+                try { java.time.LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC) } catch (e3: Exception) { null }
             }
         }
     }
@@ -137,6 +268,8 @@ class AnalyticsViewModel(private val repo: TradingRepository) : ViewModel() {
     }
 }
 
+// ── Screen ────────────────────────────────────────────────────────────────────
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AnalyticsScreen(
@@ -144,109 +277,86 @@ fun AnalyticsScreen(
     onSessionExpired: () -> Unit,
     viewModel: AnalyticsViewModel = viewModel(factory = AnalyticsViewModel.factory(container)),
 ) {
-    val state by viewModel.state.collectAsStateWithLifecycle()
+    val uiState by viewModel.state.collectAsStateWithLifecycle()
 
-    LaunchedEffect(state.sessionExpired) {
-        if (state.sessionExpired) onSessionExpired()
+    LaunchedEffect(uiState.sessionExpired) {
+        if (uiState.sessionExpired) onSessionExpired()
     }
 
     PullToRefreshBox(
-        isRefreshing = state.loading,
-        onRefresh = viewModel::refresh,
+        isRefreshing = uiState.loading,
+        onRefresh = viewModel::loadData,
         modifier = Modifier.fillMaxSize(),
     ) {
-        val data = state.data
-        when {
-            data != null -> AnalyticsContent(data)
-            state.loading -> LoadingState()
-            state.error != null -> ErrorState(state.error!!, onRetry = viewModel::refresh)
-            else -> EmptyState("No open positions to analyze.")
+        Column(Modifier.fillMaxSize()) {
+            // Period chips
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                AnalyticsPeriod.entries.forEach { period ->
+                    FilterChip(
+                        selected = uiState.period == period,
+                        onClick = { viewModel.setPeriod(period) },
+                        label = { Text(period.label) },
+                    )
+                }
+            }
+
+            val data = uiState.data
+            when {
+                data != null -> AnalyticsContent(data)
+                uiState.loading -> LoadingState()
+                uiState.error != null -> ErrorState(uiState.error!!, onRetry = viewModel::loadData)
+                else -> EmptyState("No data available.")
+            }
         }
     }
 }
 
 @Composable
 private fun AnalyticsContent(data: AnalyticsData) {
-    val plColor = if (data.totalPl >= 0) ProfitGreen else LossRed
-    val netColor = if (data.netExposure >= 0) ProfitGreen else LossRed
-
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 96.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        // ── Open Positions ──────────────────────────────────────────
         item {
-            Text("Summary", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            SectionHeader("Open Positions", "${data.positions.size} active")
         }
         item {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MetricCard("Total P/L", Format.moneySigned(data.totalPl), plColor, Modifier.weight(1f))
-                MetricCard("Positions", "${data.positions.size}", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                MetricCard("Unrealized P/L", Format.moneySigned(data.totalOpenPl),
+                    if (data.totalOpenPl >= 0) ProfitGreen else LossRed, Modifier.weight(1f))
+                MetricCard("Gross Exposure", Format.money(data.grossExposure),
+                    MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
             }
         }
         item {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MetricCard("Gross Exposure", Format.money(data.grossExposure), MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
-                MetricCard("Net Exposure", Format.moneySigned(data.netExposure), netColor, Modifier.weight(1f))
-            }
-        }
-
-        if (data.topPosition != null) {
-            item {
-                val tp = data.topPosition
-                val tpColor = if (tp.unrealizedPl >= 0) ProfitGreen else LossRed
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(
-                            "Top Position",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column {
-                                Text(tp.symbol, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                Text(
-                                    tp.side.uppercase(),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            Text(
-                                Format.moneySigned(tp.unrealizedPl),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = tpColor,
-                                fontWeight = FontWeight.Bold,
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                MetricCard("Net Exposure", Format.moneySigned(data.netExposure),
+                    if (data.netExposure >= 0) ProfitGreen else LossRed, Modifier.weight(1f))
+                Card(Modifier.weight(1f)) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text("Long / Short", style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            DonutChart(
+                                slices = listOf(
+                                    DonutSlice("L", data.longExposure.toFloat(), ProfitGreen),
+                                    DonutSlice("S", data.shortExposure.toFloat(), LossRed),
+                                ),
+                                modifier = Modifier.size(36.dp),
+                                strokeWidth = 8.dp,
                             )
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Long vs Short", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(12.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        DonutChart(
-                            slices = listOf(
-                                DonutSlice("Long", data.longExposure.toFloat(), ProfitGreen),
-                                DonutSlice("Short", data.shortExposure.toFloat(), LossRed),
-                            ),
-                            modifier = Modifier.size(88.dp),
-                        )
-                        Column(
-                            modifier = Modifier.padding(start = 20.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            LegendItem("Long", Format.money(data.longExposure), ProfitGreen)
-                            LegendItem("Short", Format.money(data.shortExposure), LossRed)
+                            Column {
+                                Text(Format.money(data.longExposure), style = MaterialTheme.typography.labelSmall, color = ProfitGreen)
+                                Text(Format.money(data.shortExposure), style = MaterialTheme.typography.labelSmall, color = LossRed)
+                            }
                         }
                     }
                 }
@@ -255,16 +365,11 @@ private fun AnalyticsContent(data: AnalyticsData) {
 
         if (data.plBySymbol.isNotEmpty()) {
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
+                Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
-                        Text("P/L by Symbol", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        Text("Open P/L by Symbol", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(12.dp))
-                        HorizontalBarChart(
-                            entries = data.plBySymbol,
-                            modifier = Modifier.fillMaxWidth(),
-                            positiveColor = ProfitGreen,
-                            negativeColor = LossRed,
-                        )
+                        HorizontalBarChart(data.plBySymbol, Modifier.fillMaxWidth(), positiveColor = ProfitGreen, negativeColor = LossRed)
                     }
                 }
             }
@@ -272,17 +377,102 @@ private fun AnalyticsContent(data: AnalyticsData) {
 
         if (data.exposureBySymbol.isNotEmpty()) {
             item {
-                Card(modifier = Modifier.fillMaxWidth()) {
+                Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
                         Text("Exposure by Symbol", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(12.dp))
-                        HorizontalBarChart(
-                            entries = data.exposureBySymbol,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        HorizontalBarChart(data.exposureBySymbol, Modifier.fillMaxWidth())
                     }
                 }
             }
+        }
+
+        // ── Closed Trades ───────────────────────────────────────────
+        item {
+            Spacer(Modifier.height(4.dp))
+            SectionHeader("Closed Trades", "${data.filteredClosed.size} · ${data.period.label}")
+        }
+
+        if (data.filteredClosed.isEmpty()) {
+            item { Text("No closed trades in this period.", style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp)) }
+        } else {
+            item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    MetricCard("Total P/L", Format.moneySigned(data.totalClosedPl),
+                        if (data.totalClosedPl >= 0) ProfitGreen else LossRed, Modifier.weight(1f))
+                    MetricCard("Win Rate",
+                        String.format(java.util.Locale.US, "%.0f%%", data.winRate),
+                        MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
+                }
+            }
+
+            if (data.bestPerformers.isNotEmpty()) {
+                item {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text("Best Performers", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = ProfitGreen)
+                            Spacer(Modifier.height(8.dp))
+                            data.bestPerformers.forEachIndexed { i, trade ->
+                                if (i > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+                                PerformerRow(trade)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (data.worstPerformers.isNotEmpty()) {
+                item {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text("Worst Performers", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = LossRed)
+                            Spacer(Modifier.height(8.dp))
+                            data.worstPerformers.forEachIndexed { i, trade ->
+                                if (i > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+                                PerformerRow(trade)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── By Symbol ───────────────────────────────────────────────
+        if (data.symbolStats.isNotEmpty()) {
+            item {
+                Spacer(Modifier.height(4.dp))
+                SectionHeader("By Symbol", "")
+            }
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp)) {
+                        // header
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Symbol", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                            Text("Trades", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("  Win%", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("   P/L", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp))
+                        data.symbolStats.forEachIndexed { i, stat ->
+                            if (i > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), thickness = 0.5.dp)
+                            SymbolStatRow(stat)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String, subtitle: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        if (subtitle.isNotBlank()) {
+            Text(subtitle, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -291,29 +481,44 @@ private fun AnalyticsContent(data: AnalyticsData) {
 private fun MetricCard(label: String, value: String, valueColor: Color, modifier: Modifier = Modifier) {
     Card(modifier = modifier) {
         Column(Modifier.padding(14.dp)) {
-            Text(
-                label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(4.dp))
-            Text(
-                value,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = valueColor,
-            )
+            Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = valueColor)
         }
     }
 }
 
 @Composable
-private fun LegendItem(label: String, value: String, color: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Surface(color = color, shape = MaterialTheme.shapes.extraSmall, modifier = Modifier.size(10.dp)) {}
-        Column {
-            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+private fun PerformerRow(trade: ClosedTradeDto) {
+    val pl = trade.profitLoss ?: 0.0
+    val color = if (pl >= 0) ProfitGreen else LossRed
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(trade.symbol, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(Format.dateTime(trade.closeTime), style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        Column(horizontalAlignment = Alignment.End) {
+            Text(Format.moneySigned(pl), style = MaterialTheme.typography.bodyMedium, color = color, fontWeight = FontWeight.SemiBold)
+            Text(Format.percentSigned(trade.profitLossPct), style = MaterialTheme.typography.labelSmall, color = color)
+        }
+    }
+}
+
+@Composable
+private fun SymbolStatRow(stat: SymbolStats) {
+    val totalPl = stat.closedPl + stat.openPl
+    val color = if (totalPl >= 0) ProfitGreen else LossRed
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(stat.symbol, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("${stat.closedCount}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 8.dp))
+        Text(
+            if (stat.closedCount > 0) String.format(java.util.Locale.US, "  %.0f%%", stat.winRate) else "   —",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(Format.moneySigned(totalPl), style = MaterialTheme.typography.bodySmall, color = color,
+            fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = 8.dp))
     }
 }
