@@ -1,5 +1,6 @@
 package com.fallback.trading.ui.history
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -10,11 +11,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.Clear
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DateRangePicker
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -22,10 +27,15 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.rememberDateRangePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -56,14 +66,22 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.Instant
+import java.time.LocalDate
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
-enum class HistoryPeriod(val label: String) { ALL("All"), WEEK("Week"), MONTH("Month") }
+enum class HistoryPeriod(val label: String) { ALL("All"), TODAY("Today"), WEEK("Week"), MONTH("Month"), CUSTOM("Custom") }
 enum class HistorySortBy { DATE, PL }
 
 data class HistoryFilter(
     val symbolQuery: String = "",
     val period: HistoryPeriod = HistoryPeriod.ALL,
+    val customStart: Long? = null,
+    val customEnd: Long? = null,
     val sortBy: HistorySortBy = HistorySortBy.DATE,
     val ascending: Boolean = false,
 )
@@ -96,15 +114,39 @@ class HistoryViewModel(private val repo: TradingRepository) : ViewModel() {
     fun setFilter(filter: HistoryFilter) { _filter.value = filter }
 
     private fun applyFilter(trades: List<ClosedTradeDto>, filter: HistoryFilter): List<ClosedTradeDto> {
-        val cutoff: Instant? = when (filter.period) {
-            HistoryPeriod.ALL -> null
-            HistoryPeriod.WEEK -> Instant.now().minus(7, ChronoUnit.DAYS)
-            HistoryPeriod.MONTH -> Instant.now().minus(30, ChronoUnit.DAYS)
+        val zone = ZoneId.systemDefault()
+        val now = Instant.now()
+        val (from: Instant?, to: Instant?) = when (filter.period) {
+            HistoryPeriod.ALL -> null to null
+            HistoryPeriod.TODAY -> {
+                val start = LocalDate.now(zone).atStartOfDay(zone).toInstant()
+                start to null
+            }
+            HistoryPeriod.WEEK -> now.minus(7, ChronoUnit.DAYS) to null
+            HistoryPeriod.MONTH -> now.minus(30, ChronoUnit.DAYS) to null
+            HistoryPeriod.CUSTOM -> {
+                val start = filter.customStart?.let {
+                    Instant.ofEpochMilli(it).atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
+                }
+                val end = filter.customEnd?.let {
+                    Instant.ofEpochMilli(it).atZone(zone).toLocalDate().plusDays(1).atStartOfDay(zone).toInstant()
+                }
+                start to end
+            }
         }
         return trades
             .filter { trade ->
-                (filter.symbolQuery.isBlank() || trade.symbol.contains(filter.symbolQuery, ignoreCase = true)) &&
-                    (cutoff == null || parseInstant(trade.closeTime)?.isAfter(cutoff) == true)
+                val symbolOk = filter.symbolQuery.isBlank() ||
+                    trade.symbol.contains(filter.symbolQuery, ignoreCase = true)
+                val t = parseInstant(trade.closeTime)
+                val periodOk = when {
+                    from == null && to == null -> true
+                    t == null -> false
+                    from != null && to != null -> t >= from && t < to
+                    from != null -> t >= from
+                    else -> t < to!!
+                }
+                symbolOk && periodOk
             }
             .sortedWith(Comparator { a, b ->
                 val cmp = when (filter.sortBy) {
@@ -117,19 +159,10 @@ class HistoryViewModel(private val repo: TradingRepository) : ViewModel() {
 
     private fun parseInstant(iso: String?): Instant? {
         if (iso.isNullOrBlank()) return null
-        return try {
-            Instant.parse(iso)
-        } catch (e: Exception) {
-            try {
-                java.time.OffsetDateTime.parse(iso).toInstant()
-            } catch (e2: Exception) {
-                try {
-                    java.time.LocalDateTime.parse(iso).toInstant(java.time.ZoneOffset.UTC)
-                } catch (e3: Exception) {
-                    null
-                }
-            }
-        }
+        return try { Instant.parse(iso) }
+        catch (e: Exception) { try { OffsetDateTime.parse(iso).toInstant() }
+        catch (e2: Exception) { try { LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC) }
+        catch (e3: Exception) { null } } }
     }
 
     companion object {
@@ -171,8 +204,8 @@ fun HistoryScreen(
                             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            itemsIndexed(displayed) { index, trade ->
-                                ClosedTradeCard(trade, index)
+                            itemsIndexed(displayed) { _, trade ->
+                                ClosedTradeCard(trade)
                             }
                         }
                     } else {
@@ -189,9 +222,13 @@ fun HistoryScreen(
     }
 }
 
+private val shortDateFmt: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d")
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FilterBar(filter: HistoryFilter, onFilterChange: (HistoryFilter) -> Unit) {
+    var showDatePicker by remember { mutableStateOf(false) }
+
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 8.dp)) {
         OutlinedTextField(
             value = filter.symbolQuery,
@@ -212,14 +249,30 @@ private fun FilterBar(filter: HistoryFilter, onFilterChange: (HistoryFilter) -> 
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            HistoryPeriod.entries.forEach { period ->
-                FilterChip(
-                    selected = filter.period == period,
-                    onClick = { onFilterChange(filter.copy(period = period)) },
-                    label = { Text(period.label) },
-                )
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                HistoryPeriod.entries.forEach { period ->
+                    val label = if (period == HistoryPeriod.CUSTOM && filter.period == HistoryPeriod.CUSTOM &&
+                        filter.customStart != null) {
+                        buildCustomLabel(filter.customStart, filter.customEnd)
+                    } else {
+                        period.label
+                    }
+                    FilterChip(
+                        selected = filter.period == period,
+                        onClick = {
+                            if (period == HistoryPeriod.CUSTOM) showDatePicker = true
+                            else onFilterChange(filter.copy(period = period, customStart = null, customEnd = null))
+                        },
+                        label = { Text(label) },
+                    )
+                }
             }
-            androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
             IconButton(onClick = { onFilterChange(filter.copy(ascending = !filter.ascending)) }) {
                 Icon(
                     if (filter.ascending) Icons.Outlined.ArrowUpward else Icons.Outlined.ArrowDownward,
@@ -232,7 +285,7 @@ private fun FilterBar(filter: HistoryFilter, onFilterChange: (HistoryFilter) -> 
                 onClick = {
                     onFilterChange(
                         filter.copy(
-                            sortBy = if (filter.sortBy == HistorySortBy.DATE) HistorySortBy.PL else HistorySortBy.DATE
+                            sortBy = if (filter.sortBy == HistorySortBy.DATE) HistorySortBy.PL else HistorySortBy.DATE,
                         )
                     )
                 },
@@ -240,10 +293,49 @@ private fun FilterBar(filter: HistoryFilter, onFilterChange: (HistoryFilter) -> 
             )
         }
     }
+
+    if (showDatePicker) {
+        val pickerState = rememberDateRangePickerState(
+            initialSelectedStartDateMillis = filter.customStart,
+            initialSelectedEndDateMillis = filter.customEnd,
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                Button(onClick = {
+                    onFilterChange(
+                        filter.copy(
+                            period = HistoryPeriod.CUSTOM,
+                            customStart = pickerState.selectedStartDateMillis,
+                            customEnd = pickerState.selectedEndDateMillis,
+                        )
+                    )
+                    showDatePicker = false
+                }) { Text("Apply") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) { Text("Cancel") }
+            },
+        ) {
+            DateRangePicker(state = pickerState, modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+private fun buildCustomLabel(startMillis: Long?, endMillis: Long?): String {
+    val zone = ZoneId.systemDefault()
+    val start = startMillis?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+    val end = endMillis?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+    return when {
+        start != null && end != null && start != end ->
+            "${shortDateFmt.format(start)} – ${shortDateFmt.format(end)}"
+        start != null -> shortDateFmt.format(start)
+        else -> "Custom"
+    }
 }
 
 @Composable
-private fun ClosedTradeCard(trade: ClosedTradeDto, index: Int) {
+private fun ClosedTradeCard(trade: ClosedTradeDto) {
     val pl = trade.profitLoss ?: 0.0
     val plColor = if (pl >= 0) ProfitGreen else LossRed
     Card(modifier = Modifier.fillMaxWidth()) {

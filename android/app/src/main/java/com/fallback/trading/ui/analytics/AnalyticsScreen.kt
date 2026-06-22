@@ -1,5 +1,6 @@
 package com.fallback.trading.ui.analytics
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -11,17 +12,26 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DateRangePicker
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.rememberDateRangePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -58,13 +68,20 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneId
 import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import kotlin.math.abs
 
-// ── Data model ────────────────────────────────────────────────────────────────
+// ── Data model ─────────────────────────────────────────────────────────────────
 
-enum class AnalyticsPeriod(val label: String) { ALL("All"), WEEK("Week"), MONTH("Month"), YEAR("Year") }
+enum class AnalyticsPeriod(val label: String) {
+    ALL("All"), TODAY("Today"), WEEK("Week"), MONTH("Month"), YEAR("Year"), CUSTOM("Custom")
+}
 
 data class SymbolStats(
     val symbol: String,
@@ -76,7 +93,8 @@ data class SymbolStats(
 
 data class AnalyticsData(
     val period: AnalyticsPeriod,
-    // Open positions
+    val customStart: Long?,
+    val customEnd: Long?,
     val positions: List<PositionDto>,
     val totalOpenPl: Double,
     val grossExposure: Double,
@@ -85,7 +103,6 @@ data class AnalyticsData(
     val shortExposure: Double,
     val plBySymbol: List<BarEntry>,
     val exposureBySymbol: List<BarEntry>,
-    // Closed trades (period-filtered)
     val filteredClosed: List<ClosedTradeDto>,
     val totalClosedPl: Double,
     val winRate: Double,
@@ -100,9 +117,11 @@ data class AnalyticsUiState(
     val sessionExpired: Boolean = false,
     val data: AnalyticsData? = null,
     val period: AnalyticsPeriod = AnalyticsPeriod.ALL,
+    val customStart: Long? = null,
+    val customEnd: Long? = null,
 )
 
-// ── ViewModel ─────────────────────────────────────────────────────────────────
+// ── ViewModel ──────────────────────────────────────────────────────────────────
 
 class AnalyticsViewModel(private val repo: TradingRepository) : ViewModel() {
     private val _state = MutableStateFlow(AnalyticsUiState())
@@ -169,29 +188,55 @@ class AnalyticsViewModel(private val repo: TradingRepository) : ViewModel() {
         false
     }
 
-    fun setPeriod(period: AnalyticsPeriod) {
-        _state.update { it.copy(period = period) }
+    fun setPeriod(period: AnalyticsPeriod, customStart: Long? = null, customEnd: Long? = null) {
+        _state.update { it.copy(period = period, customStart = customStart, customEnd = customEnd) }
         recompute()
     }
 
     private fun recompute() {
-        val period = _state.value.period
-        _state.update { it.copy(loading = false, data = compute(rawPositions, rawClosed, period)) }
+        val s = _state.value
+        _state.update {
+            it.copy(loading = false, data = compute(rawPositions, rawClosed, s.period, s.customStart, s.customEnd))
+        }
     }
 
     private fun compute(
         positions: List<PositionDto>,
         closed: List<ClosedTradeDto>,
         period: AnalyticsPeriod,
+        customStart: Long?,
+        customEnd: Long?,
     ): AnalyticsData {
-        val cutoff: Instant? = when (period) {
-            AnalyticsPeriod.ALL -> null
-            AnalyticsPeriod.WEEK -> Instant.now().minus(7, ChronoUnit.DAYS)
-            AnalyticsPeriod.MONTH -> Instant.now().minus(30, ChronoUnit.DAYS)
-            AnalyticsPeriod.YEAR -> Instant.now().minus(365, ChronoUnit.DAYS)
+        val zone = ZoneId.systemDefault()
+        val (from: Instant?, to: Instant?) = when (period) {
+            AnalyticsPeriod.ALL -> null to null
+            AnalyticsPeriod.TODAY -> {
+                val start = LocalDate.now(zone).atStartOfDay(zone).toInstant()
+                start to null
+            }
+            AnalyticsPeriod.WEEK -> Instant.now().minus(7, ChronoUnit.DAYS) to null
+            AnalyticsPeriod.MONTH -> Instant.now().minus(30, ChronoUnit.DAYS) to null
+            AnalyticsPeriod.YEAR -> Instant.now().minus(365, ChronoUnit.DAYS) to null
+            AnalyticsPeriod.CUSTOM -> {
+                val start = customStart?.let {
+                    Instant.ofEpochMilli(it).atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
+                }
+                val end = customEnd?.let {
+                    Instant.ofEpochMilli(it).atZone(zone).toLocalDate().plusDays(1).atStartOfDay(zone).toInstant()
+                }
+                start to end
+            }
         }
-        val filtered = if (cutoff == null) closed else closed.filter {
-            parseInstant(it.closeTime)?.isAfter(cutoff) == true
+
+        val filtered = closed.filter { trade ->
+            val t = parseInstant(trade.closeTime)
+            when {
+                from == null && to == null -> true
+                t == null -> false
+                from != null && to != null -> t >= from && t < to
+                from != null -> t >= from
+                else -> t < to!!
+            }
         }
 
         val totalOpenPl = positions.sumOf { it.unrealizedPl }
@@ -235,6 +280,8 @@ class AnalyticsViewModel(private val repo: TradingRepository) : ViewModel() {
 
         return AnalyticsData(
             period = period,
+            customStart = customStart,
+            customEnd = customEnd,
             positions = positions,
             totalOpenPl = totalOpenPl,
             grossExposure = grossExposure,
@@ -255,8 +302,8 @@ class AnalyticsViewModel(private val repo: TradingRepository) : ViewModel() {
     private fun parseInstant(iso: String?): Instant? {
         if (iso.isNullOrBlank()) return null
         return try { Instant.parse(iso) } catch (e: Exception) {
-            try { java.time.OffsetDateTime.parse(iso).toInstant() } catch (e2: Exception) {
-                try { java.time.LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC) } catch (e3: Exception) { null }
+            try { OffsetDateTime.parse(iso).toInstant() } catch (e2: Exception) {
+                try { LocalDateTime.parse(iso).toInstant(ZoneOffset.UTC) } catch (e3: Exception) { null }
             }
         }
     }
@@ -268,7 +315,9 @@ class AnalyticsViewModel(private val repo: TradingRepository) : ViewModel() {
     }
 }
 
-// ── Screen ────────────────────────────────────────────────────────────────────
+// ── Screen ─────────────────────────────────────────────────────────────────────
+
+private val shortDateFmt: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -278,9 +327,35 @@ fun AnalyticsScreen(
     viewModel: AnalyticsViewModel = viewModel(factory = AnalyticsViewModel.factory(container)),
 ) {
     val uiState by viewModel.state.collectAsStateWithLifecycle()
+    var showDatePicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(uiState.sessionExpired) {
         if (uiState.sessionExpired) onSessionExpired()
+    }
+
+    if (showDatePicker) {
+        val pickerState = rememberDateRangePickerState(
+            initialSelectedStartDateMillis = uiState.customStart,
+            initialSelectedEndDateMillis = uiState.customEnd,
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.setPeriod(
+                        AnalyticsPeriod.CUSTOM,
+                        pickerState.selectedStartDateMillis,
+                        pickerState.selectedEndDateMillis,
+                    )
+                    showDatePicker = false
+                }) { Text("Apply") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDatePicker = false }) { Text("Cancel") }
+            },
+        ) {
+            DateRangePicker(state = pickerState, modifier = Modifier.weight(1f))
+        }
     }
 
     PullToRefreshBox(
@@ -289,18 +364,29 @@ fun AnalyticsScreen(
         modifier = Modifier.fillMaxSize(),
     ) {
         Column(Modifier.fillMaxSize()) {
-            // Period chips
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 AnalyticsPeriod.entries.forEach { period ->
+                    val label = if (period == AnalyticsPeriod.CUSTOM &&
+                        uiState.period == AnalyticsPeriod.CUSTOM &&
+                        uiState.customStart != null) {
+                        buildCustomLabel(uiState.customStart, uiState.customEnd)
+                    } else {
+                        period.label
+                    }
                     FilterChip(
                         selected = uiState.period == period,
-                        onClick = { viewModel.setPeriod(period) },
-                        label = { Text(period.label) },
+                        onClick = {
+                            if (period == AnalyticsPeriod.CUSTOM) showDatePicker = true
+                            else viewModel.setPeriod(period)
+                        },
+                        label = { Text(label) },
                     )
                 }
             }
@@ -316,14 +402,32 @@ fun AnalyticsScreen(
     }
 }
 
+private fun buildCustomLabel(startMillis: Long?, endMillis: Long?): String {
+    val zone = ZoneId.systemDefault()
+    val start = startMillis?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+    val end = endMillis?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+    return when {
+        start != null && end != null && start != end ->
+            "${shortDateFmt.format(start)} – ${shortDateFmt.format(end)}"
+        start != null -> shortDateFmt.format(start)
+        else -> "Custom"
+    }
+}
+
 @Composable
 private fun AnalyticsContent(data: AnalyticsData) {
+    val periodLabel = if (data.period == AnalyticsPeriod.CUSTOM) {
+        buildCustomLabel(data.customStart, data.customEnd)
+    } else {
+        data.period.label
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // ── Open Positions ──────────────────────────────────────────
+        // ── Open Positions ─────────────────────────────────────────────
         item {
             SectionHeader("Open Positions", "${data.positions.size} active")
         }
@@ -387,23 +491,32 @@ private fun AnalyticsContent(data: AnalyticsData) {
             }
         }
 
-        // ── Closed Trades ───────────────────────────────────────────
+        // ── Closed Trades ──────────────────────────────────────────────
         item {
             Spacer(Modifier.height(4.dp))
-            SectionHeader("Closed Trades", "${data.filteredClosed.size} · ${data.period.label}")
+            SectionHeader("Closed Trades", "${data.filteredClosed.size} · $periodLabel")
         }
 
         if (data.filteredClosed.isEmpty()) {
-            item { Text("No closed trades in this period.", style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp)) }
+            item {
+                Text(
+                    "No closed trades in this period.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+            }
         } else {
             item {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     MetricCard("Total P/L", Format.moneySigned(data.totalClosedPl),
                         if (data.totalClosedPl >= 0) ProfitGreen else LossRed, Modifier.weight(1f))
-                    MetricCard("Win Rate",
+                    MetricCard(
+                        "Win Rate",
                         String.format(java.util.Locale.US, "%.0f%%", data.winRate),
-                        MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
+                        MaterialTheme.colorScheme.onSurface,
+                        Modifier.weight(1f),
+                    )
                 }
             }
 
@@ -438,7 +551,7 @@ private fun AnalyticsContent(data: AnalyticsData) {
             }
         }
 
-        // ── By Symbol ───────────────────────────────────────────────
+        // ── By Symbol ──────────────────────────────────────────────────
         if (data.symbolStats.isNotEmpty()) {
             item {
                 Spacer(Modifier.height(4.dp))
@@ -447,9 +560,9 @@ private fun AnalyticsContent(data: AnalyticsData) {
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
-                        // header
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Symbol", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                            Text("Symbol", style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                             Text("Trades", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text("  Win%", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text("   P/L", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -510,7 +623,11 @@ private fun PerformerRow(trade: ClosedTradeDto) {
 private fun SymbolStatRow(stat: SymbolStats) {
     val totalPl = stat.closedPl + stat.openPl
     val color = if (totalPl >= 0) ProfitGreen else LossRed
-    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Text(stat.symbol, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text("${stat.closedCount}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 8.dp))

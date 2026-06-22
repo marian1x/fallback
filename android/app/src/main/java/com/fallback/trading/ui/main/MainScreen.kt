@@ -6,21 +6,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.CircleShape
 import com.fallback.trading.ui.theme.BrandTeal
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ShowChart
@@ -33,11 +29,9 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.PersonAdd
-import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FabPosition
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,8 +54,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -81,7 +73,6 @@ import com.fallback.trading.ui.history.HistoryScreen
 import com.fallback.trading.ui.intelligence.IntelligenceScreen
 import com.fallback.trading.ui.portfolio.PortfolioScreen
 import com.fallback.trading.ui.positions.PositionsScreen
-import com.fallback.trading.ui.theme.brandGradient
 import com.fallback.trading.ui.trade.TradeSheet
 import com.fallback.trading.ui.trade.TradeViewModel
 import com.fallback.trading.ui.update.UpdateHost
@@ -243,10 +234,6 @@ fun MainScreen(
                 },
             )
         },
-        floatingActionButton = {
-            if (currentTab != MainTab.Analytics) TradeFab(onClick = { openTrade() })
-        },
-        floatingActionButtonPosition = FabPosition.Center,
     ) { innerPadding ->
         NavHost(
             navController = navController,
@@ -328,7 +315,6 @@ private fun AppBottomBar(
         ) {
             BarItem(MainTab.Portfolio, current, onSelect)
             BarItem(MainTab.Positions, current, onSelect)
-            Spacer(Modifier.width(64.dp)) // gap for the center FAB
             BarItem(MainTab.History, current, onSelect)
             BarItem(MainTab.Analytics, current, onSelect)
             BarItem(MainTab.AI, current, onSelect)
@@ -420,22 +406,3 @@ private fun AdminScopeSelector(
     }
 }
 
-@Composable
-private fun TradeFab(onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(58.dp)
-            .shadow(12.dp, CircleShape)
-            .clip(CircleShape)
-            .background(brandGradient())
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            Icons.Outlined.SwapVert,
-            contentDescription = "New trade",
-            tint = Color.White,
-            modifier = Modifier.size(26.dp),
-        )
-    }
-}

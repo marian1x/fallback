@@ -1,5 +1,6 @@
 package com.fallback.trading.ui.positions
 
+import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,7 +16,6 @@ import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -35,7 +35,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -48,6 +47,7 @@ import com.fallback.trading.AppContainer
 import com.fallback.trading.data.ApiResult
 import com.fallback.trading.data.NotificationHelper
 import com.fallback.trading.data.PositionDto
+import com.fallback.trading.data.SettingsStore
 import com.fallback.trading.data.TradingRepository
 import com.fallback.trading.ui.Format
 import com.fallback.trading.ui.UiState
@@ -58,21 +58,18 @@ import com.fallback.trading.ui.reduce
 import com.fallback.trading.ui.theme.LossRed
 import com.fallback.trading.ui.theme.ProfitGreen
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-sealed interface TradeEvent {
-    data class Opened(val symbol: String, val side: String, val qty: Double, val price: Double) : TradeEvent
-    data class Closed(val symbol: String) : TradeEvent
-}
-
-class PositionsViewModel(private val repo: TradingRepository) : ViewModel() {
+class PositionsViewModel(
+    private val repo: TradingRepository,
+    private val settings: SettingsStore,
+    private val appContext: Context,
+) : ViewModel() {
     private val _state = MutableStateFlow(UiState<List<PositionDto>>(loading = true))
     val state = _state.asStateFlow()
 
@@ -81,9 +78,6 @@ class PositionsViewModel(private val repo: TradingRepository) : ViewModel() {
 
     private val _message = MutableStateFlow<String?>(null)
     val message = _message.asStateFlow()
-
-    private val _events = MutableSharedFlow<TradeEvent>(extraBufferCapacity = 16)
-    val events: SharedFlow<TradeEvent> = _events.asSharedFlow()
 
     val isAdmin = repo.adminState.isAdmin
 
@@ -117,13 +111,22 @@ class PositionsViewModel(private val repo: TradingRepository) : ViewModel() {
                 val newKeys = newPositions.map { "${it.userId ?: 0}:${it.symbol}" }.toSet()
 
                 if (!isFirstLoad) {
-                    newPositions
-                        .filter { "${it.userId ?: 0}:${it.symbol}" !in previousKeys }
-                        .forEach { pos ->
-                            _events.emit(TradeEvent.Opened(pos.symbol, pos.side, pos.qty, pos.openPrice))
+                    val opened = newPositions.filter { "${it.userId ?: 0}:${it.symbol}" !in previousKeys }
+                    val closedKeys = previousKeys - newKeys
+
+                    if (opened.isNotEmpty() || closedKeys.isNotEmpty()) {
+                        val notifyOpen = settings.notifyTradeOpened.first()
+                        val notifyClose = settings.notifyTradeClosed.first()
+                        opened.forEach { pos ->
+                            if (notifyOpen) NotificationHelper.notifyOpened(
+                                appContext, pos.symbol, pos.side, pos.qty, pos.openPrice,
+                            )
                         }
-                    (previousKeys - newKeys).forEach { key ->
-                        _events.emit(TradeEvent.Closed(key.substringAfter(":")))
+                        closedKeys.forEach { key ->
+                            if (notifyClose) NotificationHelper.notifyClosed(
+                                appContext, key.substringAfter(":"),
+                            )
+                        }
                     }
                 } else {
                     isFirstLoad = false
@@ -152,7 +155,9 @@ class PositionsViewModel(private val repo: TradingRepository) : ViewModel() {
 
     companion object {
         fun factory(container: AppContainer) = viewModelFactory {
-            initializer { PositionsViewModel(container.repository) }
+            initializer {
+                PositionsViewModel(container.repository, container.settings, container.appContext)
+            }
         }
     }
 }
@@ -169,29 +174,12 @@ fun PositionsScreen(
     val closing by viewModel.closing.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val isAdmin by viewModel.isAdmin.collectAsStateWithLifecycle()
-    val notifyOpened by container.settings.notifyTradeOpened.collectAsStateWithLifecycle(initialValue = true)
-    val notifyClosed by container.settings.notifyTradeClosed.collectAsStateWithLifecycle(initialValue = true)
-    val context = LocalContext.current
 
     var confirmFor by remember { mutableStateOf<PositionDto?>(null) }
 
     LaunchedEffect(state.sessionExpired) {
         if (state.sessionExpired) onSessionExpired()
     }
-
-    LaunchedEffect(Unit) {
-        viewModel.events.collect { event ->
-            when (event) {
-                is TradeEvent.Opened -> if (notifyOpened) {
-                    NotificationHelper.notifyOpened(context, event.symbol, event.side, event.qty, event.price)
-                }
-                is TradeEvent.Closed -> if (notifyClosed) {
-                    NotificationHelper.notifyClosed(context, event.symbol)
-                }
-            }
-        }
-    }
-
     message?.let { com.fallback.trading.ui.components.Toast(it) { viewModel.consumeMessage() } }
 
     confirmFor?.let { position ->
@@ -289,19 +277,13 @@ private fun PositionCard(
                 verticalAlignment = Alignment.Bottom,
             ) {
                 Column {
-                    Text(
-                        "MARKET VALUE",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Text("MARKET VALUE", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(Format.money(position.marketValue), style = MaterialTheme.typography.titleMedium)
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        "UNREALIZED P/L",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Text("UNREALIZED P/L", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
                         Format.moneySigned(position.unrealizedPl),
                         style = MaterialTheme.typography.titleMedium,
@@ -314,11 +296,7 @@ private fun PositionCard(
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                OutlinedButton(
-                    onClick = onTrade,
-                    enabled = !isClosing,
-                    modifier = Modifier.weight(1f),
-                ) {
+                OutlinedButton(onClick = onTrade, enabled = !isClosing, modifier = Modifier.weight(1f)) {
                     Icon(Icons.Outlined.SwapVert, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
                     Text("Trade")
                 }
@@ -329,11 +307,8 @@ private fun PositionCard(
                     modifier = Modifier.weight(1f),
                 ) {
                     if (isClosing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp).padding(end = 8.dp),
-                            strokeWidth = 2.dp,
-                            color = LossRed,
-                        )
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp).padding(end = 8.dp),
+                            strokeWidth = 2.dp, color = LossRed)
                         Text("Closing…")
                     } else {
                         Icon(Icons.Outlined.Close, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
@@ -363,11 +338,8 @@ private fun SideChip(side: String) {
 @Composable
 private fun LabelValue(label: String, value: String) {
     Column {
-        Text(
-            label.uppercase(),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(value, style = MaterialTheme.typography.bodyLarge)
     }
 }

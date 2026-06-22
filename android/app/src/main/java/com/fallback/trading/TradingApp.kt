@@ -14,7 +14,7 @@ import com.fallback.trading.data.UpdateManager
 
 /** Manual dependency container — small enough not to need Hilt. */
 class AppContainer(context: Context) {
-    private val appContext = context.applicationContext
+    val appContext: Context = context.applicationContext
     private val moshi = NetworkClient.buildMoshi()
 
     val settings = SettingsStore(appContext)
